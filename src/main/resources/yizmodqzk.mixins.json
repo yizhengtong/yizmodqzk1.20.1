@@ -1,0 +1,19 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "net.minecraft.client.yiz.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "refmap": "yizmodqzk.refmap.json",
+  "mixins": [
+    "LivingEntityMixin",
+    "AttributeInstanceMixin"
+  ],
+  "client": [
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  },
+  "overwrites": {
+    "requireAnnotations": true
+  }
+}

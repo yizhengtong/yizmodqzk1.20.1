@@ -1,0 +1,169 @@
+package net.minecraft.client.yiz;
+
+import com.mojang.logging.LogUtils;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.ai.attributes.AttributeModifier;
+import net.minecraft.world.entity.ai.attributes.Attributes;
+import net.minecraftforge.event.server.ServerStartingEvent;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.minecraftforge.fml.common.Mod;
+import net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent;
+import org.slf4j.Logger;
+
+import net.minecraft.client.yiz.attribute.YizAttributes;
+import net.minecraft.client.yiz.tool.attribute.ItemAttributeHandler;
+
+/**
+ * YizMod QZK — 1.20.1 Forge 前置库主类。
+ *
+ * <p>包结构对齐 1.21.1（{@code net.minecraft.client.yiz} 家族包根）——
+ * {@link net.minecraft.client.yiz.tool.attribute.EntityAttributeGate} 的调用栈鉴权
+ * 信任 {@code net.minecraft.client.yiz} 前缀，所有前置库设施类必须在此家族包根下。</p>
+ */
+@Mod(tizMod.MODID)
+public class tizMod {
+
+    public static final String MODID = "yizmodqzk";
+    public static final Logger LOGGER = LogUtils.getLogger();
+
+    public tizMod() {
+        var modEventBus = net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext.get().getModEventBus();
+
+        // 注册自定义属性（辖界者等自研实体挂载）
+        YizAttributes.ATTRIBUTES.register(modEventBus);
+
+        // 注册玩家实体属性挂载（自定义属性需要挂到 EntityType 上才能 getAttribute）
+        modEventBus.addListener((net.minecraftforge.event.entity.EntityAttributeModificationEvent e) -> {
+            net.minecraft.world.entity.EntityType<? extends net.minecraft.world.entity.LivingEntity> player =
+                net.minecraft.world.entity.EntityType.PLAYER;
+            e.add(player, YizAttributes.ATTACK_STRENGTH.get());
+            e.add(player, YizAttributes.SPELL_POWER.get());
+            e.add(player, YizAttributes.GENERIC_DAMAGE.get());
+            e.add(player, YizAttributes.MELEE_DAMAGE.get());
+            e.add(player, YizAttributes.RANGED_DAMAGE.get());
+            e.add(player, YizAttributes.DAMAGE_REDUCTION.get());
+            e.add(player, YizAttributes.DAMAGE_BLOCK.get());
+            e.add(player, YizAttributes.INVINCIBILITY_MULT.get());
+            e.add(player, YizAttributes.DODGE_CHANCE.get());
+            e.add(player, YizAttributes.LIFE_STEAL.get());
+            e.add(player, YizAttributes.ARMOR.get());
+            e.add(player, YizAttributes.SPELL_DEFENSE.get());
+            e.add(player, YizAttributes.VITALITY_SEVERANCE_RATE.get());
+            e.add(player, YizAttributes.VITALITY_SEVERANCE_TIME.get());
+            e.add(player, YizAttributes.FIRST_DREAM.get());
+            e.add(player, YizAttributes.CONDUCTION_CAP.get());
+            e.add(player, YizAttributes.SECURE_PULSE.get());
+            // LivingEntityMixin 扩展属性
+            e.add(player, YizAttributes.CRIT_RATE.get());
+            e.add(player, YizAttributes.CRIT_DAMAGE.get());
+            e.add(player, YizAttributes.PRECISION.get());
+            e.add(player, YizAttributes.COMBO_RATE.get());
+            e.add(player, YizAttributes.COUNTER_RATE.get());
+            e.add(player, YizAttributes.COUNTER_VALUE.get());
+            e.add(player, YizAttributes.JUMP_SPEED.get());
+            e.add(player, YizAttributes.KNOCKBACK_IMMUNITY.get());
+            e.add(player, YizAttributes.PROJECTILE_IMMUNITY.get());
+            e.add(player, YizAttributes.UNDYING.get());
+            e.add(player, YizAttributes.MANA_COST_REDUCTION.get());
+            e.add(player, YizAttributes.MAGIC_DAMAGE.get());
+            e.add(player, YizAttributes.LAVA_IMMUNE_TIME.get());
+            e.add(player, YizAttributes.LAVA_IMMUNE_TIME_FLAT.get());
+            e.add(player, YizAttributes.LAVA_DAMAGE_REDUCTION.get());
+            e.add(player, YizAttributes.LAVA_DAMAGE_REDUCTION_FLAT.get());
+            e.add(player, YizAttributes.WATER_BREATH_TIME.get());
+            e.add(player, YizAttributes.WATER_BREATH_TIME_FLAT.get());
+            e.add(player, YizAttributes.ARMOR_PENETRATION.get());
+            e.add(player, YizAttributes.ARMOR_PENETRATION_FLAT.get());
+            // 技能系统属性
+            e.add(player, YizAttributes.COOLDOWN_VALUE.get());
+            e.add(player, YizAttributes.MAX_CHARGES.get());
+            e.add(player, YizAttributes.SKILL_RANGE.get());
+            e.add(player, YizAttributes.SKILL_INTERVAL.get());
+            e.add(player, YizAttributes.COOLDOWN_REDUCTION.get());
+            e.add(player, YizAttributes.COMBO_VALUE.get());
+            e.add(player, YizAttributes.COMBO_COUNT.get());
+            e.add(player, YizAttributes.DAMAGE_BASE.get());
+            e.add(player, YizAttributes.DAMAGE_SPELL_COEFF.get());
+            e.add(player, YizAttributes.HEAL_BASE.get());
+            e.add(player, YizAttributes.HEAL_HP_COEFF.get());
+        });
+
+        // 加载实体真实血量字段定位缓存（config/yizmodqzk/entity_health_slots.json）
+        net.minecraft.client.yiz.tool.health.EntityHealthLocator.load();
+
+        // 简易指令注册器 + /yiz remove 指令
+        net.minecraft.client.yiz.tool.SimpleCommandRegistry.init();
+        net.minecraft.client.yiz.tool.YizRemoveCommand.register();
+
+        modEventBus.addListener(this::commonSetup);
+        net.minecraftforge.common.MinecraftForge.EVENT_BUS.register(this);
+    }
+
+    private void commonSetup(final FMLCommonSetupEvent event) {
+        LOGGER.info("YizMod QZK 1.20.1 前置库初始化完成");
+        // 动态加载 JavaAgent（同进程 self-attach，用于最初梦幻 getHealth 字节码改写配合扫描）
+        try {
+            net.minecraft.client.yiz.core.asm.AgentLoader.init();
+        } catch (Throwable t) {
+            LOGGER.warn("Agent 加载跳过（不影响血量扫描体系）: {}", t.getMessage());
+        }
+    }
+
+    @SubscribeEvent
+    public void onServerStarting(ServerStartingEvent event) {
+        LOGGER.debug("YizMod QZK 服务端启动");
+    }
+
+    /** 被动攻击分发：遍历被动/装备槽 IPassiveItem，调用 onAttack。由 LivingEntityMixin.onHurtReturn 调用。 */
+    public static void dispatchPassiveAttack(net.minecraft.server.level.ServerPlayer player,
+                                             net.minecraft.world.entity.LivingEntity target) {
+        if (player.level().isClientSide()) return;
+        try {
+            var data = net.minecraft.client.yiz.editor.SkillConfigStorage.get(player.getUUID());
+            if (data == null) return;
+            for (int i = 0; i < data.passiveLoad().getContainerSize(); i++) {
+                net.minecraft.world.item.ItemStack stack = data.passiveLoad().getItem(i);
+                if (!stack.isEmpty() && stack.getItem() instanceof net.minecraft.client.yiz.api.IPassiveItem passive) {
+                    passive.onAttack(player, stack, target);
+                }
+            }
+            for (int i = 0; i < data.equipment().getContainerSize(); i++) {
+                net.minecraft.world.item.ItemStack stack = data.equipment().getItem(i);
+                if (!stack.isEmpty() && stack.getItem() instanceof net.minecraft.client.yiz.api.IPassiveItem passive) {
+                    passive.onAttack(player, stack, target);
+                }
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    // ═══════════ 防御属性镜像（供下游自研实体调用）═══════════
+
+    /**
+     * 防御力镜像：读 {@link YizAttributes#ARMOR} → 1:1 写到原版 {@link Attributes#ARMOR} + {@link Attributes#ARMOR_TOUGHNESS}。
+     */
+    public static void mirrorArmor(LivingEntity entity) {
+        var inst = entity.getAttribute(YizAttributes.ARMOR.get());
+        if (inst == null) return;
+        double armor = inst.getValue();
+        ItemAttributeHandler.setEntityAttribute(
+            entity, Attributes.ARMOR, "yiz_armor_mirror", armor, AttributeModifier.Operation.ADDITION);
+        ItemAttributeHandler.setEntityAttribute(
+            entity, Attributes.ARMOR_TOUGHNESS, "yiz_toughness_mirror", armor, AttributeModifier.Operation.ADDITION);
+    }
+
+    /**
+     * 法术防御镜像：读 {@link YizAttributes#SPELL_DEFENSE} → 写原版击退韧性；>20 时同时开击退免疫/无碰撞。
+     */
+    public static void mirrorSpellDefense(LivingEntity entity) {
+        var inst = entity.getAttribute(YizAttributes.SPELL_DEFENSE.get());
+        if (inst == null) return;
+        double val = inst.getValue();
+        if (val <= 20.0) {
+            ItemAttributeHandler.setEntityAttribute(
+                entity, Attributes.KNOCKBACK_RESISTANCE, "yiz_spell_defense_mirror", val, AttributeModifier.Operation.ADDITION);
+        } else {
+            ItemAttributeHandler.setEntityAttribute(
+                entity, Attributes.KNOCKBACK_RESISTANCE, "yiz_spell_defense_mirror", 0, AttributeModifier.Operation.ADDITION);
+        }
+    }
+}

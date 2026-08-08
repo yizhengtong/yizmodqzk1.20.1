@@ -1,0 +1,31 @@
+# MacOS DS_Store files
+.DS_Store
+
+# Gradle cache folder
+.gradle
+
+# Gradle build folder
+build
+
+# IntelliJ
+out/
+.idea
+*.iml
+# mpeltonen/sbt-idea plugin
+.idea_modules/
+
+# virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
+hs_err_pid*
+
+# Common working directory
+run
+
+# 启动日志（runClient 后台启动输出）
+run-client-start.log
+
+# 本地 maven 仓库（发布前置库用，勿入库）
+local-maven-repo*
+*.md5
+*.sha1
+*.sha256
+*.sha512
