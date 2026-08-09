@@ -62,12 +62,15 @@ public final class EntityHealthLocator {
         HealthSlot cached = CACHE.get(key);
         if (cached != null) return cached;
         if (SCANNING.get()) return null;
-        HealthSlot slot = detectViaBytecode(entity);
+        HealthSlot slot = detectViaDataItems(entity);      // itemsById 行为验证（借鉴 mhzy，命名无关）
         if (slot == null) {
-            slot = detectViaDataAccessor(entity); // DataParameter 血量通道（存 DataItem 的自研实体）
+            slot = detectViaDataAccessor(entity);          // 广泛命名 + Double + 行为验证
         }
         if (slot == null) {
-            slot = scan(entity);
+            slot = detectViaBytecode(entity);
+        }
+        if (slot == null) {
+            slot = scan(entity);                            // per-field 行为验证（无 hurt 副作用）
         }
         if (slot != null) {
             CACHE.put(key, slot);
@@ -181,26 +184,14 @@ public final class EntityHealthLocator {
 
         SCANNING.set(true);
         try {
-            Map<Field, Double> before = snapshot(entity, fields);
-            entity.hurt(entity.damageSources().generic(), delta);
-            Map<Field, Double> after = snapshot(entity, fields);
-
-            double tolerance = Math.max(delta * 0.5, 1e-4);
+            // per-field 行为验证：改字段 ±delta 看 getHealth 是否跟随（不再主动 hurt，零伤害副作用；
+            // 对 override getHealth 读该字段的自研实体也能命中）
             for (Field f : fields) {
-                double b = before.getOrDefault(f, 0.0);
-                double a = after.getOrDefault(f, 0.0);
-                double diff = a - b;
-                if (Math.abs(diff) < 1e-9) continue;
-                boolean inverse;
-                if (Math.abs(diff - delta) <= tolerance) {
-                    inverse = true;
-                } else if (Math.abs(diff + delta) <= tolerance) {
-                    inverse = false;
-                } else {
-                    continue;
+                if (isRealHealthField(entity, f, delta, false)) {
+                    return new HealthSlot(entity.getClass().getName(), f.getName(), typeName(f), false);
                 }
-                if (isRealHealthField(entity, f, delta, inverse)) {
-                    return new HealthSlot(entity.getClass().getName(), f.getName(), typeName(f), inverse);
+                if (isRealHealthField(entity, f, delta, true)) {
+                    return new HealthSlot(entity.getClass().getName(), f.getName(), typeName(f), true);
                 }
             }
         } finally {
@@ -274,27 +265,23 @@ public final class EntityHealthLocator {
                     int mod = f.getModifiers();
                     if (!Modifier.isStatic(mod)) continue;
                     if (!EntityDataAccessor.class.isAssignableFrom(f.getType())) continue;
-                    String name = f.getName().toLowerCase(java.util.Locale.ROOT);
-                    if (!name.contains("health") || name.contains("max")) continue;
+                    if (!isHealthLikeName(f.getName())) continue;
                     try {
                         f.setAccessible(true);
                         EntityDataAccessor<?> acc = (EntityDataAccessor<?>) f.get(null);
                         if (acc == null) continue;
+                        // 1.20.1 无 EntityDataSerializer<Double>，血量 DataParameter 只能是 Float
                         if (acc.getSerializer() != EntityDataSerializers.FLOAT) continue;
-                        // 该通道必须确实存着与 getHealth 一致的血量值（避免误判 MAX_HEALTH/LAST_HURT 等）
-                        float channelVal;
-                        float getHealthVal;
-                        try {
-                            @SuppressWarnings("unchecked")
-                            EntityDataAccessor<Float> fAcc = (EntityDataAccessor<Float>) acc;
-                            channelVal = entity.getEntityData().get(fAcc);
-                            getHealthVal = entity.getHealth();
-                        } catch (Exception e) {
-                            continue;
+                        // 验证一：通道值 ≈ getHealth（原版/常见，直接命中）
+                        double channelVal = readChannelValue(entity, acc);
+                        double getHealthVal = entity.getHealth();
+                        if (!Double.isNaN(channelVal) && !Double.isNaN(getHealthVal)
+                                && (Math.abs(channelVal - getHealthVal) <= 0.001f
+                                    || (getHealthVal > 0 && Math.abs(channelVal - getHealthVal) <= getHealthVal * 0.05f))) {
+                            return new HealthSlot(entity.getClass().getName(), f.getName(), "accessor", false, "accessor");
                         }
-                        if (Float.isNaN(channelVal) || Float.isNaN(getHealthVal)) continue;
-                        if (Math.abs(channelVal - getHealthVal) <= 0.001f
-                                || (getHealthVal > 0 && Math.abs(channelVal - getHealthVal) <= getHealthVal * 0.05f)) {
+                        // 验证二：行为验证（直写通道 ±1，getHealth 跟随）——覆盖「通道值≠getHealth」的自研实体
+                        if (verifyChannelFollowsGetHealth(entity, (EntityDataAccessor<Float>) acc)) {
                             return new HealthSlot(entity.getClass().getName(), f.getName(), "accessor", false, "accessor");
                         }
                     } catch (Exception ignored) {}
@@ -302,6 +289,92 @@ public final class EntityHealthLocator {
             }
         } catch (Throwable ignored) {}
         return null;
+    }
+
+    /**
+     * 广泛血量字段名判定：HEALTH / HP / HITPOINT / LIFE / VITALITY（大小写/下划线/连字符不敏感），
+     * 排除 MAX / REGEN / DELTA / DAMAGE / HURT 等非当前血量的通道。
+     */
+    private static boolean isHealthLikeName(String raw) {
+        String name = raw.toUpperCase(java.util.Locale.ROOT)
+            .replace("_", "").replace("-", "").replace(".", "");
+        if (name.contains("MAX") || name.contains("REGEN") || name.contains("DELTA")
+            || name.contains("DAMAGE") || name.contains("HURT")) {
+            return false;
+        }
+        return name.contains("HEALTH") || name.contains("HP")
+            || name.contains("HITPOINT") || name.contains("LIFE") || name.contains("VITALITY");
+    }
+
+    /**
+     * itemsById 行为验证定位（借鉴 mhzy，命名无关）：遍历实体所有 Float DataItem，
+     * 值域过滤（0 &lt; v ≤ maxHealth×1.5）+ 直写通道看 getHealth 是否跟随。对
+     * 「血量存 DataParameter 但字段名不像 health」的自研实体也能命中。
+     */
+    private static HealthSlot detectViaDataItems(LivingEntity entity) {
+        if (entity == null || entity.level().isClientSide()) return null;
+        float maxHp = entity.getMaxHealth();
+        if (maxHp <= 0) return null;
+        if (SCANNING.get()) return null;
+        SCANNING.set(true);
+        try {
+            HealthSlot[] found = {null};
+            DirectHealthFallback.forEachFloatItem(entity, (acc, value, item) -> {
+                if (found[0] != null) return;
+                if (value <= 0 || value > maxHp * 1.5f) return;                          // 值域过滤
+                if (acc.getId() == DirectHealthFallback.DELTA_ACCESSOR_ID) return;       // 排除 delta 通道
+                if (DirectHealthFallback.VANILLA_HEALTH_ACCESSOR != null
+                        && acc.getId() == DirectHealthFallback.VANILLA_HEALTH_ACCESSOR.getId()) return; // 原版通道走其它路径
+                if (verifyChannelFollowsGetHealth(entity, acc)) {
+                    String fieldName = findAccessorFieldName(entity, acc);
+                    if (fieldName != null) {
+                        found[0] = new HealthSlot(entity.getClass().getName(), fieldName, "accessor", false, "accessor");
+                    }
+                }
+            });
+            return found[0];
+        } finally {
+            SCANNING.remove();
+        }
+    }
+
+    /** 行为验证：直写通道 cur−1，读 getHealth 是否跟随减少，随后还原（不触发 dirty 同步）。 */
+    private static boolean verifyChannelFollowsGetHealth(LivingEntity entity, EntityDataAccessor<Float> acc) {
+        try {
+            float cur = entity.getEntityData().get(acc);
+            if (cur < 0) return false;
+            float before = entity.getHealth();
+            boolean wrote = DirectHealthFallback.setFloatChannelValue(entity, acc, cur - 1.0f, false);
+            float after = entity.getHealth();
+            DirectHealthFallback.setFloatChannelValue(entity, acc, cur, false); // 还原
+            return wrote && before > 0 && Math.abs((before - after) - 1.0f) < 0.6f;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** 反查 accessor 实例来自类层级哪个 static 字段（identity 匹配）。 */
+    private static String findAccessorFieldName(LivingEntity entity, EntityDataAccessor<?> acc) {
+        for (Class<?> c = entity.getClass(); c != null && c != Object.class; c = c.getSuperclass()) {
+            for (Field f : c.getDeclaredFields()) {
+                if (!Modifier.isStatic(f.getModifiers())) continue;
+                if (!EntityDataAccessor.class.isAssignableFrom(f.getType())) continue;
+                try {
+                    f.setAccessible(true);
+                    if (f.get(null) == acc) return f.getName();
+                } catch (Exception ignored) {}
+            }
+        }
+        return null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static double readChannelValue(LivingEntity entity, EntityDataAccessor<?> acc) {
+        try {
+            return (double) entity.getEntityData().get((EntityDataAccessor<Float>) acc);
+        } catch (Exception e) {
+            return Double.NaN;
+        }
     }
 
     private static EntityDataAccessor<Float> resolveAccessor(HealthSlot slot) {
@@ -374,14 +447,6 @@ public final class EntityHealthLocator {
             }
         }
         return out;
-    }
-
-    private static Map<Field, Double> snapshot(LivingEntity entity, List<Field> fields) {
-        Map<Field, Double> map = new HashMap<>();
-        for (Field f : fields) {
-            try { map.put(f, readField(f, entity)); } catch (Exception ignored) {}
-        }
-        return map;
     }
 
     private static double readField(Field f, Object target) throws IllegalAccessException {

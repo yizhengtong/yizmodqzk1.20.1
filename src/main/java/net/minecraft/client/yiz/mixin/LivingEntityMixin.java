@@ -490,9 +490,12 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
 
         if (amount > 0) {
             var lsInst = attacker.getAttribute(YizAttributes.LIFE_STEAL.get());
-            if (lsInst != null) {
-                double ls = lsInst.getValue();
-                if (ls > 0) attacker.heal((float)(amount * ls / 100.0));
+            double ls = lsInst != null ? lsInst.getValue() : 0;
+            if (ls > 0) attacker.heal((float)(amount * ls / 100.0));
+            // 吸血扩展：额外回复「最初梦幻数值」的 10%（FIRST_DREAM 属性值）
+            var dreamInst = attacker.getAttribute(YizAttributes.FIRST_DREAM.get());
+            if (dreamInst != null && dreamInst.getValue() > 0) {
+                attacker.heal((float)(dreamInst.getValue() * 0.10));
             }
         }
 

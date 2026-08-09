@@ -91,9 +91,10 @@ public class tizMod {
         // 加载实体真实血量字段定位缓存（config/yizmodqzk/entity_health_slots.json）
         net.minecraft.client.yiz.tool.health.EntityHealthLocator.load();
 
-        // 简易指令注册器 + /yiz remove 指令
+        // 简易指令注册器 + /yiz remove / /yiz agent 指令
         net.minecraft.client.yiz.tool.SimpleCommandRegistry.init();
         net.minecraft.client.yiz.tool.YizRemoveCommand.register();
+        net.minecraft.client.yiz.tool.YizAgentCommand.register();
 
         modEventBus.addListener(this::commonSetup);
         net.minecraftforge.common.MinecraftForge.EVENT_BUS.register(this);

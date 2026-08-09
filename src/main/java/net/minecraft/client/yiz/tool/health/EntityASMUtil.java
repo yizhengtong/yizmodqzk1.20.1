@@ -170,10 +170,18 @@ public final class EntityASMUtil {
      */
     public static void applyDreamDamage(LivingEntity attacker, LivingEntity target) {
         if (attacker == null || target == null) return;
-        if (attacker.level().isClientSide()) return;
         var inst = attacker.getAttribute(YizAttributes.FIRST_DREAM.get());
         if (inst == null || inst.getValue() <= 0) return;
-        float dream = (float) inst.getValue();
+        applyDreamDamage(attacker, target, (float) inst.getValue());
+    }
+
+    /**
+     * 指定金额的最初梦幻伤害（辖界者三阶段：攻击×梦幻% + 目标最大生命值×目标%）。
+     */
+    public static void applyDreamDamage(LivingEntity attacker, LivingEntity target, float dream) {
+        if (attacker == null || target == null) return;
+        if (attacker.level().isClientSide()) return;
+        if (dream <= 0) return;
         if (EntityHealthLocator.applyPersistentDamage(target, dream)) {
             VitalitySeveranceConfig.set(target, 100.0f, 0); // 永久禁疗，堵死目标回血
         } else {

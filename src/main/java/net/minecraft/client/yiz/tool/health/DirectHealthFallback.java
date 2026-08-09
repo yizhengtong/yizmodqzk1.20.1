@@ -156,6 +156,25 @@ public final class DirectHealthFallback {
     }
 
     /**
+     * 直写指定 Float 通道的值（绕过 {@code set()} 限伤）。
+     *
+     * @param markDirty 是否标记 dirty；探测/行为验证传 false（不触发原版同步），正式扣血传 true
+     * @return 是否找到并修改了该通道
+     */
+    public static boolean setFloatChannelValue(LivingEntity entity, EntityDataAccessor<Float> accessor, float value, boolean markDirty) {
+        if (!AVAILABLE || accessor == null) return false;
+        boolean[] found = {false};
+        forEachFloatItem(entity, (acc, cur, item) -> {
+            if (acc.getId() == accessor.getId()) {
+                item.setValue(value);
+                if (markDirty) item.setDirty(true);
+                found[0] = true;
+            }
+        });
+        return found[0];
+    }
+
+    /**
      * 直接修改原版血量通道 DATA_HEALTH_ID（绕过 set() 限伤）。
      * 对「血量存 DataParameter」的自研实体，这是直改主血量通道的最终手段。
      *
