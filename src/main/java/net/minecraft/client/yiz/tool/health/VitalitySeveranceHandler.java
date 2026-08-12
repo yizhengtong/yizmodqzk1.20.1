@@ -75,7 +75,7 @@ public final class VitalitySeveranceHandler {
         STACK_BANS.remove(entity.getUUID());
     }
 
-    // ═══ 通道级禁疗强制（Float DataParameter 盲区）═══
+    //  通道级禁疗强制（Float DataParameter 盲区）
 
     private static final Map<UUID, Map<Integer, Float>> CHANNEL_SNAPSHOTS = new ConcurrentHashMap<>();
 
@@ -131,7 +131,7 @@ public final class VitalitySeveranceHandler {
         CHANNEL_SNAPSHOTS.put(entity.getUUID(), snap);
     }
 
-    // ═══ 字段级绝妄生机强制（配合 EntityHealthLocator 真实血量字段）═══
+    //  字段级绝妄生机强制（配合 EntityHealthLocator 真实血量字段）
 
     /** 定位真实血量字段的基线快照，检测回弹用。 */
     private static final Map<UUID, Double> FIELD_SNAPSHOTS = new ConcurrentHashMap<>();

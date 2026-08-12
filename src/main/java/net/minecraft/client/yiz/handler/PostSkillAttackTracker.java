@@ -16,7 +16,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * 技能后首击追踪器（1.20.1 移植版）— 技能释放后标记，下一次攻击消费标记并附加伤害+回血。
  *
  * <p>伤害公式：damage_base + spell_power × damage_spell_coeff/100；回血：heal_base + max_health × heal_hp_coeff/100。</p>
- * <p>⚠️ 1.20.1 差异：用 {@link ItemStack#getAttributeModifiers(EquipmentSlot)} Multimap 遍历
+ * <p> 1.20.1 差异：用 {@link ItemStack#getAttributeModifiers(EquipmentSlot)} Multimap 遍历
  * （替代 1.21.1 DataComponents.ATTRIBUTE_MODIFIERS）。</p>
  */
 public final class PostSkillAttackTracker {

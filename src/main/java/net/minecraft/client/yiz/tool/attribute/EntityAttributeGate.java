@@ -20,7 +20,7 @@ import java.util.UUID;
  * 使用专属 {@code prot_} 前缀 modifier（确定性 UUID 由 idKey 派生），配合
  * {@link net.minecraft.client.yiz.mixin.AttributeInstanceMixin} 对移除做调用栈鉴权。</p>
  *
- * <p>⚠️ 1.20.1 差异：{@link AttributeModifier} 构造器 id 参数是 {@link UUID}（非 ResourceLocation），
+ * <p> 1.20.1 差异：{@link AttributeModifier} 构造器 id 参数是 {@link UUID}（非 ResourceLocation），
  * 用 {@link UUID#nameUUIDFromBytes} 派生确定性 UUID 保证 remove 幂等。</p>
  */
 public final class EntityAttributeGate {
@@ -90,6 +90,13 @@ public final class EntityAttributeGate {
         inst.removeModifier(id);
         if (value != 0.0) {
             inst.addPermanentModifier(new AttributeModifier(id, "yizmodqzk:prot_" + idKey, value, AttributeModifier.Operation.ADDITION));
+        }
+        // 受信任写入的限伤属性权威值同步（防外部直接改属性绕过传导限伤）：编辑器/辖界者 setAttr 均汇聚于此。
+        // 用注册表 key 比较而非实例 ==（RegistryObject.create(...).get() 的引用可能与注册表单例不同，导致 vault 不同步）
+        Attribute a = attr.get();
+        var rl = a != null ? net.minecraftforge.registries.ForgeRegistries.ATTRIBUTES.getKey(a) : null;
+        if (rl != null && rl.equals(new net.minecraft.resources.ResourceLocation("yizmodqzk", "conduction_cap"))) {
+            net.minecraft.client.yiz.tool.health.ConductionCapVault.register(entity, (float) value);
         }
     }
 

@@ -146,9 +146,9 @@ public final class EnhanceTagRegistry {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════
+    // 
     //  内置标签注册
-    // ═══════════════════════════════════════════════════════════
+    // 
 
     static {
         registerExistingTags();
@@ -282,9 +282,9 @@ public final class EnhanceTagRegistry {
             });
     }
 
-    // ═══════════════════════════════════════════════════════════
+    // 
     //  辅助：计时攻击修饰器（无影击/霹雳通用）
-    // ═══════════════════════════════════════════════════════════
+    // 
 
     /**
      * 给玩家添加一个持续 N 次攻击的属性修饰器。
@@ -320,9 +320,9 @@ public final class EnhanceTagRegistry {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════
+    // 
     //  雷啸闪：叠加 + 计时衰减
-    // ═══════════════════════════════════════════════════════════
+    // 
 
     private static void addLeixiaoshan(ServerPlayer player) {
         var pd = player.getPersistentData();
@@ -365,9 +365,9 @@ public final class EnhanceTagRegistry {
             id, "yiz:leixiaoshan", cdr, net.minecraft.world.entity.ai.attributes.AttributeModifier.Operation.ADDITION));
     }
 
-    // ═══════════════════════════════════════════════════════════
+    // 
     //  攻击后处理（由 LivingEntityMixin 调用）
-    // ═══════════════════════════════════════════════════════════
+    // 
 
     public static void onPlayerAttack(ServerPlayer player) {
         var pd = player.getPersistentData();
@@ -380,9 +380,9 @@ public final class EnhanceTagRegistry {
         if (pd.getInt("yiz:pili_n") > 0) pd.putBoolean("yiz:pili_crit", true);
     }
 
-    // ═══════════════════════════════════════════════════════════
+    // 
     //  奔雷袭：持续 AoE（每 tick 检测新敌人）
-    // ═══════════════════════════════════════════════════════════
+    // 
 
     public static void tickBenleixi(ServerPlayer player) {
         var pd = player.getPersistentData();
@@ -429,9 +429,9 @@ public final class EnhanceTagRegistry {
         if (heal > 0) player.heal(heal);
     }
 
-    // ═══════════════════════════════════════════════════════════
+    // 
     //  雷震千里：1秒击退窗口（标签侧实例，由 onPlayerTick 驱动）
-    // ═══════════════════════════════════════════════════════════
+    // 
 
     /**
      * 雷震千里击退窗口：ACTIVATE 触发后写入 1 秒时间戳，此方法每 tick 调用。
@@ -488,11 +488,11 @@ public final class EnhanceTagRegistry {
         pd.putString("yiz:lzqll_kb_d", String.join(",", set));
     }
 
-    // ═══════════════════════════════════════════════════════════
+    // 
     //  破阵金身：ACTIVATE 时挂 transient 标记 yiz:pozhenjinshen，
     //  由雷鸣电甲 onTick 护盾段读取决定 interval（4→2tick）。
     //  原错误的 tickMingyin（每tick回满）已删除——那从不是设计意图。
-    // ═══════════════════════════════════════════════════════════
+    // 
 
     public static boolean isTagActive(ServerPlayer player, String tagKey) {
         // TODO(1.20.1-port): 依赖 editor/SkillConfigStorage、api/IEnhanceable、editor/EnhanceEntry

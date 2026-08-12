@@ -209,6 +209,7 @@ task agentJar(type: Jar) {
     manifest {
         attributes(
             'Agent-Class': 'net.minecraft.client.yiz.agent.HealthAgent',
+            'Launcher-Agent-Class': 'net.minecraft.client.yiz.agent.HealthAgent',
             'Premain-Class': 'net.minecraft.client.yiz.agent.HealthAgent',
             'Can-Retransform-Classes': 'true',
             'Can-Redefine-Classes': 'true',

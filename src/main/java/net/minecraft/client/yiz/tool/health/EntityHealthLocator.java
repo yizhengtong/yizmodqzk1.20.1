@@ -62,7 +62,7 @@ public final class EntityHealthLocator {
         HealthSlot cached = CACHE.get(key);
         if (cached != null) return cached;
         if (SCANNING.get()) return null;
-        HealthSlot slot = detectViaDataItems(entity);      // itemsById 行为验证（借鉴 mhzy，命名无关）
+        HealthSlot slot = detectViaDataItems(entity);      // itemsById 行为验证（命名无关）
         if (slot == null) {
             slot = detectViaDataAccessor(entity);          // 广泛命名 + Double + 行为验证
         }
@@ -221,15 +221,22 @@ public final class EntityHealthLocator {
                 @Override
                 public MethodVisitor visitMethod(int access, String name, String descriptor,
                                                  String signature, String[] exceptions) {
-                    if (!"getHealth".equals(name) || !"()F".equals(descriptor)) {
+                    // getHealth()F：读血量字段（GETFIELD）。双名匹配（official + SRG），生产字节码方法名是 m_21223_
+                    boolean isGet = ("getHealth".equals(name) || "m_21223_".equals(name)) && "()F".equals(descriptor);
+                    // setHealth(F)V：写血量字段（PUTFIELD）——对 getHealth 复合/返回常量（Infinity）但
+                    //    override setHealth 写真实字段的实体也能定位真实血量槽（2026-08-12 定位增强）
+                    boolean isSet = ("setHealth".equals(name) || "m_21153_".equals(name)) && "(F)V".equals(descriptor);
+                    if (!isGet && !isSet) {
                         return super.visitMethod(access, name, descriptor, signature, exceptions);
                     }
                     return new MethodVisitor(Opcodes.ASM9) {
                         @Override
                         public void visitFieldInsn(int opcode, String owner, String name2, String descriptor2) {
                             if (found[0] != null) return;
-                            if ((opcode == Opcodes.GETFIELD || opcode == Opcodes.GETSTATIC)
-                                    && ("F".equals(descriptor2) || "D".equals(descriptor2))) {
+                            boolean isFloat = "F".equals(descriptor2) || "D".equals(descriptor2);
+                            if (isGet && (opcode == Opcodes.GETFIELD || opcode == Opcodes.GETSTATIC) && isFloat) {
+                                found[0] = name2;
+                            } else if (isSet && opcode == Opcodes.PUTFIELD && isFloat) {
                                 found[0] = name2;
                             }
                             super.visitFieldInsn(opcode, owner, name2, descriptor2);
@@ -265,7 +272,7 @@ public final class EntityHealthLocator {
                     int mod = f.getModifiers();
                     if (!Modifier.isStatic(mod)) continue;
                     if (!EntityDataAccessor.class.isAssignableFrom(f.getType())) continue;
-                    if (!isHealthLikeName(f.getName())) continue;
+                    // 不做字段名过滤：生产环境字段名是 SRG（f_xxx）无法按名字判断，靠下方 serializer + 行为验证兜底
                     try {
                         f.setAccessible(true);
                         EntityDataAccessor<?> acc = (EntityDataAccessor<?>) f.get(null);
@@ -307,7 +314,7 @@ public final class EntityHealthLocator {
     }
 
     /**
-     * itemsById 行为验证定位（借鉴 mhzy，命名无关）：遍历实体所有 Float DataItem，
+     * itemsById 行为验证定位（命名无关）：遍历实体所有 Float DataItem，
      * 值域过滤（0 &lt; v ≤ maxHealth×1.5）+ 直写通道看 getHealth 是否跟随。对
      * 「血量存 DataParameter 但字段名不像 health」的自研实体也能命中。
      */

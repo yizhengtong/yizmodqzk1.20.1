@@ -16,7 +16,7 @@ import java.util.function.Supplier;
  * 1.20.1 Forge 无 Payload 系统，改为 {@code SimpleChannel#registerMessage} 风格 POJO：
  * {@link #toBytes}（encoder）/ {@link #fromBytes}（decoder）/ {@link #handle}（consumer）。</p>
  *
- * <p>⚠️ 1.20.1 网络层尚未接入 SimpleChannel（下游 tizMod 未注册通道），
+ * <p> 1.20.1 网络层尚未接入 SimpleChannel（下游 tizMod 未注册通道），
  * {@link #sendWindowStart}/{@link #sendWindowEnd} 暂为 TODO 空实现，注册通道后启用。</p>
  *
  * @param active true=窗口激活，客户端开始自动攻击；false=窗口结束

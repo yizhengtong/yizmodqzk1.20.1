@@ -6,7 +6,12 @@
   "refmap": "yizmodqzk.refmap.json",
   "mixins": [
     "LivingEntityMixin",
-    "AttributeInstanceMixin"
+    "AttributeInstanceMixin",
+    "SynchedEntityDataMixin",
+    "YizEntityTickTrackerMixin",
+    "YizLevelTickMixin",
+    "YizLevelInvoker",
+    "YizServerLevelAccessor"
   ],
   "client": [
   ],

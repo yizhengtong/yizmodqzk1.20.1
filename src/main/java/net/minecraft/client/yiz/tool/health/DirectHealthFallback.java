@@ -16,14 +16,14 @@ import java.util.List;
  * <p>通过反射直接访问 {@link SynchedEntityData} 内部的 DataItem 集合，
  * 绕过所有实体方法覆盖、事件系统、以及 {@code getHealth()} 重写。</p>
  *
- * <p>⚠️ 1.20.1 差异：
+ * <p> 1.20.1 差异：
  * <ul>
  *   <li>{@link EntityDataAccessor} 用 {@code getSerializer()}/{@code getId()}（1.21.1 是 record）。</li>
  *   <li>{@code SynchedEntityData.itemsById} 在 <b>1.21.1 是 {@code DataItem[]} 数组</b>，
  *       <b>1.20.1 是 {@code Int2ObjectMap<DataItem<?>>}（fastutil Map）</b>——1.21.1 移植的数组强转
  *       在 1.20.1 抛 ClassCastException 被静默吞掉，导致保底层完全失效。本版按 Map 遍历（兼容数组）。</li>
- *   <li>delta 通道字段（yizmodqzk$FE_GET_HEALTH_DATA）在 1.20.1 未由 mixin 注入 → DELTA_ACCESSOR_ID=-1，
- *       仅跳过逻辑不触发（不影响常规伤害）。</li>
+ *   <li>delta 通道字段（yizmodqzk$HEALTH_DELTA）由 LivingEntityMixin 在 defineSynchedData TAIL 注入，
+ *       DELTA_ACCESSOR_ID 有效；遍历时跳过 delta 通道防误伤。</li>
  * </ul></p>
  */
 public final class DirectHealthFallback {
@@ -40,21 +40,32 @@ public final class DirectHealthFallback {
     public static final EntityDataAccessor<Float> VANILLA_HEALTH_ACCESSOR = initVanillaHealthAccessor();
 
     private static EntityDataAccessor<Float> initVanillaHealthAccessor() {
-        try {
-            Field f = LivingEntity.class.getDeclaredField("DATA_HEALTH_ID");
-            f.setAccessible(true);
-            return (EntityDataAccessor<Float>) f.get(null);
-        } catch (Exception e) {
-            return null;
+        // 双名匹配（official + SRG）：生产环境字段名是 f_20961_（reobf 不改反射字符串）
+        for (String name : new String[]{"DATA_HEALTH_ID", "f_20961_"}) {
+            try {
+                Field f = LivingEntity.class.getDeclaredField(name);
+                f.setAccessible(true);
+                return (EntityDataAccessor<Float>) f.get(null);
+            } catch (Exception ignored) {}
         }
+        // 兜底：按类型找 static EntityDataAccessor<Float> 字段
+        try {
+            for (Field f : LivingEntity.class.getDeclaredFields()) {
+                if (!java.lang.reflect.Modifier.isStatic(f.getModifiers())) continue;
+                if (EntityDataAccessor.class.isAssignableFrom(f.getType())
+                        && f.getGenericType().getTypeName().contains("Float")) {
+                    f.setAccessible(true);
+                    return (EntityDataAccessor<Float>) f.get(null);
+                }
+            }
+        } catch (Exception ignored) {}
+        return null;
     }
 
     private static int initDeltaAccessorId() {
         try {
-            Field f = LivingEntity.class.getDeclaredField("yizmodqzk$FE_GET_HEALTH_DATA");
-            f.setAccessible(true);
-            EntityDataAccessor<?> accessor = (EntityDataAccessor<?>) f.get(null);
-            return accessor != null ? accessor.getId() : -1;
+            // delta 通道改从独立 holder 读取（不再反射 LivingEntity 上的 mixin @Unique 字段）
+            return HealthChannels.DELTA_HEALTH.getId();
         } catch (Exception e) {
             return -1;
         }
@@ -69,10 +80,15 @@ public final class DirectHealthFallback {
             try {
                 itemsField = SynchedEntityData.class.getDeclaredField("itemsById");
             } catch (NoSuchFieldException e) {
-                for (Field f : SynchedEntityData.class.getDeclaredFields()) {
-                    if (f.getType().isArray()) {
-                        itemsField = f;
-                        break;
+                try {
+                    itemsField = SynchedEntityData.class.getDeclaredField("f_135345_"); // SRG 名
+                } catch (NoSuchFieldException e2) {
+                    // 按类型兜底：1.20.1 是 Int2ObjectMap，1.21.1 是 DataItem[] 数组
+                    for (Field f : SynchedEntityData.class.getDeclaredFields()) {
+                        if (f.getType().isArray() || java.util.Map.class.isAssignableFrom(f.getType())) {
+                            itemsField = f;
+                            break;
+                        }
                     }
                 }
             }
@@ -81,10 +97,14 @@ public final class DirectHealthFallback {
                 try {
                     dirtyField = SynchedEntityData.class.getDeclaredField("isDirty");
                 } catch (NoSuchFieldException e) {
-                    for (Field f : SynchedEntityData.class.getDeclaredFields()) {
-                        if (f.getType() == boolean.class) {
-                            dirtyField = f;
-                            break;
+                    try {
+                        dirtyField = SynchedEntityData.class.getDeclaredField("f_135348_"); // SRG 名
+                    } catch (NoSuchFieldException e2) {
+                        for (Field f : SynchedEntityData.class.getDeclaredFields()) {
+                            if (f.getType() == boolean.class && !java.lang.reflect.Modifier.isStatic(f.getModifiers())) {
+                                dirtyField = f;
+                                break;
+                            }
                         }
                     }
                 }
@@ -92,12 +112,16 @@ public final class DirectHealthFallback {
                 try {
                     syncMethod = LivingEntity.class.getMethod("onSyncedDataUpdated", EntityDataAccessor.class);
                 } catch (NoSuchMethodException e) {
-                    for (Method m : LivingEntity.class.getMethods()) {
-                        if (m.getParameterCount() == 1
-                            && EntityDataAccessor.class.isAssignableFrom(m.getParameterTypes()[0])
-                            && m.getReturnType() == void.class) {
-                            syncMethod = m;
-                            break;
+                    try {
+                        syncMethod = LivingEntity.class.getMethod("m_7350_", EntityDataAccessor.class); // SRG 名
+                    } catch (NoSuchMethodException e2) {
+                        for (Method m : LivingEntity.class.getMethods()) {
+                            if (m.getParameterCount() == 1
+                                && EntityDataAccessor.class.isAssignableFrom(m.getParameterTypes()[0])
+                                && m.getReturnType() == void.class) {
+                                syncMethod = m;
+                                break;
+                            }
                         }
                     }
                 }

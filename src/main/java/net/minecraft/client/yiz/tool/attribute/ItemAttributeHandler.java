@@ -14,7 +14,7 @@ import java.util.UUID;
  * {@code DataComponents.ATTRIBUTE_MODIFIERS} 在 1.20.1 用 NBT 或 AttributeModifier API）。
  * 本类只含实体级方法（供防御属性镜像等使用）。</p>
  *
- * <p>⚠️ 1.20.1 差异：{@link AttributeModifier} 构造器 id 参数是 {@link UUID}（1.21.1 是
+ * <p> 1.20.1 差异：{@link AttributeModifier} 构造器 id 参数是 {@link UUID}（1.21.1 是
  * {@code ResourceLocation}）。用确定性 UUID（{@link UUID#nameUUIDFromBytes} 由 idKey 派生），
  * 保证同 idKey 幂等（先 remove 再 add）。</p>
  */

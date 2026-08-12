@@ -24,7 +24,7 @@ import com.mojang.logging.LogUtils;
  * <p>辖界者等 yiz 家族实体在 {@code applyEntityAttributes()} 时向本类注册「标准属性表」
  * （每个属性的标准 base 值 + 标准 prot_ modifier 值）。之后周期性校验：</p>
  * <ol>
- *   <li>属性当前值 ≠ 标准值 → 进入 ②；</li>
+ *   <li>属性当前值 ≠ 标准值 → 进入 ；</li>
  *   <li>该属性是否经「编辑器」编辑（{@link #markEdited} 标记）→ 是则放行（用户有意为之）；</li>
  *   <li>未经过编辑器 → 判定为外部篡改 → 还原到标准值（清非家族 modifier + 重设 base + 重设 prot_）。</li>
  * </ol>
@@ -57,7 +57,7 @@ public final class AttributeStandardizer {
     /** 家族自身 modifier name 前缀（prot_ / entity_ / 狂暴移速等），还原时豁免。 */
     private static final String[] FAMILY_MODIFIER_PREFIXES = { "yizmodqzk:", "yizxianmod:" };
 
-    // ══════════ 注册 / 标记 / 清理 ══════════
+    //  注册 / 标记 / 清理 
 
     /**
      * 注册某属性的标准值。在 {@code applyEntityAttributes()} 里对每个受管属性调用。
@@ -77,6 +77,13 @@ public final class AttributeStandardizer {
         EDITED.computeIfAbsent(entity.getUUID(), k -> ConcurrentHashMap.newKeySet()).add(idKey);
     }
 
+    /** 查询某属性是否经编辑器合法编辑（豁免还原）。供 ConductionCapVault 等权威表防误还原。 */
+    public static boolean isEdited(LivingEntity entity, String idKey) {
+        if (entity == null || idKey == null) return false;
+        Set<String> s = EDITED.get(entity.getUUID());
+        return s != null && s.contains(idKey);
+    }
+
     /** 实体移除/死亡时清理，防止表残留。 */
     public static void cleanup(LivingEntity entity) {
         if (entity == null) return;
@@ -85,7 +92,7 @@ public final class AttributeStandardizer {
         LAST_CHECK.remove(entity.getUUID());
     }
 
-    // ══════════ 周期检查 ══════════
+    //  周期检查 
 
     /** 每 tick 调用（服务端），按间隔触发审计。 */
     public static void tick(LivingEntity entity) {

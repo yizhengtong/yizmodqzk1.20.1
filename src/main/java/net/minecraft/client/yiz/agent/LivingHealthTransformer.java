@@ -59,15 +59,13 @@ public class LivingHealthTransformer implements ClassFileTransformer {
                 ClassWriter cw = new ClassWriter(cr, ClassWriter.COMPUTE_FRAMES);
                 ClassVisitor cv = new HealthClassVisitor(cw, className, superName, isEntity, true, modified);
                 cr.accept(cv, ClassReader.EXPAND_FRAMES);
-                if (modified[0]) { recordTransformReflect(); return cw.toByteArray(); }
-                return null;
+                return modified[0] ? cw.toByteArray() : null;
             } catch (Throwable frameFail) {
                 // 帧重算失败 → COMPUTE_MAXS 安全模式：关闭调用点包装（调用点插入会改栈深，MAXS 不重算帧可能 VerifyError）
                 ClassWriter cw2 = new ClassWriter(cr, ClassWriter.COMPUTE_MAXS);
                 ClassVisitor cv2 = new HealthClassVisitor(cw2, className, superName, isEntity, false, modified);
                 cr.accept(cv2, ClassReader.EXPAND_FRAMES);
-                if (modified[0]) { recordTransformReflect(); return cw2.toByteArray(); }
-                return null;
+                return modified[0] ? cw2.toByteArray() : null;
             }
         } catch (Throwable e) {
             System.err.println("[YizModQZK Agent] TRANSFORM FAILED for " + className.replace('/', '.')
@@ -77,15 +75,6 @@ public class LivingHealthTransformer implements ClassFileTransformer {
     }
 
     // ==================== 排除名单 ====================
-
-    /** 上报一次实际 transform（反射调主模组 AgentBridge，供 /yiz agent 诊断统计注入类数）。 */
-    private static void recordTransformReflect() {
-        try {
-            Class<?> bridge = Class.forName("net.minecraft.client.yiz.core.asm.AgentBridge", true,
-                Thread.currentThread().getContextClassLoader());
-            bridge.getMethod("recordTransform").invoke(null);
-        } catch (Throwable ignored) {}
-    }
 
     private boolean isExcluded(String className) {
         // 辖界者：允许注入（通用不死守卫，用外部表覆盖 getHealth/isAlive/isDeadOrDying，

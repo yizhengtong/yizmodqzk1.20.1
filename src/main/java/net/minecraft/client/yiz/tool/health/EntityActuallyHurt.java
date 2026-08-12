@@ -50,14 +50,14 @@ public final class EntityActuallyHurt {
      * 强制设置实体的健康值，绕过 {@code setHealth()} 的所有逻辑。
      * 通过反射直接写 {@code health} 字段 + 更新 {@code DATA_HEALTH_ID} 同步客户端。
      *
-     * <p>⚠️ 1.20.1 差异：{@code LivingEntity} <b>没有 {@code health} 普通字段</b>（血量在
+     * <p> 1.20.1 差异：{@code LivingEntity} <b>没有 {@code health} 普通字段</b>（血量在
      * {@code DATA_HEALTH_ID} DataParameter 通道）→ {@code getDeclaredField("health")} 抛
      * NoSuchFieldException → {@code REFLECTION_AVAILABLE=false}。此时<b>不能再回退
      * {@code setHealth}</b>（辖界者 override 黑洞，外部写不进）——改为直接写
      * {@code DATA_HEALTH_ID} DataItem（绕过 set() 限伤），确保"校正回表值"真正落到通道。</p>
      *
-     * <p>优先级：① 有 health 字段（若未来版本恢复）→ 字段 + 通道双写；
-     * ② 无 health 字段 → {@link DirectHealthFallback#setFloatChannelValue} 直写 vanilla 通道。</p>
+     * <p>优先级： 有 health 字段（若未来版本恢复）→ 字段 + 通道双写；
+     *  无 health 字段 → {@link DirectHealthFallback#setFloatChannelValue} 直写 vanilla 通道。</p>
      */
     @SuppressWarnings("unchecked")
     public static void catchSetTrueHealth(LivingEntity living, float value) {

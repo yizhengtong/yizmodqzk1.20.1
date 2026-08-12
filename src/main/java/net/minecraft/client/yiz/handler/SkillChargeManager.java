@@ -46,9 +46,9 @@ public final class SkillChargeManager {
 
     private SkillChargeManager() {}
 
-    // ════════════════════════════════════════════════════════════
+    // 
     //  大槽特权：有效上限 / 有效冷却
-    // ════════════════════════════════════════════════════════════
+    // 
 
     /** 该槽位物品的有效最大充能数（大槽 ×2，最少 1，不含临时 buff）。 */
     public static int maxChargesOf(ItemStack stack, int slot) {
@@ -115,9 +115,9 @@ public final class SkillChargeManager {
         return slot == 0 ? Math.max(1, base / 2) : base;
     }
 
-    // ════════════════════════════════════════════════════════════
+    // 
     //  施法消耗
-    // ════════════════════════════════════════════════════════════
+    // 
 
     /**
      * 施法时尝试消耗 1 充能。充能 >0 则 -1 并写回（并在未满时启动回充计时），返回 true；
@@ -159,9 +159,9 @@ public final class SkillChargeManager {
         return true;
     }
 
-    // ════════════════════════════════════════════════════════════
+    // 
     //  回充 tick（由 tizMod.onPlayerTick 调用，服务端）
-    // ════════════════════════════════════════════════════════════
+    // 
 
     /** 每 tick 推进各槽充能：到点 +1，未满续设计时。仅在状态变化时写回（避免每 tick 同步）。 */
     public static void tickRecharge(ServerPlayer player) {
@@ -221,9 +221,9 @@ public final class SkillChargeManager {
         if (dirty) savePlayerData(player, CHARGES_KEY, root.toString());
     }
 
-    // ════════════════════════════════════════════════════════════
+    // 
     //  登录初始化：空数据视为各槽满充能（不卡玩家）
-    // ════════════════════════════════════════════════════════════
+    // 
 
     public static void onLogin(ServerPlayer player) {
         JsonObject root = readRoot(player);
@@ -245,9 +245,9 @@ public final class SkillChargeManager {
         if (dirty) savePlayerData(player, CHARGES_KEY, root.toString());
     }
 
-    // ════════════════════════════════════════════════════════════
+    // 
     //  读取（供 HUD 用，客户端）
-    // ════════════════════════════════════════════════════════════
+    // 
 
     public static int getCharges(Player player, int slot) {
         JsonObject root = readRoot(player);
@@ -262,9 +262,9 @@ public final class SkillChargeManager {
         return entry.has("rechargeEnd") ? entry.get("rechargeEnd").getAsLong() : 0L;
     }
 
-    // ════════════════════════════════════════════════════════════
+    // 
     //  内部
-    // ════════════════════════════════════════════════════════════
+    // 
 
     private static JsonObject readRoot(Player player) {
         String raw;

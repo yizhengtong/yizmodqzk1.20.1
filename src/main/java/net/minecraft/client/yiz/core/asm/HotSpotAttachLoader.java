@@ -28,25 +28,42 @@ public class HotSpotAttachLoader extends AbstractAgentLoader {
 
     @Override
     protected void prepareAndAttach(String pid, String agentPath) throws Exception {
-        LOGGER.info("使用 HotSpotVirtualMachine.ALLOW_ATTACH_SELF 策略绕过 JDK 17 Self-Attach 限制...");
+        LOGGER.info("修改 jdk.attach.allowAttachSelf 并 attach + loadAgent 动态加载 Agent...");
 
         Field theUnsafeField = Unsafe.class.getDeclaredField("theUnsafe");
         theUnsafeField.setAccessible(true);
         Unsafe unsafe = (Unsafe) theUnsafeField.get(null);
 
+        // 1. 修改 jdk.internal.misc.VM.savedProps 的 jdk.attach.allowAttachSelf=true。
+        //    HotSpotVirtualMachine.ALLOW_ATTACH_SELF 是 final static，<clinit> 从 savedProps 初始化；
+        //    直接 Unsafe 改 final 字段会被 <clinit> 重置 + JIT 折叠失效。改 savedProps 后触发 <clinit> 才生效。
+        try {
+            Class<?> vmClass = Class.forName("jdk.internal.misc.VM");
+            Field savedPropsField = vmClass.getDeclaredField("savedProps");
+            long offset = unsafe.staticFieldOffset(savedPropsField);
+            Object base = unsafe.staticFieldBase(savedPropsField);
+            Object propsObj = unsafe.getObject(base, offset);
+            // savedProps 可能是 Properties 或 HashMap，统一用 put（Map 接口，原始类型规避通配符）
+            if (propsObj instanceof java.util.Map) {
+                ((java.util.Map) propsObj).put("jdk.attach.allowAttachSelf", "true");
+                LOGGER.info("成功设置 VM.savedProps[jdk.attach.allowAttachSelf]=true");
+            } else {
+                LOGGER.warn("VM.savedProps 类型异常: {}", propsObj == null ? "null" : propsObj.getClass());
+            }
+        } catch (Exception e) {
+            LOGGER.warn("修改 VM.savedProps 失败: {}", e.getMessage());
+        }
+
+        // 2. 触发 HotSpotVirtualMachine.<clinit>（initialize=true）读取 savedProps → ALLOW_ATTACH_SELF=true
         List<AttachProvider> providers = AttachProvider.providers();
         if (providers.isEmpty()) {
             throw new IllegalStateException("当前 JVM 未发现任何可用的 AttachProvider!");
         }
         ClassLoader providerLoader = providers.get(0).getClass().getClassLoader();
+        Class.forName("sun.tools.attach.HotSpotVirtualMachine", true, providerLoader);
+        LOGGER.info("HotSpotVirtualMachine.<clinit> 已执行（ALLOW_ATTACH_SELF=true）");
 
-        Class<?> hotSpotVmClass = Class.forName("sun.tools.attach.HotSpotVirtualMachine", false, providerLoader);
-        Field allowAttachSelfField = hotSpotVmClass.getDeclaredField("ALLOW_ATTACH_SELF");
-        Object base = unsafe.staticFieldBase(allowAttachSelfField);
-        long offset = unsafe.staticFieldOffset(allowAttachSelfField);
-        unsafe.putBoolean(base, offset, true);
-        LOGGER.info("成功修改 ALLOW_ATTACH_SELF 为 true");
-
+        // 3. attach + loadAgent + detach（标准动态加载，Agent-Class + agentmain）
         Class<?> vmPublicClass = Class.forName("com.sun.tools.attach.VirtualMachine");
         Method attachMethod = vmPublicClass.getMethod("attach", String.class);
         Object vmInstance = attachMethod.invoke(null, pid);

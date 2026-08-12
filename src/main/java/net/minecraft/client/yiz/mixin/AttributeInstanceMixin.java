@@ -17,10 +17,10 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * （{@link AttributeModifier#getId()}）判定是否受保护（EntityAttributeGate 分配过的 yizmodqzk:prot_），
  * 做「调用栈 + 包名」鉴权：受信任放行，其他模组拒绝 → 实体挂载的属性不会被外部清掉。</p>
  *
- * <p>⚠️ 1.20.1 差异：removeModifier(AttributeModifier) 返回 void（1.21.1 的 ResourceLocation 版返回 boolean），
+ * <p> 1.20.1 差异：removeModifier(AttributeModifier) 返回 void（1.21.1 的 ResourceLocation 版返回 boolean），
  * 用 {@link CallbackInfo} 而非 CallbackInfoReturnable，取消即跳过移除。</p>
  */
-@Mixin(AttributeInstance.class)
+@Mixin(value = AttributeInstance.class, priority = Integer.MAX_VALUE)
 public abstract class AttributeInstanceMixin {
 
     @Inject(method = "removeModifier(Lnet/minecraft/world/entity/ai/attributes/AttributeModifier;)V",

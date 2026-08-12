@@ -91,10 +91,11 @@ public class tizMod {
         // 加载实体真实血量字段定位缓存（config/yizmodqzk/entity_health_slots.json）
         net.minecraft.client.yiz.tool.health.EntityHealthLocator.load();
 
-        // 简易指令注册器 + /yiz remove / /yiz agent 指令
+        // 简易指令注册器 + /yiz remove / /yiz agent / /yiz setHealth 指令
         net.minecraft.client.yiz.tool.SimpleCommandRegistry.init();
         net.minecraft.client.yiz.tool.YizRemoveCommand.register();
         net.minecraft.client.yiz.tool.YizAgentCommand.register();
+        net.minecraft.client.yiz.tool.YizSetHealthCommand.register();
 
         modEventBus.addListener(this::commonSetup);
         net.minecraftforge.common.MinecraftForge.EVENT_BUS.register(this);
@@ -102,7 +103,7 @@ public class tizMod {
 
     private void commonSetup(final FMLCommonSetupEvent event) {
         LOGGER.info("YizMod QZK 1.20.1 前置库初始化完成");
-        // 动态加载 JavaAgent（同进程 self-attach，用于最初梦幻 getHealth 字节码改写配合扫描）
+        // 动态加载 JavaAgent（同进程 self-attach，用于涨跌多空 getHealth 字节码改写配合扫描）
         try {
             net.minecraft.client.yiz.core.asm.AgentLoader.init();
         } catch (Throwable t) {
@@ -137,7 +138,7 @@ public class tizMod {
         } catch (Throwable ignored) {}
     }
 
-    // ═══════════ 防御属性镜像（供下游自研实体调用）═══════════
+    //  防御属性镜像（供下游自研实体调用）
 
     /**
      * 防御力镜像：读 {@link YizAttributes#ARMOR} → 1:1 写到原版 {@link Attributes#ARMOR} + {@link Attributes#ARMOR_TOUGHNESS}。

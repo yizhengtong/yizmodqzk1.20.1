@@ -93,7 +93,7 @@ public final class ConductionDamageLimiter {
         if (target.level().isClientSide()) return amount;
         if (amount <= 0) return amount;
 
-        double cap = readAttr(target, YizAttributes.CONDUCTION_CAP.get());
+        double cap = readConductionCap(target);
         // 保底限伤（写死不依赖属性）：血量闭包实体即使属性未挂/为 0 也默认限 25% 上限，
         // 防止外部模组（setHealth(0)/巨量伤害）因属性挂载失败而穿透秒杀。
         boolean isSecure = SecureHealthClosure.isSecure(target);
@@ -123,7 +123,7 @@ public final class ConductionDamageLimiter {
     public static float limitSetHealth(LivingEntity target, float newHealth, long gameTick) {
         if (target.level().isClientSide()) return newHealth;
 
-        double cap = readAttr(target, YizAttributes.CONDUCTION_CAP.get());
+        double cap = readConductionCap(target);
         float current = target.getHealth();
         if (newHealth >= current) return newHealth; // 治疗放行
 
@@ -154,6 +154,7 @@ public final class ConductionDamageLimiter {
     /** 实体死亡/移除时清理。由 {@code LivingEntityMixin.onDie} 调用。 */
     public static void removeAll(LivingEntity target) {
         JOURNAL.remove(target.getUUID());
+        ConductionCapVault.remove(target.getUUID());
     }
 
     // ==================== 工具 ====================
@@ -162,6 +163,17 @@ public final class ConductionDamageLimiter {
     private static double readAttr(LivingEntity entity, Attribute attr) {
         var inst = entity.getAttribute(attr);
         return inst != null ? inst.getValue() : 0;
+    }
+
+    /** 读限伤上限%：编辑器编辑过（markEdited）→ 读属性实时跟随；否则读权威表防篡改（外部改属性不影响），
+     *  未登记 fallback 属性值。 */
+    private static double readConductionCap(LivingEntity target) {
+        if (net.minecraft.client.yiz.tool.attribute.AttributeStandardizer.isEdited(target, "conduction_cap")) {
+            return readAttr(target, YizAttributes.CONDUCTION_CAP.get());
+        }
+        Float vault = ConductionCapVault.getPercent(target);
+        if (vault != null) return vault;
+        return readAttr(target, YizAttributes.CONDUCTION_CAP.get());
     }
 
     /** 减伤（仅对血量闭包实体补——其 setHealth 层短路跳过 DAMAGE_REDUCTION/BLOCK；非闭包实体 setHealth 层已做）。 */

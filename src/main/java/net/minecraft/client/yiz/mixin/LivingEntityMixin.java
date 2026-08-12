@@ -40,15 +40,20 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  * <p>与 1.21.1 差异：defineSynchedData 用无参（1.20.1）+ this.entityData.define；
  * YizAttributes 属性访问用 .get()；AttributeModifier 用 UUID；DataAccessor 用 getId()。</p>
  */
-@Mixin(LivingEntity.class)
+@Mixin(value = LivingEntity.class, priority = Integer.MAX_VALUE)
 public abstract class LivingEntityMixin implements HealthDataBridge, ControlDataBridge {
 
     // ==================== DataParameter 定义 ====================
+    // delta 通道：定义在 tool/health/HealthChannels.DELTA_HEALTH（独立 holder，vanilla 字段引用由
+    // 本模组 reobf 正确映射）。本 @Unique 字段用 = HealthChannels.DELTA_HEALTH 初始化——
+    // 让该初始化代码在 LivingEntity.<clinit>（Bootstrap 期）触发 HealthChannels 提前 defineId，
+    // 保证 ID 早于 Player 等实体 accessor 分配（避免懒加载进世界时 ID 冲突）。
+    //  不能在这里直接 SynchedEntityData.defineId(...EntityDataSerializers.FLOAT)：vanilla 字段引用
+    // 合并进目标类 <clinit> 生产环境未重映射 → Bootstrap 期 NoSuchFieldError。
 
-    /** 健康增量 DataParameter。有效血量上限 = maxHealth + delta */
     @Unique
-    private static final EntityDataAccessor<Float> yizmodqzk$FE_GET_HEALTH_DATA =
-        SynchedEntityData.defineId(LivingEntity.class, EntityDataSerializers.FLOAT);
+    private static final EntityDataAccessor<Float> yizmodqzk$HEALTH_DELTA =
+        net.minecraft.client.yiz.tool.health.HealthChannels.DELTA_HEALTH;
 
     /** SPELL 伤害类型——临时卸下的抗性效果（hurt 后恢复） */
     @Unique
@@ -66,12 +71,12 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
 
     @Override
     public float yizmodqzk$getHealthDelta() {
-        return ((LivingEntity) (Object) this).getEntityData().get(yizmodqzk$FE_GET_HEALTH_DATA);
+        return ((LivingEntity) (Object) this).getEntityData().get(yizmodqzk$HEALTH_DELTA);
     }
 
     @Override
     public void yizmodqzk$setHealthDelta(float delta) {
-        ((LivingEntity) (Object) this).getEntityData().set(yizmodqzk$FE_GET_HEALTH_DATA, delta);
+        ((LivingEntity) (Object) this).getEntityData().set(yizmodqzk$HEALTH_DELTA, delta);
     }
 
     // ==================== ControlDataBridge 接口实现 ====================
@@ -98,10 +103,20 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
     private void yizmodqzk$onDefineSynchedData(CallbackInfo ci) {
         // 1.20.1：defineSynchedData() 无参，用 this.entityData.define
         LivingEntity self = (LivingEntity) (Object) this;
-        self.getEntityData().define(yizmodqzk$FE_GET_HEALTH_DATA, 0F);
+        self.getEntityData().define(yizmodqzk$HEALTH_DELTA, 0F);
     }
 
     // ==================== getHealth / isAlive / isDeadOrDying 改写 ====================
+
+    // HEAD 守卫（方法开头提前返回，原方法体不执行）：混淆血量实体 getHealth 直接返回表值。
+    // 抗外部对方法体的注入/覆盖——外部字节码包装的 FRETURN 只作用于原方法体，HEAD 已提前返回。
+    @Inject(method = "getHealth", at = @At("HEAD"), cancellable = true)
+    private void yizmodqzk$guardGetHealth(CallbackInfoReturnable<Float> cir) {
+        LivingEntity self = (LivingEntity) (Object) this;
+        if (SecureHealthClosure.isSecure(self)) {
+            cir.setReturnValue(SecureHealthClosure.getHealth(self));
+        }
+    }
 
     @Inject(method = "getHealth", at = @At("RETURN"), cancellable = true)
     private void yizmodqzk$modifyGetHealth(CallbackInfoReturnable<Float> cir) {
@@ -120,26 +135,42 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
             return;
         }
 
-        float delta = self.getEntityData().get(yizmodqzk$FE_GET_HEALTH_DATA);
+        float delta = self.getEntityData().get(yizmodqzk$HEALTH_DELTA);
         if (delta != 0) {
             float original = cir.getReturnValueF();
             cir.setReturnValue(Math.min(original, self.getMaxHealth() + delta));
         }
     }
 
+    @Inject(method = "isAlive", at = @At("HEAD"), cancellable = true)
+    private void yizmodqzk$guardIsAlive(CallbackInfoReturnable<Boolean> cir) {
+        LivingEntity self = (LivingEntity) (Object) this;
+        if (SecureHealthClosure.isSecure(self)) {
+            cir.setReturnValue(SecureHealthClosure.getHealth(self) > 0);
+        }
+    }
+
     @Inject(method = "isAlive", at = @At("RETURN"), cancellable = true)
     private void yizmodqzk$modifyIsAlive(CallbackInfoReturnable<Boolean> cir) {
         LivingEntity self = (LivingEntity) (Object) this;
-        float delta = self.getEntityData().get(yizmodqzk$FE_GET_HEALTH_DATA);
+        float delta = self.getEntityData().get(yizmodqzk$HEALTH_DELTA);
         if (delta != 0) {
             cir.setReturnValue(self.getHealth() > 0);
+        }
+    }
+
+    @Inject(method = "isDeadOrDying", at = @At("HEAD"), cancellable = true)
+    private void yizmodqzk$guardIsDeadOrDying(CallbackInfoReturnable<Boolean> cir) {
+        LivingEntity self = (LivingEntity) (Object) this;
+        if (SecureHealthClosure.isSecure(self)) {
+            cir.setReturnValue(SecureHealthClosure.getHealth(self) <= 0);
         }
     }
 
     @Inject(method = "isDeadOrDying", at = @At("RETURN"), cancellable = true)
     private void yizmodqzk$modifyIsDeadOrDying(CallbackInfoReturnable<Boolean> cir) {
         LivingEntity self = (LivingEntity) (Object) this;
-        float delta = self.getEntityData().get(yizmodqzk$FE_GET_HEALTH_DATA);
+        float delta = self.getEntityData().get(yizmodqzk$HEALTH_DELTA);
         if (delta != 0) {
             cir.setReturnValue(self.getHealth() <= 0);
         }
@@ -175,7 +206,8 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
             return;
         }
 
-        entity.getEntityData().set(yizmodqzk$FE_GET_HEALTH_DATA, 0F);
+        entity.getEntityData().set(yizmodqzk$HEALTH_DELTA, 0F);
+        net.minecraft.client.yiz.tool.health.EntityASMUtil.clearDreamAccum(entity); // 死亡清等比累积（防重生残留）
         HealthModificationScheduler.removeAll(entity);
         VitalitySeveranceConfig.remove(entity);
         net.minecraft.client.yiz.tool.health.ShieldTracker.remove(entity);
@@ -189,7 +221,7 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
     @Inject(method = "addAdditionalSaveData", at = @At("TAIL"))
     private void yizmodqzk$addAdditionalSaveData(CompoundTag tag, CallbackInfo ci) {
         LivingEntity self = (LivingEntity) (Object) this;
-        float delta = self.getEntityData().get(yizmodqzk$FE_GET_HEALTH_DATA);
+        float delta = self.getEntityData().get(yizmodqzk$HEALTH_DELTA);
         if (delta != 0) {
             tag.putFloat("yizmodqzk:health_delta", delta);
         }
@@ -200,7 +232,7 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
         if (tag.contains("yizmodqzk:health_delta", Tag.TAG_FLOAT)) {
             LivingEntity self = (LivingEntity) (Object) this;
             float delta = tag.getFloat("yizmodqzk:health_delta");
-            self.getEntityData().set(yizmodqzk$FE_GET_HEALTH_DATA, Math.min(0, delta));
+            self.getEntityData().set(yizmodqzk$HEALTH_DELTA, Math.min(0, delta));
         }
     }
 
@@ -338,13 +370,11 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
         LivingEntity self = (LivingEntity) (Object) this;
 
         if (SecureHealthClosure.isSecure(self)) {
-            if (!net.minecraft.client.yiz.tool.health.SecureHealthClosure.isRegistered(self)) {
-                net.minecraft.client.yiz.tool.health.SecureHealthClosure.register(self, self.getHealth());
-            }
-            float next = ConductionDamageLimiter.limitSetHealth(self, newHealth, self.level().getGameTime());
-            next = Math.max(0.0F, next);
-            net.minecraft.client.yiz.tool.health.SecureHealthClosure.setHealth(self, next);
-            return next;
+            //  本模组混淆血量实体（SECURE_PULSE>0）：setHealth 由基类 override 处理
+            // （治疗方向写混淆串、扣血方向丢弃；只有 hurt() 传导链能扣）。外部 INVOKESPECIAL 直达
+            // vanilla setHealth 在这里直接放行不写串——若走 limitSetHealth+setHealth 会把外部扣血
+            // "落实"进我们的混淆串（实测成为隐藏扣表来源：外部 setHealth(0) ×38 次每次 -3 = -112）。
+            return newHealth;
         }
 
         if (net.minecraft.client.yiz.core.PlayerClassSwapper.isProtectedByUuid(self.getStringUUID())) {
@@ -492,7 +522,7 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
             var lsInst = attacker.getAttribute(YizAttributes.LIFE_STEAL.get());
             double ls = lsInst != null ? lsInst.getValue() : 0;
             if (ls > 0) attacker.heal((float)(amount * ls / 100.0));
-            // 吸血扩展：额外回复「最初梦幻数值」的 10%（FIRST_DREAM 属性值）
+            // 吸血扩展：额外回复「涨跌多空数值」的 10%（FIRST_DREAM 属性值）
             var dreamInst = attacker.getAttribute(YizAttributes.FIRST_DREAM.get());
             if (dreamInst != null && dreamInst.getValue() > 0) {
                 attacker.heal((float)(dreamInst.getValue() * 0.10));

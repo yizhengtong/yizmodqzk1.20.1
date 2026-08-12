@@ -23,7 +23,7 @@ public final class YizAttributes {
     public static final DeferredRegister<Attribute> ATTRIBUTES =
         DeferredRegister.create(ForgeRegistries.ATTRIBUTES, "yizmodqzk");
 
-    // ══════════ 辖界者所需 17 属性（基值 0，数值由 EntityAttributeGate 分配）══════════
+    //  辖界者所需 17 属性（基值 0，数值由 EntityAttributeGate 分配）
 
     /** 攻击强度 — 值域 ≥0。辖界者困难模板 60。 */
     public static final RegistryObject<Attribute> ATTACK_STRENGTH =
@@ -95,10 +95,10 @@ public final class YizAttributes {
         ATTRIBUTES.register("vitality_severance_time",
             () -> new RangedAttribute("attribute.yizmodqzk.vitality_severance_time", 0.0, 0.0, Double.MAX_VALUE).setSyncable(true));
 
-    /** 最初梦幻 — 值域 ≥0。辖界者骨架 0（派生 = 攻击力×20%）。 */
+    /** 涨跌多空 — 值域 ≥0。辖界者骨架 0（派生 = 攻击力×20%）。 */
     public static final RegistryObject<Attribute> FIRST_DREAM =
-        ATTRIBUTES.register("first_dream",
-            () -> new RangedAttribute("attribute.yizmodqzk.first_dream", 0.0, 0.0, Double.MAX_VALUE).setSyncable(true));
+        ATTRIBUTES.register("long_short",
+            () -> new RangedAttribute("attribute.yizmodqzk.long_short", 0.0, 0.0, Double.MAX_VALUE).setSyncable(true));
 
     /** 传导限伤上限(%) — 值域 ≥0。辖界者困难模板 25（每击上限 = maxHealth×cap%）。 */
     public static final RegistryObject<Attribute> CONDUCTION_CAP =
@@ -110,7 +110,7 @@ public final class YizAttributes {
         ATTRIBUTES.register("secure_pulse",
             () -> new RangedAttribute("attribute.yizmodqzk.secure_pulse", 0.0, 0.0, 1.0).setSyncable(true));
 
-    // ══════════ LivingEntityMixin 需要的扩展属性（2026-08-09 补全）══════════
+    //  LivingEntityMixin 需要的扩展属性（2026-08-09 补全）
 
     public static final RegistryObject<Attribute> CRIT_RATE =
         ATTRIBUTES.register("crit_rate",
@@ -192,7 +192,7 @@ public final class YizAttributes {
         ATTRIBUTES.register("armor_penetration_flat",
             () -> new RangedAttribute("attribute.yizmodqzk.armor_penetration_flat", 0.0, 0.0, Double.MAX_VALUE).setSyncable(true));
 
-    // ══════════ 技能系统属性（2026-08-09 补全）══════════
+    //  技能系统属性（2026-08-09 补全）
 
     public static final RegistryObject<Attribute> COOLDOWN_VALUE =
         ATTRIBUTES.register("cooldown_value",
@@ -238,7 +238,7 @@ public final class YizAttributes {
         ATTRIBUTES.register("heal_hp_coeff",
             () -> new RangedAttribute("attribute.yizmodqzk.heal_hp_coeff", 0.0, 0.0, 100.0).setSyncable(true));
 
-    // ══════════ 堆叠模式 + 便捷方法 ══════════
+    //  堆叠模式 + 便捷方法 
 
     public enum StackMode { MULTIPLY, ADD }
 

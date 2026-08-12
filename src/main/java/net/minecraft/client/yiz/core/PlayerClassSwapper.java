@@ -58,9 +58,9 @@ public final class PlayerClassSwapper {
         return PROTECTED_UUIDS.contains(uuidStr);
     }
 
-    // ══════════════════════════════════════════════════════════════
+    // 
     //  公开 API
-    // ══════════════════════════════════════════════════════════════
+    // 
 
     /**
      * 将玩家切换到保护状态。
@@ -100,9 +100,9 @@ public final class PlayerClassSwapper {
         return player.getClass().getName().equals(PROTECTED_CLASS_NAME);
     }
 
-    // ══════════════════════════════════════════════════════════════
+    // 
     //  Unsafe 核心
-    // ══════════════════════════════════════════════════════════════
+    // 
 
     private static boolean swap(Player player, Class<?> targetClass) {
         String key = player.getStringUUID();
@@ -129,9 +129,9 @@ public final class PlayerClassSwapper {
         return isProtected(player);
     }
 
-    // ══════════════════════════════════════════════════════════════
+    // 
     //  klass 指针读写
-    // ══════════════════════════════════════════════════════════════
+    // 
 
     /**
      * 读取对象头中的 klass 指针（低 32 位，压缩指针模式）。
@@ -162,9 +162,9 @@ public final class PlayerClassSwapper {
         return compressed != 0 && (compressed & 0xFFFFFFFF00000000L) == 0;
     }
 
-    // ══════════════════════════════════════════════════════════════
+    // 
     //  初始化
-    // ══════════════════════════════════════════════════════════════
+    // 
 
     private static Unsafe getUnsafe() {
         try {
