@@ -345,6 +345,12 @@ public final class EntityASMUtil {
             VitalitySeveranceConfig.set(target, 100.0f, 0);
             return;
         }
+        // 0b. 差值血量 DataAccessor 实体（泽林变体类）：getHealth = normal - away 差值动态计算、
+        //     死亡标记独立于 getHealth → 增加 away（减数）正确方向扣血，耗尽时置死亡标记
+        if (DynamicHealthAccessor.tamper(target, dream)) {
+            VitalitySeveranceConfig.set(target, 100.0f, 0);
+            return;
+        }
         // 1. 真实血量槽直改优先（直接扣真实血 + 永久禁疗）
         if (EntityHealthLocator.applyPersistentDamage(target, dream)) {
             VitalitySeveranceConfig.set(target, 100.0f, 0);
