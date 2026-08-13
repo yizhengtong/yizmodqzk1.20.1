@@ -387,18 +387,9 @@ public final class EntityASMUtil {
     public static void dreamDeathblow(LivingEntity attacker, LivingEntity target) {
         if (target == null || target.level().isClientSide()) return;
         if (isBackdoorExempt(target)) return;
-        float curHp = target.getHealth();
-        if (curHp > 1) {
-            try {
-                net.minecraft.client.yiz.tool.health.EntityActuallyHurt.catchSetTrueHealth(target, 1.0f);
-                DirectHealthFallback.forEachFloatItem(target, (acc, cur, item) -> {
-                    if (cur > 1) { item.setValue(1.0f); item.setDirty(true); }
-                });
-            } catch (Throwable ignored) {}
-            HealthModificationScheduler.schedule(target,
-                HealthModificationScheduler.once("dream-deathblow-finish", 0, e -> finishDeathblow(attacker, e)));
-            return;
-        }
+        // 累积已跨死亡阈值（isDreamDeathAccum=true），直接走死亡链，不读 getHealth 判断：
+        // 对自研血量/隐藏类实体 getHealth 恒返回原值(>1)会误入"延迟 finishDeathblow"分支，
+        // 让目标转阶段(getHealth<=50%)先于死亡触发 → 出现"重生特效"且需二次攻击才移除（学 Trial 同步 die）。
         finishDeathblow(attacker, target);
     }
 
@@ -437,8 +428,23 @@ public final class EntityASMUtil {
         if (target.isDeadOrDying() && !target.isRemoved()) {             //  kill() 兜底
             try { target.kill(); } catch (Throwable ignored) {}
         }
-        // 死亡后不立即深层反注册（会跳过 vanilla tickDeath 倒地动画）。让 vanilla die→tickDeath 完整跑：
-        // 正常实体 20 tick 后自动 remove；override remove 无效的实体由 dreamDeepRemove（累积≥10）兜底反注册。
+        // die 后 onDie 清空了累积 → 重新置 1 保持判死（isAlive=false），否则实体"复活"被再次攻击，
+        // 二次死亡 → 二次 onDie removeAll 会取消下面排队的 forceRemoveDeep，导致要多次归零才移除。
+        try {
+            DREAM_ACCUM.put(target.getUUID(), 1.0f);
+        } catch (Throwable ignored) {}
+        // 倒地动画（vanilla tickDeath 约 20 tick）后，若 override remove 拦截导致仍未移除，
+        // 延迟强制深层反注册兜底（学 Trial onSoulRemove 绕过 override）。不立即反注册，保留倒地动画。
+        try {
+            HealthModificationScheduler.schedule(target,
+                HealthModificationScheduler.once("dream-death-force-remove", 25, e -> {
+                    if (e == null || e.isRemoved() || e.level().isClientSide()) return;
+                    if (!isEntityDead(e)) return;
+                    if (e.level() instanceof net.minecraft.server.level.ServerLevel sl) {
+                        EntityRemovalUtil.forceRemoveDeep(sl, e);
+                    }
+                }));
+        } catch (Throwable ignored) {}
     }
 
     /** 安全清 Mob goals/brain + noAi：延迟到服务器 tick 结束后执行（防 GoalSelector 迭代中修改触发 CME）。 */

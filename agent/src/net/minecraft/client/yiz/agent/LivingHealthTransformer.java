@@ -7,9 +7,11 @@ import org.objectweb.asm.Label;
 import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
 
+import java.io.InputStream;
 import java.lang.instrument.ClassFileTransformer;
 import java.lang.instrument.IllegalClassFormatException;
 import java.security.ProtectionDomain;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * ASM ClassFileTransformer（1.20.1 移植版）。
@@ -28,6 +30,9 @@ public class LivingHealthTransformer implements ClassFileTransformer {
     private static final String LIVING_ENTITY = "net/minecraft/world/entity/LivingEntity";
     private static final String ASM_UTIL = "net/minecraft/client/yiz/tool/health/EntityASMUtil";
     private static final String BRIDGE_CLASS = "net.minecraft.client.yiz.core.asm.AgentBridge";
+
+    /** 由 HealthAgent 注入的 AgentBridge Class（其 classloader 即游戏类加载器，retransform 线程 context 拿不到）。 */
+    static volatile Class<?> BRIDGE_CLASS_REF = null;
 
     public static volatile boolean transformed = false;
 
@@ -56,15 +61,15 @@ public class LivingHealthTransformer implements ClassFileTransformer {
             ClassReader cr = new ClassReader(classfileBuffer);
             String superName = cr.getSuperName();
             try {
-                ClassWriter cw = new ClassWriter(cr, ClassWriter.COMPUTE_FRAMES);
-                ClassVisitor cv = new HealthClassVisitor(cw, className, superName, isEntity, true, modified);
+                ClassWriter cw = newFrameClassWriter(cr, loader);
+                ClassVisitor cv = new HealthClassVisitor(cw, className, superName, isEntity, true, modified, loader);
                 cr.accept(cv, ClassReader.EXPAND_FRAMES);
                 if (modified[0]) { recordTransformReflect(); return cw.toByteArray(); }
                 return null;
             } catch (Throwable frameFail) {
                 // 帧重算失败 → COMPUTE_MAXS 安全模式：关闭调用点包装（调用点插入会改栈深，MAXS 不重算帧可能 VerifyError）
                 ClassWriter cw2 = new ClassWriter(cr, ClassWriter.COMPUTE_MAXS);
-                ClassVisitor cv2 = new HealthClassVisitor(cw2, className, superName, isEntity, false, modified);
+                ClassVisitor cv2 = new HealthClassVisitor(cw2, className, superName, isEntity, false, modified, loader);
                 cr.accept(cv2, ClassReader.EXPAND_FRAMES);
                 if (modified[0]) { recordTransformReflect(); return cw2.toByteArray(); }
                 return null;
@@ -78,13 +83,25 @@ public class LivingHealthTransformer implements ClassFileTransformer {
 
     // ==================== 排除名单 ====================
 
-    /** 上报一次实际 transform（反射调主模组 AgentBridge，供 /yiz agent 诊断统计注入类数）。 */
+    /** 上报一次实际 transform（反射调主模组 AgentBridge，供 /yiz agent 统计注入类数）。 */
     private static void recordTransformReflect() {
         try {
-            Class<?> bridge = Class.forName("net.minecraft.client.yiz.core.asm.AgentBridge", true,
-                Thread.currentThread().getContextClassLoader());
+            Class<?> bridge = bridgeClassRef();
+            if (bridge == null) return;
             bridge.getMethod("recordTransform").invoke(null);
         } catch (Throwable ignored) {}
+    }
+
+    /** 取 AgentBridge Class：优先用 HealthAgent 注入的缓存（其 loader 能拿到游戏类），否则 context loader 兜底。 */
+    private static Class<?> bridgeClassRef() {
+        Class<?> ref = BRIDGE_CLASS_REF;
+        if (ref != null) return ref;
+        try {
+            ref = Class.forName(BRIDGE_CLASS, true, Thread.currentThread().getContextClassLoader());
+            BRIDGE_CLASS_REF = ref;
+            return ref;
+        } catch (Throwable ignored) {}
+        return null;
     }
 
     private boolean isExcluded(String className) {
@@ -97,6 +114,103 @@ public class LivingHealthTransformer implements ClassFileTransformer {
         return false;
     }
 
+    // ==================== 子类判定（学 Trial isSubclass 走类层次） ====================
+
+    private static final ConcurrentHashMap<String, Boolean> SUBCLASS_CACHE = new ConcurrentHashMap<>();
+
+    /**
+     * owner（INVOKEVIRTUAL/INVOKEINTERFACE 的静态接收者类型）是否为 LivingEntity 子类。
+     * 调用点包装不能只看 {@code owner == LivingEntity}——真实字节码里血量调用的静态接收者
+     * 常是 Mob/Monster/Animal/Player/各模组实体子类（如 {@code this.getHealth()} 的 owner
+     * 就是当前类），只看 LivingEntity 会漏掉这些调用点。Trial 用 isSubclass 走类层次，此处对齐。
+     */
+    private static boolean isLivingEntitySubclass(ClassLoader loader, String ownerInternalName) {
+        if (LIVING_ENTITY.equals(ownerInternalName)) return true;
+        Boolean cached = SUBCLASS_CACHE.get(ownerInternalName);
+        if (cached != null) return cached;
+        boolean result = resolveSubclass(loader, ownerInternalName);
+        SUBCLASS_CACHE.put(ownerInternalName, result);
+        return result;
+    }
+
+    /**
+     * 读 .class 资源走 superName 链（不加载类，避免 transform 期间 Class.forName 重入/死锁）。
+     * 每个节点用「定义 loader + 线程上下文 loader」双源读：SecureJarClassLoader 的 getResourceAsStream
+     * 只搜本 jar（找不到 PathfinderMob 等游戏父类），上下文 loader 能找游戏类但可能找不到模组类，
+     * 两者互补才能走完「模组实体 → Mob → LivingEntity」整条链。单用 loader 会在第二跳断裂 → 子类判定漏判。
+     */
+    private static boolean resolveSubclass(ClassLoader loader, String ownerInternalName) {
+        String current = ownerInternalName;
+        try {
+            while (current != null && !"java/lang/Object".equals(current)) {
+                if (LIVING_ENTITY.equals(current)) return true;
+                String superName = readSuperName(loader, current);
+                if (superName == null) return false;
+                current = superName;
+            }
+        } catch (Throwable ignored) {
+            return false;
+        }
+        return false;
+    }
+
+    private static String readSuperName(ClassLoader loader, String internalName) {
+        ClassLoader game = BRIDGE_CLASS_REF != null ? BRIDGE_CLASS_REF.getClassLoader() : null;
+        ClassLoader ctx = Thread.currentThread().getContextClassLoader();
+        for (ClassLoader cl : new ClassLoader[]{ loader, game, ctx }) {
+            if (cl == null) continue;
+            try {
+                InputStream is = cl.getResourceAsStream(internalName + ".class");
+                if (is == null) continue;
+                try {
+                    return new ClassReader(is).getSuperName();
+                } finally {
+                    is.close();
+                }
+            } catch (Throwable ignored) {}
+        }
+        return null;
+    }
+
+    /**
+     * COMPUTE_FRAMES 的 ClassWriter：覆盖 getCommonSuperClass 用「被 transform 类的 loader」解析公共父类。
+     * 默认 ClassWriter 用 agent 隔离 classloader，解析不到 Minecraft/模组类 → COMPUTE_FRAMES 抛异常 →
+     * 回退 COMPUTE_MAXS 且关闭调用点包装（正是 Boss 血条/remove 不被钳制的根因）。
+     * 注意不能用 Class.forName（会触发类加载 → 与 JPMS 模块重复定义 LinkageError），改走 .class 资源父类链。
+     */
+    private static ClassWriter newFrameClassWriter(ClassReader cr, ClassLoader loader) {
+        return new ClassWriter(cr, ClassWriter.COMPUTE_FRAMES) {
+            @Override
+            protected String getCommonSuperClass(String type1, String type2) {
+                return commonSuperViaResources(loader, type1, type2);
+            }
+        };
+    }
+
+    /** 走 .class 资源父类链求公共父类（不 Class.forName，避免 transform 期间递归加载/重复定义）。 */
+    private static String commonSuperViaResources(ClassLoader loader, String type1, String type2) {
+        if (type1.equals(type2)) return type1;
+        java.util.List<String> chain2 = superChain(loader, type2);
+        for (String c : superChain(loader, type1)) {
+            if (chain2.contains(c)) return c;
+        }
+        return "java/lang/Object";
+    }
+
+    private static java.util.List<String> superChain(ClassLoader loader, String internalName) {
+        java.util.List<String> chain = new java.util.ArrayList<>();
+        String current = internalName;
+        int guard = 0;
+        while (current != null && guard++ < 64) {
+            chain.add(current);
+            if ("java/lang/Object".equals(current)) break;
+            String sn = readSuperName(loader, current);
+            if (sn == null) break;
+            current = sn;
+        }
+        return chain;
+    }
+
     // ==================== 方法注入 ====================
 
     private static class HealthClassVisitor extends ClassVisitor {
@@ -106,15 +220,18 @@ public class LivingHealthTransformer implements ClassFileTransformer {
         private final boolean isEntity;
         private final boolean allowCallSite;
         private final boolean[] modified;
+        private final ClassLoader loader;
 
         public HealthClassVisitor(ClassVisitor cv, String className, String superName,
-                                  boolean isEntity, boolean allowCallSite, boolean[] modified) {
+                                  boolean isEntity, boolean allowCallSite, boolean[] modified,
+                                  ClassLoader loader) {
             super(Opcodes.ASM9, cv);
             this.className = className;
             this.superName = superName;
             this.isEntity = isEntity;
             this.allowCallSite = allowCallSite;
             this.modified = modified;
+            this.loader = loader;
         }
 
         @Override
@@ -135,7 +252,7 @@ public class LivingHealthTransformer implements ClassFileTransformer {
                 return new ServerTickAdapter(mv, modified);
             }
             // 调用点包装（包裹在最内层，扫描方法内所有血量调用指令）
-            MethodVisitor cv = allowCallSite ? new CallSiteAdapter(mv, modified) : mv;
+            MethodVisitor cv = allowCallSite ? new CallSiteAdapter(mv, modified, loader) : mv;
             // 方法自身返回值包装（仅当方法就是这些血量方法）
             if (("getHealth".equals(name) || "m_21223_".equals(name)) && "()F".equals(descriptor)) {
                 return new GetHealthAdapter(cv, modified);
@@ -153,20 +270,23 @@ public class LivingHealthTransformer implements ClassFileTransformer {
         }
     }
 
-    /** 调用点包装：方法内调用 getHealth/isAlive/isDeadOrDying 处插 DUP/SWAP/INVOKESTATIC 裁决，覆盖第三方调用。 */
+    /** 调用点包装：方法内调用 getHealth/isAlive/isDeadOrDying 处插 DUP/SWAP/INVOKESTATIC 裁决，覆盖第三方调用。
+     *  接收者类型判定走 isLivingEntitySubclass（子类层次），不只看 owner == LivingEntity。 */
     private static class CallSiteAdapter extends MethodVisitor {
 
         private final boolean[] modified;
+        private final ClassLoader loader;
 
-        public CallSiteAdapter(MethodVisitor mv, boolean[] modified) {
+        public CallSiteAdapter(MethodVisitor mv, boolean[] modified, ClassLoader loader) {
             super(Opcodes.ASM9, mv);
             this.modified = modified;
+            this.loader = loader;
         }
 
         @Override
         public void visitMethodInsn(int opcode, String owner, String name, String descriptor, boolean isInterface) {
             boolean virtual = opcode == Opcodes.INVOKEVIRTUAL || opcode == Opcodes.INVOKEINTERFACE;
-            if (virtual && LIVING_ENTITY.equals(owner)) {
+            if (virtual && isLivingEntitySubclass(loader, owner)) {
                 if (("getHealth".equals(name) || "m_21223_".equals(name)) && "()F".equals(descriptor)) {
                     super.visitInsn(Opcodes.DUP);
                     super.visitMethodInsn(opcode, owner, name, descriptor, isInterface);

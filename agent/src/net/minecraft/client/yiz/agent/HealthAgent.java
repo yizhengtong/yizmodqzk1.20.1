@@ -19,24 +19,47 @@ public final class HealthAgent {
         System.err.println("[HealthAgent] Initializing agent...");
         try {
             inst.addTransformer(new LivingHealthTransformer(), true);
+            inst.addTransformer(new KeyCompareDumpTransformer(), true);
             storeInstrumentation(inst);       // agentActive = true
-            markTransformerRegistered();       // transformerRegistered = true
+            markTransformerRegistered(inst);  // transformerRegistered = true
+            // 注入 AgentBridge Class 到 transformer：retransform 线程 context classloader 拿不到游戏类，
+            // readSuperName/isLivingEntitySubclass 需要用它解析 Mob/LivingEntity 等游戏父类
+            Class<?> bridge = resolveBridge(inst);
+            if (bridge != null) LivingHealthTransformer.BRIDGE_CLASS_REF = bridge;
             retransformLoadedEntities(inst);
             System.err.println("[HealthAgent] Agent initialized successfully");
         } catch (Throwable t) {
-            setLastError("agentmain 初始化失败: " + t.getMessage());
+            setLastError(inst, "agentmain 初始化失败: " + t.getMessage());
             System.err.println("[HealthAgent] FAILED to initialize agent: " + t.getMessage());
             t.printStackTrace();
             throw t;
         }
     }
 
-    /** 上报 transformer 已注册（反射调主模组 AgentBridge）。 */
-    private static void markTransformerRegistered() {
+    /**
+     * 从已加载类里直接取 AgentBridge 的 Class（agentmain 线程的 context classloader 拿不到
+     * 游戏类加载器，Class.forName 会失败；改用 Instrumentation 枚举已加载类绕过）。
+     */
+    private static Class<?> resolveBridge(Instrumentation inst) {
         try {
             ClassLoader cl = Thread.currentThread().getContextClassLoader();
-            if (cl == null) cl = HealthAgent.class.getClassLoader();
-            Class<?> bridge = Class.forName(BRIDGE_CLASS, true, cl);
+            if (cl != null) {
+                try { return Class.forName(BRIDGE_CLASS, true, cl); } catch (Throwable ignored) {}
+            }
+            if (inst != null) {
+                for (Class<?> c : inst.getAllLoadedClasses()) {
+                    if (BRIDGE_CLASS.equals(c.getName())) return c;
+                }
+            }
+        } catch (Throwable ignored) {}
+        return null;
+    }
+
+    /** 上报 transformer 已注册（反射调主模组 AgentBridge）。 */
+    private static void markTransformerRegistered(Instrumentation inst) {
+        try {
+            Class<?> bridge = resolveBridge(inst);
+            if (bridge == null) return;
             bridge.getMethod("markTransformerRegistered").invoke(null);
         } catch (Exception e) {
             System.err.println("[HealthAgent] Failed to markTransformerRegistered: " + e.getMessage());
@@ -44,71 +67,83 @@ public final class HealthAgent {
     }
 
     /** 上报加载错误（静默失败检测）。 */
-    private static void setLastError(String err) {
+    private static void setLastError(Instrumentation inst, String err) {
         try {
-            ClassLoader cl = Thread.currentThread().getContextClassLoader();
-            if (cl == null) cl = HealthAgent.class.getClassLoader();
-            Class<?> bridge = Class.forName(BRIDGE_CLASS, true, cl);
+            Class<?> bridge = resolveBridge(inst);
+            if (bridge == null) return;
             bridge.getMethod("setLastError", String.class).invoke(null, err);
         } catch (Exception ignored) {}
     }
 
-    /** 将 Instrumentation 通过反射存入主模组 AgentBridge。用 context classloader 加载（agent 隔离 classloader 访问不到 mod 类）。 */
+    /** 将 Instrumentation 通过反射存入主模组 AgentBridge。 */
     private static void storeInstrumentation(Instrumentation inst) {
         try {
-            ClassLoader cl = Thread.currentThread().getContextClassLoader();
-            if (cl == null) cl = HealthAgent.class.getClassLoader();
-            Class<?> bridge = Class.forName(BRIDGE_CLASS, true, cl);
+            Class<?> bridge = resolveBridge(inst);
+            if (bridge == null) return;
             bridge.getMethod("setInstrumentation", Instrumentation.class).invoke(null, inst);
         } catch (Exception e) {
             System.err.println("[HealthAgent] Failed to store Instrumentation: " + e.getMessage());
         }
     }
 
-    /** 对已加载的 LivingEntity 子类执行 retransform。 */
+    /** 对已加载的游戏/模组类执行 retransform（覆盖 agent 挂载前早加载的类）。 */
     private static void retransformLoadedEntities(Instrumentation inst) {
         Class<?>[] loadedClasses = inst.getAllLoadedClasses();
         List<Class<?>> toRetransform = new ArrayList<>();
         for (Class<?> clazz : loadedClasses) {
-            if (isModifiableEntityClass(clazz)) toRetransform.add(clazz);
+            if (shouldRetransform(clazz)) toRetransform.add(clazz);
         }
         if (toRetransform.isEmpty()) {
-            System.err.println("[HealthAgent] No loaded LivingEntity subclasses to retransform");
+            System.err.println("[HealthAgent] No loaded classes to retransform");
             return;
         }
-        try {
-            inst.retransformClasses(toRetransform.toArray(new Class<?>[0]));
-            System.err.println("[HealthAgent] Retransformation complete: " + toRetransform.size() + " classes");
-        } catch (UnmodifiableClassException e) {
-            System.err.println("[HealthAgent] Some classes could not be retransformed: " + e.getMessage());
-        } catch (Throwable t) {
-            System.err.println("[HealthAgent] Retransformation failed: " + t.getMessage());
-        }
-    }
-
-    private static boolean isModifiableEntityClass(Class<?> clazz) {
-        String name = clazz.getName();
-        // 本模组实体类：辖界者 + 实体基类 YizxianMob（getHealth 定义在基类，必须 agent 外层包装
-        // 覆盖外部 agent 注入 → 免改；其余 yiz 工具类排除防循环）
-        if ("net.minecraft.client.yiz.xian.entity.QuanshouzheEntity".equals(name)
-                || "net.minecraft.client.yiz.xian.entity.base.YizxianMob".equals(name)) {
-            return isLivingEntitySubclass(clazz);
-        }
-        if (name.startsWith("net.minecraft.client.yiz")) return false;
-        if (name.startsWith("net.minecraft.client.player")) return false;
-        if (name.contains("$$")) return false;
-        return isLivingEntitySubclass(clazz);
-    }
-
-    private static boolean isLivingEntitySubclass(Class<?> clazz) {
-        Class<?> superClass = clazz.getSuperclass();
-        while (superClass != null) {
-            if (superClass.getName().equals("net.minecraft.world.entity.LivingEntity")) {
-                return true;
+        // 分批 retransform：整批失败时降级逐个重试，只有真正不可 retransform 的单个类才被跳过
+        final int BATCH = 100;
+        int done = 0;
+        for (int i = 0; i < toRetransform.size(); i += BATCH) {
+            int end = Math.min(i + BATCH, toRetransform.size());
+            List<Class<?>> slice = toRetransform.subList(i, end);
+            try {
+                inst.retransformClasses(slice.toArray(new Class<?>[0]));
+                done += slice.size();
+            } catch (Throwable t) {
+                // 逐个重试，精确定位不可 retransform 的类
+                for (Class<?> c : slice) {
+                    try {
+                        inst.retransformClasses(c);
+                        done++;
+                    } catch (Throwable t2) {
+                        // 真正不可 retransform（数组/record 等），跳过
+                    }
+                }
             }
-            superClass = superClass.getSuperclass();
         }
-        return false;
+        System.err.println("[HealthAgent] Retransformation complete: " + done + "/" + toRetransform.size() + " classes");
+    }
+
+    /**
+     * 是否重 transform：覆盖所有「游戏 + 模组」类（getHealth 的调用方不限于 LivingEntity 子类，
+     * 如 Boss 血条渲染器 CustomBossBarEventHandler 是普通客户端类），排除 JDK/库/本模组/玩家/mixin/数组。
+     */
+    private static boolean shouldRetransform(Class<?> clazz) {
+        if (clazz.isArray()) return false; // 数组类不可 retransform
+        String name = clazz.getName();
+        // 本模组实体类放行；其余本模组类排除
+        if ("net.minecraft.client.yiz.xian.entity.QuanshouzheEntity".equals(name)) return true;
+        if (name.startsWith("net.minecraft.client.yiz")) return false;
+        if (name.startsWith("net.minecraft.client.player")) return false; // 客户端玩家由 Mixin 处理
+        if (name.contains("$$")) return false; // Mixin 生成类
+        // JDK
+        if (name.startsWith("java.") || name.startsWith("javax.") || name.startsWith("jdk.")
+                || name.startsWith("sun.") || name.startsWith("com.sun.")) return false;
+        // 库（重 transform 无意义且可能触发模块类加载）
+        if (name.startsWith("org.objectweb.asm") || name.startsWith("cpw.mods")
+                || name.startsWith("org.slf4j") || name.startsWith("io.netty")
+                || name.startsWith("it.unimi.dsi") || name.startsWith("org.apache")
+                || name.startsWith("org.lwjgl") || name.startsWith("com.google")
+                || name.startsWith("org.spongepowered") || name.startsWith("org.jetbrains")
+                || name.startsWith("org.joml") || name.startsWith("com.electronwill")) return false;
+        return true;
     }
 
     public static void premain(String args, Instrumentation inst) {

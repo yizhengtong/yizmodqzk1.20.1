@@ -385,7 +385,12 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
             return newHealth;
         }
 
-        float current = self.getHealth();
+        float current;
+        try {
+            current = self.getHealth();
+        } catch (Throwable t) {
+            return newHealth;
+        }
         net.minecraft.client.yiz.tool.health.EntityASMUtil.clearArmorPenetration();
 
         if (newHealth < current) {

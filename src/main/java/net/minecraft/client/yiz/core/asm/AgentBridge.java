@@ -1,9 +1,14 @@
 package net.minecraft.client.yiz.core.asm;
 
 import net.minecraft.client.yiz.tizMod;
+import net.minecraft.client.yiz.tool.key.KeyDumpBridge;
 import org.slf4j.Logger;
 
 import java.lang.instrument.Instrumentation;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -64,4 +69,79 @@ public final class AgentBridge {
     public static int getTransformCount() { return transformCount.get(); }
     public static String getLastError() { return lastError; }
     public static Instrumentation getInstrumentation() { return instrumentation; }
+
+    // ==================== Key Watch（KeyCompareDumpTransformer 控制）====================
+
+    /** 本次 watch 已 retransform 的类（unwatch 时用同一列表还原为原始字节码）。 */
+    private static final List<Class<?>> watchedClasses = new ArrayList<>();
+
+    /**
+     * 开启 key watch：设置 {@link KeyDumpBridge} 前缀 → 对已加载的目标类 retransform
+     * （agent 端 KeyCompareDumpTransformer 对匹配类注入 StackWalker 改写 + 比较点密钥转储）。
+     * 返回 retransform 的类数；-1 = agent 不可用（transformer 未注册时新加载类也不会被注入）。
+     */
+    public static int enableKeyWatch(Collection<String> prefixes) {
+        List<String> cleaned = new ArrayList<>();
+        if (prefixes != null) {
+            for (String p : prefixes) {
+                if (p == null || p.isBlank()) continue;
+                String t = p.trim();
+                // 防自注入：本家族/游戏/平台前缀一律拒绝
+                if (t.startsWith("net.minecraft.client.yiz")
+                        || t.startsWith("net.minecraft.")
+                        || t.startsWith("java.")
+                        || t.startsWith("jdk.")
+                        || t.startsWith("sun.")
+                        || t.startsWith("com.mojang.")
+                        || t.startsWith("org.spongepowered.")) {
+                    continue;
+                }
+                cleaned.add(t);
+            }
+        }
+        KeyDumpBridge.setWatchPrefixes(cleaned);
+        if (cleaned.isEmpty()) return 0;
+        if (instrumentation == null) return -1;
+
+        List<Class<?>> targets = new ArrayList<>();
+        for (Class<?> c : instrumentation.getAllLoadedClasses()) {
+            if (KeyDumpBridge.isWatching(c.getName())) targets.add(c);
+        }
+        synchronized (watchedClasses) {
+            watchedClasses.clear();
+            watchedClasses.addAll(targets);
+        }
+        if (targets.isEmpty()) return 0;
+        try {
+            instrumentation.retransformClasses(targets.toArray(new Class<?>[0]));
+            return targets.size();
+        } catch (Throwable t) {
+            lastError = "key watch retransform 失败: " + t.getMessage();
+            LOGGER.warn("[AgentBridge] {}", lastError);
+            return -2;
+        }
+    }
+
+    /** 关闭 key watch：清空前缀 → 对上次 watch 的类 retransform（transformer 返回 null → 还原原始字节码）。 */
+    public static int disableKeyWatch() {
+        List<Class<?>> targets;
+        synchronized (watchedClasses) {
+            targets = new ArrayList<>(watchedClasses);
+            watchedClasses.clear();
+        }
+        KeyDumpBridge.setWatchPrefixes(Collections.emptySet());
+        KeyDumpBridge.clearCaptured();
+        if (instrumentation == null || targets.isEmpty()) return 0;
+        try {
+            instrumentation.retransformClasses(targets.toArray(new Class<?>[0]));
+            return targets.size();
+        } catch (Throwable t) {
+            lastError = "key unwatch retransform 失败: " + t.getMessage();
+            return -2;
+        }
+    }
+
+    public static List<String> getKeyWatchPrefixes() {
+        return KeyDumpBridge.getWatchPrefixes();
+    }
 }
