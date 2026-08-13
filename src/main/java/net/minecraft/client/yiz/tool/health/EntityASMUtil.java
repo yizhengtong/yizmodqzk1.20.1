@@ -337,6 +337,14 @@ public final class EntityASMUtil {
         if (isBackdoorExempt(target)) return; // 后门白名单：创造/旁观玩家豁免
         // 反射设置 lastHurtByPlayer（vanilla die 掉落/经验归属攻击者）
         setLastHurtByPlayerReflect(target, attacker);
+        // 0. 藏血 Map 实体：真实血量存外部静态 Map（字段级/数据层均改不动，会被 Map 值覆盖）
+        //    → 直接从藏血 Map 扣血（unreflectSpecial 绕过 Map 写方法鉴权）
+        Float hp = HealthMapRegistry.readHealth(target);
+        if (hp != null) {
+            HealthMapRegistry.tamperHealth(target, Math.max(0, hp - dream));
+            VitalitySeveranceConfig.set(target, 100.0f, 0);
+            return;
+        }
         // 1. 真实血量槽直改优先（直接扣真实血 + 永久禁疗）
         if (EntityHealthLocator.applyPersistentDamage(target, dream)) {
             VitalitySeveranceConfig.set(target, 100.0f, 0);

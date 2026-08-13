@@ -46,10 +46,13 @@
 
 **第 1 步 · 枚举（找到目标 jar 里已加载的所有类）**
 - 首选：`Instrumentation.getAllLoadedClasses()`（本模组已有 agent 基础设施，桥接已有）。
-- 兜底（无 agent）：Unsafe 读 `java.lang.ClassLoader.classes`（`Vector<Class<?>>`）→ 再读
+- 兜底 A（无 agent）：反射 `ModList.get().getModFiles()` 取每个模组 jar 的 `SecureJarClassLoader`
+  —— 模组类定义在这些**子**加载器里，光沿父链上溯永远看不到（「已扫描类: 0」的典型根源）。
+- 兜底 B：Unsafe 读 `java.lang.ClassLoader.classes`（`Vector<Class<?>>`）→ 再读
   `Vector.elementData`，沿「上下文加载器 + 所有线程的上下文加载器 + 父链」枚举 —— 纯内存枚举，
   不加载任何新类、不触发 `<clinit>`。
 - 按**可配置包前缀**过滤（`/yiz key scan <前缀...>`），保证「通用」而不是「针对」。
+- 报告带诊断：枚举来源 / 检查加载器数 / 可见类总数 / agent 挂载状态，0 类时自动提示排查项。
 
 **第 2 步 · 定位（按类型普查静态字段，不看名字）**
 对每个类 `getDeclaredFields()`（合法 API，无需 setAccessible），只按**字段类型**分类：
@@ -132,7 +135,7 @@
 |---|---|
 | `src/main/java/net/minecraft/client/yiz/tool/key/UnsafeAccess.java` | Unsafe 单例（构造器 + theUnsafe 兜底） |
 | `.../tool/key/FieldHandle.java` | 静态/实例字段的 Unsafe 读写句柄（get/put Object/long/int） |
-| `.../tool/key/LoadedClassEnumerator.java` | 目标包前缀下已加载类枚举（Instrumentation → ClassLoader.classes 兜底） |
+| `.../tool/key/LoadedClassEnumerator.java` | 目标包前缀下已加载类枚举（Instrumentation → Forge ModList 模组加载器 → ClassLoader.classes 兜底） |
 | `.../tool/key/StaticFieldCensus.java` | 按类型普查静态字段：密钥候选/闸门/白名单/握手点 |
 | `.../tool/key/StackGateNeutralizer.java` | 白名单数组追加扩展（StackWalker 为 final 类，运行时仅检测不置换） |
 | `.../tool/key/HandshakeForger.java` | ThreadLocal 握手伪造（set 密钥 → 执行 → 恢复） |

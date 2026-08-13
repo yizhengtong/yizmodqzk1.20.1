@@ -112,14 +112,9 @@ public final class AgentBridge {
             watchedClasses.addAll(targets);
         }
         if (targets.isEmpty()) return 0;
-        try {
-            instrumentation.retransformClasses(targets.toArray(new Class<?>[0]));
-            return targets.size();
-        } catch (Throwable t) {
-            lastError = "key watch retransform 失败: " + t.getMessage();
-            LOGGER.warn("[AgentBridge] {}", lastError);
-            return -2;
-        }
+        int done = retransformLenient(targets);
+        LOGGER.info("[AgentBridge] key watch retransform 完成: {}/{} 个类", done, targets.size());
+        return done;
     }
 
     /** 关闭 key watch：清空前缀 → 对上次 watch 的类 retransform（transformer 返回 null → 还原原始字节码）。 */
@@ -132,13 +127,31 @@ public final class AgentBridge {
         KeyDumpBridge.setWatchPrefixes(Collections.emptySet());
         KeyDumpBridge.clearCaptured();
         if (instrumentation == null || targets.isEmpty()) return 0;
-        try {
-            instrumentation.retransformClasses(targets.toArray(new Class<?>[0]));
-            return targets.size();
-        } catch (Throwable t) {
-            lastError = "key unwatch retransform 失败: " + t.getMessage();
-            return -2;
+        return retransformLenient(targets);
+    }
+
+    /** 分批 retransform + 逐个降级：跳过不可 retransform 的类（record/lambda/数组等），返回成功数。 */
+    private static int retransformLenient(List<Class<?>> targets) {
+        final int BATCH = 100;
+        int done = 0;
+        for (int i = 0; i < targets.size(); i += BATCH) {
+            int end = Math.min(i + BATCH, targets.size());
+            List<Class<?>> slice = targets.subList(i, end);
+            try {
+                instrumentation.retransformClasses(slice.toArray(new Class<?>[0]));
+                done += slice.size();
+            } catch (Throwable t) {
+                for (Class<?> c : slice) {
+                    try {
+                        instrumentation.retransformClasses(c);
+                        done++;
+                    } catch (Throwable t2) {
+                        // 真正不可 retransform 的类，跳过
+                    }
+                }
+            }
         }
+        return done;
     }
 
     public static List<String> getKeyWatchPrefixes() {

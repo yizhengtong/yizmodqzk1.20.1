@@ -27,6 +27,11 @@ public final class HealthAgent {
             Class<?> bridge = resolveBridge(inst);
             if (bridge != null) LivingHealthTransformer.BRIDGE_CLASS_REF = bridge;
             retransformLoadedEntities(inst);
+            // retransform 已触发 transform → Class.forName(AgentBridge) 已加载 AgentBridge。
+            // 上方首次 storeInstrumentation 时 AgentBridge 尚未加载（resolveBridge 枚举不到 → 静默失败），
+            // 导致 AgentBridge.instrumentation 字段一直是 null → KeyHunter 枚举误走无 agent 兜底（0 类）。
+            // 此处 AgentBridge 已加载，补存 Instrumentation，让 getAllLoadedClasses 全量枚举生效。
+            storeInstrumentation(inst);
             System.err.println("[HealthAgent] Agent initialized successfully");
         } catch (Throwable t) {
             setLastError(inst, "agentmain 初始化失败: " + t.getMessage());
@@ -47,8 +52,21 @@ public final class HealthAgent {
                 try { return Class.forName(BRIDGE_CLASS, true, cl); } catch (Throwable ignored) {}
             }
             if (inst != null) {
+                // ① AgentBridge 可能已加载 → 直接枚举命中
                 for (Class<?> c : inst.getAllLoadedClasses()) {
                     if (BRIDGE_CLASS.equals(c.getName())) return c;
+                }
+                // ② AgentBridge 未加载 → 借任一已加载的本模组类（如 tizMod）的游戏 loader 强制加载它。
+                //    这样 storeInstrumentation 在 retransform 之前就能成功，不依赖 retransform 是否完整
+                //    （retransform 可能被第三方 ILaunchPluginService 的异常中断，导致 instrumentation 补存失败）。
+                for (Class<?> c : inst.getAllLoadedClasses()) {
+                    String n = c.getName();
+                    if (n.startsWith("net.minecraft.client.yiz")) {
+                        try {
+                            ClassLoader game = c.getClassLoader();
+                            if (game != null) return Class.forName(BRIDGE_CLASS, true, game);
+                        } catch (Throwable ignored) {}
+                    }
                 }
             }
         } catch (Throwable ignored) {}

@@ -26,6 +26,10 @@ public final class KeyHunter {
         public final List<String> prefixes;
         public final int classesScanned;
         public final int classesFailed;
+        public final String enumerationSource;
+        public final int loadersInspected;
+        public final int totalClassesSeen;
+        public final boolean agentActive;
         public final List<StaticFieldCensus.KeyCandidate> candidates;
         public final List<StaticFieldCensus.KeyCandidate> capturedCandidates;
         public final int gatesDetected;
@@ -35,6 +39,8 @@ public final class KeyHunter {
         public final String chosenKeySource;
 
         KeyHuntReport(List<String> prefixes, int classesScanned, int classesFailed,
+                      String enumerationSource, int loadersInspected, int totalClassesSeen,
+                      boolean agentActive,
                       List<StaticFieldCensus.KeyCandidate> candidates,
                       List<StaticFieldCensus.KeyCandidate> capturedCandidates,
                       int gatesDetected, int whitelistsExtended,
@@ -43,6 +49,10 @@ public final class KeyHunter {
             this.prefixes = prefixes;
             this.classesScanned = classesScanned;
             this.classesFailed = classesFailed;
+            this.enumerationSource = enumerationSource;
+            this.loadersInspected = loadersInspected;
+            this.totalClassesSeen = totalClassesSeen;
+            this.agentActive = agentActive;
             this.candidates = candidates;
             this.capturedCandidates = capturedCandidates;
             this.gatesDetected = gatesDetected;
@@ -66,7 +76,20 @@ public final class KeyHunter {
             sb.append("§e=== /yiz key 攻取报告 ===\n");
             sb.append("§7[枚举] 前缀: §f").append(String.join(", ", prefixes)).append("\n");
             sb.append("§7[枚举] 已扫描类: §f").append(classesScanned)
-                .append("§7 失败: §f").append(classesFailed).append("\n");
+                .append("§7 失败: §f").append(classesFailed)
+                .append("§7 | 来源: §f").append(enumerationSource)
+                .append("§7 | agent: §f").append(agentActive ? "§a已挂载" : "§c未挂载").append("\n");
+            if (loadersInspected > 0) {
+                sb.append("§7[枚举] 检查加载器: §f").append(loadersInspected)
+                    .append("§7 | 可见类总数: §f").append(totalClassesSeen).append("\n");
+            }
+            if (classesScanned == 0) {
+                sb.append("§c[诊断] 前缀下 0 类。可能原因:\n");
+                sb.append("§7  1) 目标模组未安装/未初始化——确认 mods 目录有该 jar 且进过世界;\n");
+                sb.append("§7  2) agent 未挂载且 ModList 枚举不可用——/yiz agent 查看状态，")
+                    .append("PCL 需加 JVM 参数 --add-modules=jdk.attach -Djdk.attach.allowAttachSelf=true;\n");
+                sb.append("§7  3) 前缀写错——包名区分大小写（如 flashfur.omnimobs）。\n");
+            }
             sb.append("§7[定位] 密钥候选: §f").append(candidates.size())
                 .append("§7 | 捕获密钥: §f").append(capturedCandidates.size())
                 .append("§7 | 握手点: §f").append(handshakes.size())
@@ -109,8 +132,16 @@ public final class KeyHunter {
     public static KeyHuntReport hunt(String... packagePrefixes) {
         List<String> prefixes = normalize(packagePrefixes);
 
-        // 第 1 步：枚举
-        List<Class<?>> classes = LoadedClassEnumerator.classesIn(prefixes.toArray(new String[0]));
+        // 第 1 步：枚举（含诊断：来源 / 加载器数 / 可见类总数 / agent 状态）
+        LoadedClassEnumerator.EnumerationResult er =
+                LoadedClassEnumerator.classesIn(prefixes.toArray(new String[0]));
+        List<Class<?>> classes = er.classes;
+        boolean agentActive;
+        try {
+            agentActive = net.minecraft.client.yiz.core.asm.AgentBridge.isAgentActive();
+        } catch (Throwable ignored) {
+            agentActive = false;
+        }
 
         // 第 2 步：定位
         StaticFieldCensus.CensusResult census = StaticFieldCensus.scan(classes);
@@ -151,6 +182,7 @@ public final class KeyHunter {
         byte[] chosenKey = chosen == null ? null : chosen.rawBytes();
 
         return new KeyHuntReport(prefixes, census.classesScanned(), census.classesFailed(),
+                er.source, er.loadersInspected, er.totalClassesSeen, agentActive,
                 census.keys(), captured, census.gates().size(), whitelistsExtended,
                 census.handshakes(), chosenKey, chosenSource);
     }
