@@ -345,9 +345,15 @@ public final class EntityASMUtil {
             VitalitySeveranceConfig.set(target, 100.0f, 0);
             return;
         }
-        // 0b. 差值血量 DataAccessor 实体（泽林变体类）：getHealth = normal - away 差值动态计算、
+        // 0b. 差值血量 DataAccessor 实体：getHealth = normal - away 差值动态计算、
         //     死亡标记独立于 getHealth → 增加 away（减数）正确方向扣血，耗尽时置死亡标记
         if (DynamicHealthAccessor.tamper(target, dream)) {
+            VitalitySeveranceConfig.set(target, 100.0f, 0);
+            return;
+        }
+        // 0c. 强制判死标记实体（coremod 软 getHealth 型）：血量混淆串藏 + 软压，
+        //     字段级/数据层改不动 → 直接设 Boolean 判死标记强制判死（方法开头拦截优先级最高）
+        if (DeathMarkerAccessor.tamperToDead(target)) {
             VitalitySeveranceConfig.set(target, 100.0f, 0);
             return;
         }

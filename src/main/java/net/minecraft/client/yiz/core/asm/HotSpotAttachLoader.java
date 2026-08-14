@@ -67,6 +67,14 @@ public class HotSpotAttachLoader extends AbstractAgentLoader {
         Class<?> vmPublicClass = Class.forName("com.sun.tools.attach.VirtualMachine");
         Method attachMethod = vmPublicClass.getMethod("attach", String.class);
         Object vmInstance = attachMethod.invoke(null, pid);
+        if (vmInstance == null) {
+            // attach 返回 null：ALLOW_ATTACH_SELF 已在 savedProps 修改前被第三方触发
+            // HotSpotVirtualMachine.<clinit> 定型为 false，self-attach 被拒。此处显式抛错，
+            // 避免后续 loadAgent/detach 的 invoke(null,...) 抛晦涩 NPE。
+            throw new IllegalStateException(
+                "self-attach 被拒（attach 返回 null）：ALLOW_ATTACH_SELF 已被提前定型为 false，"
+                + "通常因第三方模组提前触发了 HotSpotVirtualMachine.<clinit>");
+        }
 
         try {
             Method loadAgentMethod = vmPublicClass.getMethod("loadAgent", String.class);

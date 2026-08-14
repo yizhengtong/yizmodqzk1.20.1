@@ -129,8 +129,8 @@ public final class HealthMapRegistry {
     // ==================== 判定 + 篡改 ====================
 
     /**
-     * 目标实体命中的藏血 Map 字段句柄。只取「继承深度最大」的 key 类型——具体实体类（如 BossEntity）
-     * 的 Map 是「当前血量 + 拉回依据」，而 Entity 基类的 Map（如 REAL_MAX_HEALTH）是「最大血量/通用表」，
+     * 目标实体命中的藏血 Map 字段句柄。只取「继承深度最大」的 key 类型——具体实体类的 Map
+     * 是「当前血量 + 拉回依据」，而 Entity 基类的 Map 是「最大血量/通用表」，
      * 后者不参与拉回比较、也不该被当作当前血量改，故忽略。
      */
     public static List<FieldHandle> resolveHealthMaps(LivingEntity entity) {
