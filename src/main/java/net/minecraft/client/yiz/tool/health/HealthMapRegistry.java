@@ -40,8 +40,13 @@ public final class HealthMapRegistry {
     private static final Logger LOGGER = tizMod.LOGGER;
 
     /** key 类型（实体类）→ 该类型的藏血 Map 字段句柄列表（同 key 类可能有多个 Map，如「当前血量 + 拉回依据」）。 */
-    private static final Map<Class<?>, List<FieldHandle>> HEALTH_MAPS = new ConcurrentHashMap<>();
+    private static volatile Map<Class<?>, List<FieldHandle>> HEALTH_MAPS = new ConcurrentHashMap<>();
     private static volatile boolean scanned = false;
+    /** 上次扫描时已加载类总数（-1=未扫描/无 agent）；用于检测「是否有新类加载」。 */
+    private static volatile int lastClassCount = -1;
+    /** 上次检查类表增长的时间戳（节流用，避免每次攻击都遍历全类表）。 */
+    private static volatile long lastRescanCheckMs = 0L;
+    private static final long RESCAN_CHECK_INTERVAL_MS = 2000L;
 
     /** 全权限 lookup（{@code IMPL_LOOKUP} 非 public，用 Unsafe 直读拿），供 unreflectSpecial 锁基类 put。 */
     private static final MethodHandles.Lookup TRUSTED_LOOKUP = trustedLookup();
@@ -61,19 +66,45 @@ public final class HealthMapRegistry {
 
     // ==================== 检测（枚举 + 泛型判据） ====================
 
-    /** 懒扫描：枚举所有已加载类的静态 Map 字段，按泛型判据识别藏血 Map 并缓存。 */
+    /** 懒扫描：枚举所有已加载类的静态 Map 字段，按泛型判据识别藏血 Map 并缓存。
+     *  有「新类加载」就重扫（按类缓存，而非进程级一次性），避免首次攻击早于目标类加载导致漏判。 */
     public static void ensureScanned() {
-        if (scanned) return;
+        if (scanned && !newClassesLoaded()) return;
         synchronized (HealthMapRegistry.class) {
-            if (scanned) return;
-            scan();
+            if (scanned && !newClassesLoaded()) return;
+            lastClassCount = scan();
             scanned = true;
+            lastRescanCheckMs = System.currentTimeMillis();
         }
     }
 
-    private static void scan() {
+    /** 无副作用检查：节流是否到期且类数量是否变化。
+     *  时间戳由 ensureScanned 在真正重扫后更新——避免双检锁里两次调用带副作用，
+     *  导致第一次调用刷新节流时间戳后、第二次调用（进锁）被节流吞掉 → 重扫永远跳过。 */
+    private static boolean newClassesLoaded() {
+        long now = System.currentTimeMillis();
+        if (now - lastRescanCheckMs < RESCAN_CHECK_INTERVAL_MS) {
+            return false;
+        }
+        int cur = currentClassCount();
+        return cur >= 0 && cur != lastClassCount;
+    }
+
+    private static int currentClassCount() {
+        try {
+            Instrumentation inst = AgentBridge.getInstrumentation();
+            if (inst != null) {
+                Class<?>[] all = inst.getAllLoadedClasses();
+                if (all != null) return all.length;
+            }
+        } catch (Throwable ignored) {}
+        return -1;
+    }
+
+    private static int scan() {
         Class<?>[] all = allLoadedClasses();
-        if (all == null || all.length == 0) return;
+        if (all == null || all.length == 0) return -1;
+        Map<Class<?>, List<FieldHandle>> fresh = new ConcurrentHashMap<>();
         int hits = 0;
         for (Class<?> clazz : all) {
             try {
@@ -87,13 +118,15 @@ public final class HealthMapRegistry {
                     if (!Number.class.isAssignableFrom(valClass)) continue;   // V 是数值
                     FieldHandle h = FieldHandle.of(f);
                     if (h == null) continue;
-                    HEALTH_MAPS.computeIfAbsent(keyClass, k -> new ArrayList<>()).add(h);
+                    fresh.computeIfAbsent(keyClass, k -> new ArrayList<>()).add(h);
                     hits++;
                     LOGGER.info("[HealthMap] 识别藏血 Map: {} -> {}", keyClass.getName(), h.describe());
                 }
             } catch (Throwable ignored) {}
         }
+        HEALTH_MAPS = fresh;   // 原子交换，避免清空/重填期间读竞态
         LOGGER.info("[HealthMap] 藏血 Map 扫描完成，命中 {} 个", hits);
+        return all.length;
     }
 
     private static Class<?>[] allLoadedClasses() {

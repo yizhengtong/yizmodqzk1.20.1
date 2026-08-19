@@ -49,11 +49,13 @@ public final class DynamicHealthAccessor {
         Slot cached = CACHE.get(key);
         if (cached != null) return cached;
         if (NON_DYNAMIC.contains(key)) return null;
-
+        // 已死/无血实例检测结果不可靠（doDetect 会短路返回 null），
+        // 不要缓存为「非差值血量」，下次健康实例再检，避免首次检测污染该类缓存
+        boolean unhealthy = entity.getHealth() <= 0 || entity.isDeadOrDying();
         Slot slot = doDetect(entity);
         if (slot != null) {
             CACHE.put(key, slot);
-        } else {
+        } else if (!unhealthy) {
             NON_DYNAMIC.add(key);
         }
         return slot;

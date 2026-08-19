@@ -11,7 +11,10 @@
     "YizEntityTickTrackerMixin",
     "YizLevelTickMixin",
     "YizLevelInvoker",
-    "YizServerLevelAccessor"
+    "YizServerLevelAccessor",
+    "ItemStackMaxSizeMixin",
+    "SlotMaxStackSizeMixin",
+    "ContainerMaxStackSizeMixin"
   ],
   "client": [
   ],

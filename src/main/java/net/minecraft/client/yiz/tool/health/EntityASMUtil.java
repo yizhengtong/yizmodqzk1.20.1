@@ -36,6 +36,60 @@ public final class EntityASMUtil {
 
     private EntityASMUtil() {}
 
+    /**
+     * /yiz remove 后门：当前线程正在强制清除的实体 id 集合。
+     * 设置后 agent 字段直写/Map.remove 拦截放行，允许本模组实体被指令真正移除。
+     */
+    private static final ThreadLocal<java.util.Set<Integer>> FORCE_REMOVE_IDS =
+        ThreadLocal.withInitial(java.util.HashSet::new);
+
+    public static void beginForceRemove(int id) { FORCE_REMOVE_IDS.get().add(id); }
+    public static void endForceRemove(int id) { FORCE_REMOVE_IDS.get().remove(id); }
+    public static boolean isForceRemoving(int id) { return FORCE_REMOVE_IDS.get().contains(id); }
+    public static boolean isForceRemoving(Object entity) {
+        return entity instanceof LivingEntity living && isForceRemoving(living.getId());
+    }
+
+    /**
+     * agent 字节码拦截用：活辖界者（SecureHealthClosure 表值 &gt; 0）被外部 putfield 直写「移除语义」字段时
+     * 返回 true（拦截）。区分：removalReason 写非 null=移除（拦）、写 null=恢复（放）；isAddedToWorld 写
+     * false=移除（拦）、写 true=加入世界（放）。死辖界者/非辖界者一律放行；/yiz remove 强制清除时放行。
+     */
+    public static boolean shouldProtectRemoval(Object entity, Object value) {
+        // removalReason（引用 value）：非 null = 移除（拦截）
+        if (!(entity instanceof LivingEntity living)) return false;
+        if (isForceRemoving(living)) return false;
+        try {
+            if (!SecureHealthClosure.isRegistered(living) || SecureHealthClosure.getHealth(living) <= 0) return false;
+        } catch (Throwable ignored) {
+            return false;
+        }
+        return value != null;
+    }
+
+    public static boolean shouldProtectRemoval(Object entity, boolean value) {
+        // isAddedToWorld（boolean value）：false = 移除（拦截）
+        if (!(entity instanceof LivingEntity living)) return false;
+        if (isForceRemoving(living)) return false;
+        try {
+            if (!SecureHealthClosure.isRegistered(living) || SecureHealthClosure.getHealth(living) <= 0) return false;
+        } catch (Throwable ignored) {
+            return false;
+        }
+        return !value;
+    }
+
+    /** 活辖界者实体 id 集合（agent 拦截 Int2ObjectMap.remove 用，registerImmortal 加入 / unregisterImmortal 移除）。 */
+    private static final java.util.Set<Integer> PROTECTED_IDS = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    public static void registerProtectedId(int id) { PROTECTED_IDS.add(id); }
+    public static void unregisterProtectedId(int id) { PROTECTED_IDS.remove(id); }
+
+    /** agent 拦截 Int2ObjectMap.remove 用：id 是活辖界者则返回 true（拦截 EntityTickList/ChunkMap 内部 Map 的删除）。 */
+    public static boolean shouldProtectRemove(int id) {
+        return PROTECTED_IDS.contains(id) && !isForceRemoving(id);
+    }
+
     private static volatile boolean deathTriggerEnabled = true;
     public static boolean isDeathTriggerEnabled() { return deathTriggerEnabled; }
     public static void setDeathTriggerEnabled(boolean enabled) { deathTriggerEnabled = enabled; }

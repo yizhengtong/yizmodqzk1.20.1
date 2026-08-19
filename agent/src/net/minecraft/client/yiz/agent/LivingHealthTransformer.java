@@ -239,20 +239,34 @@ public class LivingHealthTransformer implements ClassFileTransformer {
                                          String signature, String[] exceptions) {
             MethodVisitor mv = super.visitMethod(access, name, descriptor, signature, exceptions);
             if (mv == null) return null;
+            // 拦截 putfield removalReason/isAddedToWorld（所有类通用，不点名模组）。
+            // 关键豁免：Entity 自身的 setRemoved/unsetRemoved/onAddedToWorld 必须放行原版字段写。
+            // 否则 setRemoved 内部 `if (removalReason == null) removalReason = reason` 被 agent 跳过，
+            // 后续 GETFIELD removalReason 为 null → 客户端 remove 包与存档关闭时 NPE。
+            MethodVisitor base = isEntityLifecycleWriteMethod(className, name, descriptor)
+                ? mv
+                : new FieldWriteAdapter(mv, modified);
+            // 拦截服务端 Int2ObjectOpenHashMap 的 remove(int)：活辖界者 id 返回 null（阻止列表清删 EntityTickList/ChunkMap）。
+            // 只拦 Int2ObjectOpenHashMap（服务端 EntityTickList/ChunkMap 的实现），不拦 Int2ObjectLinkedOpenHashMap
+            //（客户端实现，其 classloader 访问不到主模组 EntityASMUtil，会 NoClassDefFoundError）。
+            if ("it/unimi/dsi/fastutil/ints/Int2ObjectOpenHashMap".equals(className)
+                    && "remove".equals(name) && "(I)Ljava/lang/Object;".equals(descriptor)) {
+                base = new Int2ObjectMapRemoveAdapter(base, modified);
+            }
             // EntityTickList.forEach：Consumer.accept 调用点注入 shouldOverrideTick + tickOverride（强制双 tick）
             if ("net/minecraft/world/level/entity/EntityTickList".equals(className)
                     && ("forEach".equals(name) || "m_156910_".equals(name))
                     && "(Ljava/util/function/Consumer;)V".equals(descriptor)) {
-                return new EntityTickListAdapter(mv, modified);
+                return new EntityTickListAdapter(base, modified);
             }
             // ServerLevel.tick：末尾注入 updateLastTicks（每 tick 更新受保护实体 lastTickCount + 强制 tick）
             if ("net/minecraft/server/level/ServerLevel".equals(className)
                     && ("tick".equals(name) || "m_8793_".equals(name))
                     && "(Ljava/util/function/BooleanSupplier;)V".equals(descriptor)) {
-                return new ServerTickAdapter(mv, modified);
+                return new ServerTickAdapter(base, modified);
             }
             // 调用点包装（包裹在最内层，扫描方法内所有血量调用指令）
-            MethodVisitor cv = allowCallSite ? new CallSiteAdapter(mv, modified, loader) : mv;
+            MethodVisitor cv = allowCallSite ? new CallSiteAdapter(base, modified, loader) : base;
             // 方法自身返回值包装（仅当方法就是这些血量方法）
             if (("getHealth".equals(name) || "m_21223_".equals(name)) && "()F".equals(descriptor)) {
                 return new GetHealthAdapter(cv, modified);
@@ -267,6 +281,92 @@ public class LivingHealthTransformer implements ClassFileTransformer {
                 return new IsDeadOrDyingAdapter(cv, modified);
             }
             return cv;
+        }
+    }
+
+    /**
+     * 原版 Entity 自身的移除/加入生命周期方法内部会直接 putfield removalReason/isAddedToWorld；
+     * 这些字段写必须放行（有 mixin 层保护），否则 setRemoved 的 null 初始化被 agent 跳过导致 NPE。
+     */
+    private static boolean isEntityLifecycleWriteMethod(String className, String name, String descriptor) {
+        if (!"net/minecraft/world/entity/Entity".equals(className)) return false;
+        return (("setRemoved".equals(name) || "m_142467_".equals(name))
+                    && "(Lnet/minecraft/world/entity/Entity$RemovalReason;)V".equals(descriptor))
+                || (("unsetRemoved".equals(name) || "m_146912_".equals(name)) && "()V".equals(descriptor))
+                || (("onAddedToWorld".equals(name) || "m_146910_".equals(name)) && "()V".equals(descriptor));
+    }
+
+    /** 调用点包装：方法内调用 getHealth/isAlive/isDeadOrDying 处插 DUP/SWAP/INVOKESTATIC 裁决，覆盖第三方调用。
+     *  接收者类型判定走 isLivingEntitySubclass（子类层次），不只看 owner == LivingEntity。 */
+    private static class FieldWriteAdapter extends MethodVisitor {
+
+        private final boolean[] modified;
+
+        public FieldWriteAdapter(MethodVisitor mv, boolean[] modified) {
+            super(Opcodes.ASM9, mv);
+            this.modified = modified;
+        }
+
+        @Override
+        public void visitFieldInsn(int opcode, String owner, String name, String descriptor) {
+            boolean isRemoval = opcode == Opcodes.PUTFIELD
+                    && "net/minecraft/world/entity/Entity".equals(owner)
+                    && ("removalReason".equals(name) || "f_146795_".equals(name));
+            boolean isAdded = opcode == Opcodes.PUTFIELD
+                    && "net/minecraft/world/entity/Entity".equals(owner)
+                    && ("isAddedToWorld".equals(name) || "f_146810_".equals(name));
+            if (isRemoval || isAdded) {
+                // putfield 栈：[..., objectref, value]（value 栈顶）
+                Label skip = new Label();
+                Label end = new Label();
+                super.visitInsn(Opcodes.DUP2);   // [..., objectref, value, objectref, value]
+                if (isAdded) {
+                    // boolean value → shouldProtectRemoval(Object, boolean)
+                    super.visitMethodInsn(Opcodes.INVOKESTATIC, ASM_UTIL,
+                        "shouldProtectRemoval", "(Ljava/lang/Object;Z)Z", false);
+                } else {
+                    // 引用 value → shouldProtectRemoval(Object, Object)
+                    super.visitMethodInsn(Opcodes.INVOKESTATIC, ASM_UTIL,
+                        "shouldProtectRemoval", "(Ljava/lang/Object;Ljava/lang/Object;)Z", false);
+                }
+                super.visitJumpInsn(Opcodes.IFNE, skip);  // bool=true（活辖界者被移除语义直写）→ 跳过
+                super.visitFieldInsn(opcode, owner, name, descriptor);  // 正常 putfield
+                super.visitJumpInsn(Opcodes.GOTO, end);
+                super.visitLabel(skip);           // [..., objectref, value]
+                super.visitInsn(Opcodes.POP);     // 弹 value → [..., objectref]
+                super.visitInsn(Opcodes.POP);     // 弹 objectref → [..., ]
+                super.visitLabel(end);
+                modified[0] = true;
+                return;
+            }
+            super.visitFieldInsn(opcode, owner, name, descriptor);
+        }
+    }
+
+    /** 调用点包装：方法内调用 getHealth/isAlive/isDeadOrDying 处插 DUP/SWAP/INVOKESTATIC 裁决，覆盖第三方调用。
+     *  接收者类型判定走 isLivingEntitySubclass（子类层次），不只看 owner == LivingEntity。 */
+    private static class Int2ObjectMapRemoveAdapter extends MethodVisitor {
+
+        private final boolean[] modified;
+
+        public Int2ObjectMapRemoveAdapter(MethodVisitor mv, boolean[] modified) {
+            super(Opcodes.ASM9, mv);
+            this.modified = modified;
+        }
+
+        @Override
+        public void visitCode() {
+            super.visitCode();
+            // remove(int key) 开头：key 在局部变量 1（this=0）
+            Label normal = new Label();
+            super.visitVarInsn(Opcodes.ILOAD, 1);   // [key]
+            super.visitMethodInsn(Opcodes.INVOKESTATIC, ASM_UTIL,
+                "shouldProtectRemove", "(I)Z", false);  // [bool]
+            super.visitJumpInsn(Opcodes.IFEQ, normal);  // bool=false → 正常执行
+            super.visitInsn(Opcodes.ACONST_NULL);   // [null]
+            super.visitInsn(Opcodes.ARETURN);       // 返回 null（不删除）
+            super.visitLabel(normal);
+            modified[0] = true;
         }
     }
 

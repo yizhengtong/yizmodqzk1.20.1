@@ -56,7 +56,21 @@ public final class YizRemoveCommand {
         int count = 0;
         for (Entity entity : snapshot) {
             if (entity.isRemoved()) continue;
-            if (EntityRemovalUtil.forceRemove(entity)) {
+            int id = entity.getId();
+            // /yiz remove 后门：临时放行本模组免移除拦截，允许真正清除本模组实体
+            net.minecraft.client.yiz.tool.health.EntityASMUtil.beginForceRemove(id);
+            boolean ok;
+            try {
+                ok = EntityRemovalUtil.forceRemove(entity);
+            } finally {
+                net.minecraft.client.yiz.tool.health.EntityASMUtil.endForceRemove(id);
+            }
+            if (ok) {
+                // /yiz remove 后门：清除本模组实体后从不死注册表/保护 id 集合中摘除，防止守卫复活
+                try {
+                    Class<?> yizxian = Class.forName("net.minecraft.client.yiz.xian.entity.base.YizxianMob");
+                    yizxian.getMethod("forceRemoveCleanup", Entity.class).invoke(null, entity);
+                } catch (Throwable ignored) {}
                 count++;
             }
         }
