@@ -46,7 +46,7 @@ public final class ExternalRefStore {
         if (entity == null || entity.level().isClientSide()) return null;
         for (Object store : candidateStores(entity)) {
             if (!holdsEntityRef(store, entity)) continue;
-            Field hf = findHealthField(store, entity);
+            Field hf = findHealthField(store, entity, entity.getHealth());
             if (hf == null) continue;
             double v = readField(hf, store);
             if (Double.isFinite(v)) {
@@ -58,12 +58,12 @@ public final class ExternalRefStore {
     }
 
     /** 写真实血量到外部存档/全局对象；返回是否写入。 */
-    public static boolean writeHealth(LivingEntity entity, double target) {
+    public static boolean writeHealth(LivingEntity entity, double current, double target) {
         if (entity == null || entity.level().isClientSide()) return false;
         boolean any = false;
         for (Object store : candidateStores(entity)) {
             if (!holdsEntityRef(store, entity)) continue;
-            Field hf = findHealthField(store, entity);
+            Field hf = findHealthField(store, entity, current);
             if (hf == null) continue;
             if (writeField(store, hf, target)) any = true;
         }
@@ -177,11 +177,11 @@ public final class ExternalRefStore {
 
     // ==================== 3. 血量参考字段 ====================
 
-    /** 找对象里 ≈ 当前血 / 最大血的数值字段（血量参考）。 */
-    private static Field findHealthField(Object store, LivingEntity entity) {
+    /** 找对象里「血量参考」数值字段：∈ [参考血−容差, 最大血+容差]，取最接近参考血者。 */
+    private static Field findHealthField(Object store, LivingEntity entity, double reference) {
         try {
-            double gh = entity.getHealth();
             double gmh = entity.getMaxHealth();
+            double tol = Math.max(REF_TOL, Math.abs(gmh) * 0.01);
             Field best = null;
             double bestDiff = Double.MAX_VALUE;
             for (Field f : allFields(store.getClass())) {
@@ -192,11 +192,10 @@ public final class ExternalRefStore {
                     f.setAccessible(true);
                     double v = readField(f, store);
                     if (!Double.isFinite(v)) continue;
-                    double dGh = Math.abs(v - gh);
-                    double dGmh = Math.abs(v - gmh);
-                    double diff = Math.min(dGh, dGmh);
-                    double tol = Math.max(REF_TOL, Math.max(Math.abs(gh), Math.abs(gmh)) * 0.001);
-                    if (diff <= tol && diff < bestDiff) {
+                    // 血量参考字段必然滞后于当前血、不超过最大血（∈ [reference−tol, maxHealth+tol]）
+                    if (v < reference - tol || v > gmh + tol) continue;
+                    double diff = Math.abs(v - reference);
+                    if (diff < bestDiff) {
                         bestDiff = diff;
                         best = f;
                     }

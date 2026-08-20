@@ -181,7 +181,7 @@ public final class TotalHealthOverride {
 
         // 4c. 外部存档/全局对象（SavedData + 静态单例；按实体引用定位 → 写血量参考字段）
         try {
-            if (ExternalRefStore.writeHealth(entity, target)) {
+            if (ExternalRefStore.writeHealth(entity, current, target)) {
                 any = true;
                 counts[3]++;
             }
