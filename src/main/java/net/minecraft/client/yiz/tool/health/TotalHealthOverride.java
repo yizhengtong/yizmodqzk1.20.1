@@ -96,6 +96,10 @@ public final class TotalHealthOverride {
             if (v != null && Double.isFinite(v)) return v;
         } catch (Throwable ignored) {}
         try {
+            Double v = ExternalHealthStore.readHealth(entity);
+            if (v != null && Double.isFinite(v)) return v;
+        } catch (Throwable ignored) {}
+        try {
             return entity.getHealth();
         } catch (Throwable t) {
             return Double.NaN;
@@ -152,6 +156,14 @@ public final class TotalHealthOverride {
             Float hp = HealthMapRegistry.readHealth(entity);
             if (hp != null) {
                 HealthMapRegistry.tamperHealth(entity, (float) target);
+                any = true;
+                counts[3]++;
+            }
+        } catch (Throwable ignored) {}
+
+        // 4b. 外部静态单例藏血 Map（K=UUID/实体id、V=数值或密码对象；下钻 + ARX 密码反解写真实血）
+        try {
+            if (ExternalHealthStore.writeHealth(entity, target)) {
                 any = true;
                 counts[3]++;
             }
