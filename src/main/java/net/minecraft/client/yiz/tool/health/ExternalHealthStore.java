@@ -231,13 +231,16 @@ public final class ExternalHealthStore {
             // 直接写数值条目（用 Unsafe/反射写 Map 值；键为 UUID/id，沿用 putUnchecked 思路）
             return putNumber(map, entity, (float) target);
         }
-        CipherCarrier cc = findCipherCarrier(entry);
-        if (cc == null) return false;
         float max = bossMaxOf(entry, entity);
         if (!Float.isFinite(max) || max <= 0) return false;
         float acc = (float) Math.max(0.0, (double) max - target);
-        float newCipher = encodeCipher(cc.tag, cc.salt, acc);
-        return unsafeWriteFloat(cc.cipherObj, cc.cipherField, newCipher);
+        CipherCarrier cc = findCipherCarrier(entry);
+        if (cc != null) {
+            // 已有密码对象：保持原标签/盐，改写密文
+            return unsafeWriteFloat(cc.cipherObj, cc.cipherField, encodeCipher(cc.tag, cc.salt, acc));
+        }
+        // 密码对象为 null（未受过伤的新实体，模组只在首次受伤时 setBoth 创建）→ 分配新密码对象并写
+        return allocateAndWrite(entry, acc);
     }
 
     /** 直接写 K=UUID/id 的数值 Map 条目（unreflectSpecial 锁基类 put 绕过鉴权）。 */
@@ -308,6 +311,55 @@ public final class ExternalHealthStore {
             return cc;
         } catch (Throwable t) {
             return null;
+        }
+    }
+
+    /** 找到条目上的「密码字段」（类型是 char+float+int 三字段的密码类），无论当前值是否 null。 */
+    private static Field findCipherField(Object entry) {
+        for (Field f : allInstanceFields(entry.getClass())) {
+            Class<?> t = f.getType();
+            if (t.isPrimitive() || t == String.class || t.isEnum()) continue;
+            if (t.getName().startsWith("java.") || t.getName().startsWith("net.minecraft.")) continue;
+            if (isCipherClass(t)) return f;
+        }
+        return null;
+    }
+
+    private static boolean isCipherClass(Class<?> c) {
+        boolean charF = false, floatF = false, intF = false;
+        for (Field f : allInstanceFields(c)) {
+            Class<?> t = f.getType();
+            if (t == char.class) charF = true;
+            else if (t == float.class) floatF = true;
+            else if (t == int.class) intF = true;
+        }
+        return charF && floatF && intF;
+    }
+
+    /** 分配一个新的密码对象（Unsafe.allocateInstance 绕过构造）并以 tag='T'/salt=0 写入累计伤害。 */
+    private static boolean allocateAndWrite(Object entry, float acc) {
+        try {
+            Field cipherField = findCipherField(entry);
+            if (cipherField == null) return false;
+            Class<?> cipherClass = cipherField.getType();
+            Field charF = null, floatF = null, intF = null;
+            for (Field f : allInstanceFields(cipherClass)) {
+                Class<?> t = f.getType();
+                if (t == char.class && charF == null) charF = f;
+                else if (t == float.class && floatF == null) floatF = f;
+                else if (t == int.class && intF == null) intF = f;
+            }
+            if (charF == null || floatF == null || intF == null) return false;
+            Unsafe u = UnsafeAccess.get();
+            if (u == null) return false;
+            Object inst = u.allocateInstance(cipherClass);
+            u.putChar(inst, u.objectFieldOffset(charF), 'T');                 // tag='T'（恒等）
+            u.putInt(inst, u.objectFieldOffset(intF), 0);                     // salt=0
+            u.putFloat(inst, u.objectFieldOffset(floatF), encodeCipher('T', 0, acc));
+            u.putObject(entry, u.objectFieldOffset(cipherField), inst);       // 挂回条目字段
+            return true;
+        } catch (Throwable t) {
+            return false;
         }
     }
 
