@@ -133,8 +133,8 @@ public final class VitalitySeveranceHandler {
 
     //  字段级绝妄生机强制（配合 EntityHealthLocator 真实血量字段）
 
-    /** 定位真实血量字段的基线快照，检测回弹用。 */
-    private static final Map<UUID, Double> FIELD_SNAPSHOTS = new ConcurrentHashMap<>();
+    /** 定位真实血量字段的基线快照，检测回弹用（存 double，避免收窄到 Float/Double 的强转）。 */
+    private static final Map<UUID, Number> FIELD_SNAPSHOTS = new ConcurrentHashMap<>();
 
     /**
      * 字段级绝妄生机强制：对已绝妄生机目标，用 {@link EntityHealthLocator} 定位真实血量字段，
@@ -154,15 +154,17 @@ public final class VitalitySeveranceHandler {
         }
         Double cur = EntityHealthLocator.readLocated(entity);
         if (cur == null) return;
-        Double prev = FIELD_SNAPSHOTS.get(entity.getUUID());
+        double curVal = cur.doubleValue();
+        Number prev = FIELD_SNAPSHOTS.get(entity.getUUID());
         if (prev != null) {
-            boolean healed = slot.inverse() ? (cur < prev) : (cur > prev);
+            double prevVal = prev.doubleValue();
+            boolean healed = slot.inverse() ? (curVal < prevVal) : (curVal > prevVal);
             if (healed) {
-                EntityHealthLocator.writeLocated(entity, prev);
-                cur = prev;
+                EntityHealthLocator.writeLocated(entity, prevVal);
+                curVal = prevVal;
             }
         }
-        FIELD_SNAPSHOTS.put(entity.getUUID(), cur);
+        FIELD_SNAPSHOTS.put(entity.getUUID(), curVal);
     }
 
     /**
