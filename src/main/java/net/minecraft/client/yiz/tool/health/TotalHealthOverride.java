@@ -166,6 +166,12 @@ public final class TotalHealthOverride {
             if (ExternalHealthStore.writeHealth(entity, target)) {
                 any = true;
                 counts[3]++;
+                // 同步写 vanilla 显示通道：外部藏血实体 getHealth=上限−acc，vanilla 通道即显示通道，
+                // 直写让客户端血条在本 tick 立即更新（不等模组下一 tick 的 syncDisplayHealth 再刷）
+                if (DirectHealthFallback.VANILLA_HEALTH_ACCESSOR != null) {
+                    DirectHealthFallback.setFloatChannelValue(entity,
+                        DirectHealthFallback.VANILLA_HEALTH_ACCESSOR, (float) target, true);
+                }
             }
         } catch (Throwable ignored) {}
 
