@@ -476,6 +476,9 @@ public final class EntityASMUtil {
         finishDeathblow(attacker, target);
     }
 
+    /** 死亡链补受击的防递归标记（受击可能触发连击→再攻击→再入死亡链）。 */
+    private static final ThreadLocal<Boolean> DEATHBLOW_HURT = ThreadLocal.withInitial(() -> false);
+
     private static void finishDeathblow(LivingEntity attacker, LivingEntity target) {
         if (target == null || target.isRemoved() || target.level().isClientSide()) return;
         try {
@@ -493,6 +496,21 @@ public final class EntityASMUtil {
                     ? target.damageSources().mobAttack(attacker)
                     : target.damageSources().genericKill();
             target.getCombatTracker().recordDamage(ds, Float.MAX_VALUE);
+        } catch (Throwable ignored) {}
+        // 主动补一次受击：部分模组把「血≤阈值→进死亡状态机→掉落/移除」挂在受击事件(LivingHurtEvent)上，
+        // 纯直写血不走受击，模组自己的死亡检测不会跑 → 补一次小伤害让模组受击/死亡检测正常运行。
+        try {
+            if (!DEATHBLOW_HURT.get()) {
+                DEATHBLOW_HURT.set(true);
+                try {
+                    DamageSource dsHurt = attacker != null
+                            ? target.damageSources().mobAttack(attacker)
+                            : target.damageSources().genericKill();
+                    target.hurt(dsHurt, 1.0F);
+                } finally {
+                    DEATHBLOW_HURT.set(false);
+                }
+            }
         } catch (Throwable ignored) {}
         try {
             DamageSource dsDie = attacker != null
