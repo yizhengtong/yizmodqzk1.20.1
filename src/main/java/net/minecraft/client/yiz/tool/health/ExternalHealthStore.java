@@ -234,13 +234,12 @@ public final class ExternalHealthStore {
         float max = bossMaxOf(entry, entity);
         if (!Float.isFinite(max) || max <= 0) return false;
         float acc = (float) Math.max(0.0, (double) max - target);
-        CipherCarrier cc = findCipherCarrier(entry);
-        if (cc != null) {
-            // 已有密码对象：保持原标签/盐，改写密文
-            return unsafeWriteFloat(cc.cipherObj, cc.cipherField, encodeCipher(cc.tag, cc.salt, acc));
+        // 写所有密码字段（accCipher/lastCipher 都可能被 getAcc 读，字段序不可靠，全部同步写）
+        boolean any = false;
+        for (Field f : cipherFields(entry)) {
+            if (writeCipherField(entry, f, acc)) any = true;
         }
-        // 密码对象为 null（未受过伤的新实体，模组只在首次受伤时 setBoth 创建）→ 分配新密码对象并写
-        return allocateAndWrite(entry, acc);
+        return any;
     }
 
     /** 直接写 K=UUID/id 的数值 Map 条目（unreflectSpecial 锁基类 put 绕过鉴权）。 */
@@ -314,15 +313,16 @@ public final class ExternalHealthStore {
         }
     }
 
-    /** 找到条目上的「密码字段」（类型是 char+float+int 三字段的密码类），无论当前值是否 null。 */
-    private static Field findCipherField(Object entry) {
+    /** 条目上所有「密码字段」（类型是 char+float+int 三字段的密码类），无论当前值是否 null。 */
+    private static List<Field> cipherFields(Object entry) {
+        List<Field> out = new ArrayList<>();
         for (Field f : allInstanceFields(entry.getClass())) {
             Class<?> t = f.getType();
             if (t.isPrimitive() || t == String.class || t.isEnum()) continue;
             if (t.getName().startsWith("java.") || t.getName().startsWith("net.minecraft.")) continue;
-            if (isCipherClass(t)) return f;
+            if (isCipherClass(t)) out.add(f);
         }
-        return null;
+        return out;
     }
 
     private static boolean isCipherClass(Class<?> c) {
@@ -336,11 +336,25 @@ public final class ExternalHealthStore {
         return charF && floatF && intF;
     }
 
-    /** 分配一个新的密码对象（Unsafe.allocateInstance 绕过构造）并以 tag='T'/salt=0 写入累计伤害。 */
-    private static boolean allocateAndWrite(Object entry, float acc) {
+    /** 写单个密码字段：已有密码对象则改写密文（保持标签/盐），null 则分配新对象。 */
+    private static boolean writeCipherField(Object entry, Field field, float acc) {
         try {
-            Field cipherField = findCipherField(entry);
-            if (cipherField == null) return false;
+            field.setAccessible(true);
+            Object existing = field.get(entry);
+            if (existing != null) {
+                CipherCarrier cc = asCipherCarrier(existing);
+                if (cc == null) return false;
+                return unsafeWriteFloat(cc.cipherObj, cc.cipherField, encodeCipher(cc.tag, cc.salt, acc));
+            }
+            return allocateAndWriteField(entry, field, acc);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** 分配一个新的密码对象（Unsafe.allocateInstance 绕过构造）并以 tag='T'/salt=0 写入累计伤害。 */
+    private static boolean allocateAndWriteField(Object entry, Field cipherField, float acc) {
+        try {
             Class<?> cipherClass = cipherField.getType();
             Field charF = null, floatF = null, intF = null;
             for (Field f : allInstanceFields(cipherClass)) {
@@ -365,17 +379,19 @@ public final class ExternalHealthStore {
 
     // ==================== ARX 密码（reverse/rotate/subtract + 盐 + 类型标签） ====================
 
-    private static final int GOLDEN = -1640531527;   // 0x9E3779B9 黄金比例轮常数（标准 ARX 原语，非模组特定）
+    // 注意：CipherHelper 的 fwd/inv 用的是 +1640531527（0x61C88647，即 -0x9E3779B9 的补码），
+    // 不是其声明的 GOLDEN(-1640531527)。必须用正数，否则 encode/decode 与模组互逆反解失败。
+    private static final int ROUND = 1640531527;
 
     private static int fwd(int x) {
         x = Integer.reverse(x);
-        x -= GOLDEN;
+        x -= ROUND;
         return Integer.rotateLeft(x, 17);
     }
 
     private static int inv(int x) {
         x = Integer.rotateRight(x, 17);
-        x += GOLDEN;
+        x += ROUND;
         return Integer.reverse(x);
     }
 
