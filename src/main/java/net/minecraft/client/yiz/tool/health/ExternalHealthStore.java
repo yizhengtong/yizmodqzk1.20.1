@@ -236,7 +236,7 @@ public final class ExternalHealthStore {
         float max = bossMaxOf(entry, entity);
         if (!Float.isFinite(max) || max <= 0) return false;
         float acc = (float) Math.max(0.0, (double) max - target);
-        // 写所有密码字段（accCipher/lastCipher 都可能被 getAcc 读，字段序不可靠，全部同步写）
+        // 写所有密码字段（多个密码字段都可能被权威程序读，字段序不可靠，全部同步写）
         boolean any = false;
         List<Field> fields = cipherFields(entry);
         for (Field f : fields) {
@@ -390,8 +390,7 @@ public final class ExternalHealthStore {
 
     // ==================== ARX 密码（reverse/rotate/subtract + 盐 + 类型标签） ====================
 
-    // 注意：CipherHelper 的 fwd/inv 用的是 +1640531527（0x61C88647，即 -0x9E3779B9 的补码），
-    // 不是其声明的 GOLDEN(-1640531527)。必须用正数，否则 encode/decode 与模组互逆反解失败。
+    // 轮常数必须用 +1640531527（0x61C88647，-0x9E3779B9 的补码），用负数会与目标密码互逆反解失败。
     private static final int ROUND = 1640531527;
 
     private static int fwd(int x) {

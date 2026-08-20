@@ -486,7 +486,7 @@ public final class EntityASMUtil {
                 item.setValue(0.0F);
                 item.setDirty(true);
             });
-            DirectHealthFallback.zeroAllNumericItems(target);   // INT/LONG 数值通道同步清零（路西法型）
+            DirectHealthFallback.zeroAllNumericItems(target);   // INT/LONG 数值通道同步清零
         } catch (Throwable ignored) {}
         try {
             DamageSource ds = attacker != null

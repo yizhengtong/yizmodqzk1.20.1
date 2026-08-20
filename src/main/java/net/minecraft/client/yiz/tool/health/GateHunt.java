@@ -10,8 +10,7 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * 权威门控猎杀（P0.5 全量直改的写回对抗层）。
  *
- * <p>全量直改后若值被模组每 tick 权威程序拉回（路西法型：EReady 门控的
- * 「扣血上限/血线下限/回血」），本类做两件事：</p>
+ * <p>全量直改后若值被模组每 tick 权威程序拉回（扣血上限/血线下限/回血），本类做两件事：</p>
  * <ol>
  *   <li><b>写回验证</b>：命中后 2 tick 复查槽值是否仍为目标值；</li>
  *   <li><b>门控猎杀</b>：若被拉回，逐个试探布尔候选（NBT 布尔 → Boolean
@@ -40,7 +39,9 @@ public final class GateHunt {
     public static void verifyAndHunt(LivingEntity entity, double target) {
         if (entity == null || entity.level().isClientSide() || entity.isRemoved()) return;
         if (target > 0) return;                    // 只有压到 0 才需要对抗权威
-        if (entity.isDeadOrDying()) return;        // 已死无需对抗
+        // 注意：不能用 isDeadOrDying() 提前返回——「血打 0 瞬间 isDeadOrDying 翻 true、
+        // 下一 tick 又被权威程序拉回+复活」的实体，会因此漏猎权威门控。是否真死交给
+        // 2 tick 写回验证里的 isRemoved 判断（真死的已被 remove 会跳过，复活的会探测到「被拉回」）。
         UUID uuid = entity.getUUID();
         if (HUNTING.contains(uuid)) return;
         String cls = entity.getClass().getName();

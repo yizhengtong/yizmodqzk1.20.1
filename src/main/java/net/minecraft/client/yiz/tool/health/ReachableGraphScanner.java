@@ -20,8 +20,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>从实体出发沿实例字段 BFS（深度 ≤2、对象数封顶），收集沿途对象与实体自身的
  * 数值字段（float/double/int/long，非 static/final）。血量常藏在「实体 → 容器对象 →
- * 容器对象」的多跳结构里（iss_csw LifeValueContainerScanner 同类思路），
- * 单层字段扫描会漏。</p>
+ * 容器对象」的多跳结构里，单层字段扫描会漏。</p>
  *
  * <p>黑名单包（java./net.minecraft./…）不参与<b>递归</b>，避免扫进 Minecraft
  * 内部巨量对象；被黑名单对象自身的数值字段仍可收集（由调用方按「值与血量相等」过滤，

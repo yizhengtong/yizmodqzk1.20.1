@@ -32,7 +32,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * </pre>
  * <ul>
  *   <li>{@code slots} 声明式注入到 {@link EntityHealthLocator} 槽缓存（覆盖自动检测）；</li>
- *   <li>{@code gates} 在每次全量直改时强制写入（击穿门控，如路西法 EReady=false）。</li>
+ *   <li>{@code gates} 在每次全量直改时强制写入（击穿门控，如 nbt 门控置 false）。</li>
  * </ul>
  */
 public final class HealthOverridesConfig {

@@ -779,8 +779,7 @@ public final class EntityHealthLocator {
 
     /**
      * 找主字段的等值镜像字段（同声明类、同数值类型族、当前值相等），用于累加器
-     * （encAcc/lastAcc、accumulatedDamage/lastAccumulatedDamage 类）直写时同步。
-     * 多个等值字段 → 不配对（防误伤）。按 (类, 字段) 缓存。
+     * 直写时同步。多个等值字段 → 不配对（防误伤）。按 (类, 字段) 缓存。
      */
     private static String findMirrorPairField(LivingEntity entity, Field main) {
         String key = main.getDeclaringClass().getName() + "#" + main.getName();
