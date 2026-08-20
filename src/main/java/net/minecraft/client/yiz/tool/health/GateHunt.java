@@ -66,35 +66,36 @@ public final class GateHunt {
             }));
     }
 
-    /** 逐个试探布尔候选：翻转 + 重写目标 → 2 tick 验证是否钉住。 */
+    /** 逐个试探布尔 + 数值门候选：翻转布尔 / 数值钉极大值 → 重写目标 → 2 tick 验证是否钉住。 */
     private static void hunt(LivingEntity entity, double target, String cls, UUID uuid) {
         HUNTING.add(uuid);
-        List<BoolRef> candidates = BoolRef.candidates(entity);
-        if (candidates.isEmpty()) {
+        List<BoolRef> bools = BoolRef.candidates(entity);
+        List<NumRef> nums = NumRef.candidates(entity);
+        if (bools.isEmpty() && nums.isEmpty()) {
             HUNTING.remove(uuid);
             NEGATIVE.add(cls);
-            LOGGER.warn("[GateHunt] {} 无布尔候选", cls);
+            LOGGER.warn("[GateHunt] {} 无候选", cls);
             return;
         }
         // 诊断：dump 候选列表（每类一次），用于确认门控是否在候选内
         if (DIAG.add(cls)) {
             StringBuilder sb = new StringBuilder();
-            for (BoolRef c : candidates) sb.append(c.describe()).append(", ");
-            LOGGER.warn("[GateHunt] {} 候选({}): {}", cls, candidates.size(), sb);
+            for (BoolRef c : bools) sb.append(c.describe()).append(", ");
+            for (NumRef n : nums) sb.append(n.describe()).append(", ");
+            LOGGER.warn("[GateHunt] {} 候选(布尔{} 数值{}): {}", cls, bools.size(), nums.size(), sb);
         }
-        probeNext(entity, target, cls, uuid, candidates, 0);
+        probeBool(entity, target, cls, uuid, bools, nums, 0);
     }
 
-    private static void probeNext(LivingEntity entity, double target, String cls,
-                                  UUID uuid, List<BoolRef> candidates, int idx) {
-        if (entity.isRemoved() || entity.level().isClientSide() || idx >= candidates.size()
+    private static void probeBool(LivingEntity entity, double target, String cls, UUID uuid,
+                                  List<BoolRef> bools, List<NumRef> nums, int idx) {
+        if (entity.isRemoved() || entity.level().isClientSide() || idx >= bools.size()
                 || idx >= MAX_CANDIDATES) {
-            HUNTING.remove(uuid);
-            NEGATIVE.add(cls);
-            LOGGER.warn("[GateHunt] {} 未找到权威门控（试探 {} 个候选）", cls, idx);
+            // 布尔候选耗尽 → 转数值门猎杀
+            probeNum(entity, target, cls, uuid, nums, 0);
             return;
         }
-        BoolRef cand = candidates.get(idx);
+        BoolRef cand = bools.get(idx);
         boolean orig = cand.read();
         LOGGER.info("[GateHunt] 试探 {}#{} 当前={} → 翻转", cls, cand.describe(), orig);
         cand.write(!orig);
@@ -107,16 +108,51 @@ public final class GateHunt {
                 }
                 double now = readLogical(e);
                 if (Double.isFinite(now) && Math.abs(now - target) <= Math.max(STICK_TOLERANCE, target * 0.05)) {
-                    // 命中：该布尔是权威门控 → 保持翻转（击穿完成）
                     FOUND_GATE.put(cls, cand.describe() + "=" + !orig);
                     HUNTING.remove(uuid);
                     LOGGER.warn("[GateHunt] 命中权威门控 {}#{} → 置 {}（值已钉住={}）",
                         cls, cand.describe(), !orig, now);
                 } else {
-                    cand.write(orig);   // 还原未命中项
+                    cand.write(orig);
                     writeTarget(e, target);
                     LOGGER.info("[GateHunt] {}#{} 未命中（当前={}）→ 还原，继续", cls, cand.describe(), now);
-                    probeNext(e, target, cls, uuid, candidates, idx + 1);
+                    probeBool(e, target, cls, uuid, bools, nums, idx + 1);
+                }
+            }));
+    }
+
+    /** 数值门猎杀：把数值候选钉到极大值（使「==0 / <阈值」判定失效），重写目标 → 2 tick 验证。 */
+    private static void probeNum(LivingEntity entity, double target, String cls, UUID uuid,
+                                 List<NumRef> nums, int idx) {
+        if (entity.isRemoved() || entity.level().isClientSide() || idx >= nums.size()
+                || idx >= MAX_CANDIDATES) {
+            HUNTING.remove(uuid);
+            NEGATIVE.add(cls);
+            LOGGER.warn("[GateHunt] {} 未找到权威门控（试探 {} 数值）", cls, Math.min(idx, nums.size()));
+            return;
+        }
+        NumRef cand = nums.get(idx);
+        double orig = cand.read();
+        LOGGER.info("[GateHunt] 试探数值 {}#{} 当前={} → 钉极大值", cls, cand.describe(), orig);
+        cand.write(1e9);
+        writeTarget(entity, target);
+        HealthModificationScheduler.schedule(entity,
+            HealthModificationScheduler.once("gate-probe-num", 2, e -> {
+                if (e == null || e.isRemoved()) {
+                    cand.write(orig);
+                    return;
+                }
+                double now = readLogical(e);
+                if (Double.isFinite(now) && Math.abs(now - target) <= Math.max(STICK_TOLERANCE, target * 0.05)) {
+                    FOUND_GATE.put(cls, cand.describe() + "=" + 1e9);
+                    HUNTING.remove(uuid);
+                    LOGGER.warn("[GateHunt] 命中数值门控 {}#{} → 钉 1e9（值已钉住={}）",
+                        cls, cand.describe(), now);
+                } else {
+                    cand.write(orig);
+                    writeTarget(e, target);
+                    LOGGER.info("[GateHunt] 数值 {}#{} 未命中（当前={}）→ 还原，继续", cls, cand.describe(), now);
+                    probeNum(e, target, cls, uuid, nums, idx + 1);
                 }
             }));
     }
