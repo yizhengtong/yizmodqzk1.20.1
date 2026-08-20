@@ -79,8 +79,10 @@ public final class HealthModificationScheduler {
                         task.taskId(), task.modifier(),
                         task.intervalTicks(), task.intervalTicks(), true
                     ));
+                } else {
+                    // 一次性任务执行后必须移除：否则 remainingTicks 停在 0，每个 tick 都重复触发
+                    tasks.remove(task);
                 }
-                // else: 一次性任务不重新加入
             } else if (tasks.contains(task)) {
                 int idx = tasks.indexOf(task);
                 tasks.set(idx, task.decrementTick());

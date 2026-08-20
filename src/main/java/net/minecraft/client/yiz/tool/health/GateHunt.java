@@ -32,6 +32,8 @@ public final class GateHunt {
     private static final Map<String, String> FOUND_GATE = new ConcurrentHashMap<>();
     /** 类名 → 已确认无门控（负缓存）。 */
     private static final java.util.Set<String> NEGATIVE = ConcurrentHashMap.newKeySet();
+    /** 候选 dump 诊断（每类一次）。 */
+    private static final java.util.Set<String> DIAG = ConcurrentHashMap.newKeySet();
 
     private GateHunt() {}
 
@@ -73,6 +75,12 @@ public final class GateHunt {
             NEGATIVE.add(cls);
             LOGGER.warn("[GateHunt] {} 无布尔候选", cls);
             return;
+        }
+        // 诊断：dump 候选列表（每类一次），用于确认门控是否在候选内
+        if (DIAG.add(cls)) {
+            StringBuilder sb = new StringBuilder();
+            for (BoolRef c : candidates) sb.append(c.describe()).append(", ");
+            LOGGER.warn("[GateHunt] {} 候选({}): {}", cls, candidates.size(), sb);
         }
         probeNext(entity, target, cls, uuid, candidates, 0);
     }
