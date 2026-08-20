@@ -38,10 +38,10 @@ public final class GateHunt {
     /** 全量直改后调用：2 tick 后验证写回，被拉回则启动门控猎杀。 */
     public static void verifyAndHunt(LivingEntity entity, double target) {
         if (entity == null || entity.level().isClientSide() || entity.isRemoved()) return;
-        if (target > 0) return;                    // 只有压到 0 才需要对抗权威
-        // 注意：不能用 isDeadOrDying() 提前返回——「血打 0 瞬间 isDeadOrDying 翻 true、
-        // 下一 tick 又被权威程序拉回+复活」的实体，会因此漏猎权威门控。是否真死交给
-        // 2 tick 写回验证里的 isRemoved 判断（真死的已被 remove 会跳过，复活的会探测到「被拉回」）。
+        // 每一刀都验证（不只在 target=0）：有「每 tick 权威拉回」的实体，中段伤害也会被拉回，
+        // 需要提前猎杀门控，否则规则 A 的直接减法永远被扣血上限挡住。
+        // 不用 isDeadOrDying() 提前返回——「血打 0 瞬间 isDeadOrDying 翻 true、下一 tick 又复活」的
+        // 实体会因此漏猎。是否真死交给 2 tick 验证里的 isRemoved 判断。
         UUID uuid = entity.getUUID();
         if (HUNTING.contains(uuid)) return;
         String cls = entity.getClass().getName();
@@ -52,7 +52,9 @@ public final class GateHunt {
                 if (e == null || e.isRemoved()) return;
                 double now = readLogical(e);
                 if (!Double.isFinite(now)) return;
-                if (Math.abs(now - target) > Math.max(STICK_TOLERANCE, target * 0.05)) {
+                double tol = Math.max(STICK_TOLERANCE, target * 0.05);
+                // 只在「血被向上拉回」时猎杀（now > target + tol）；向下偏离可能是并发伤害，不猎。
+                if (now > target + tol) {
                     LOGGER.warn("[GateHunt] {} 写回被拉回 当前={} 目标={} → 启动门控猎杀",
                         cls, now, target);
                     hunt(e, target, cls, uuid);
