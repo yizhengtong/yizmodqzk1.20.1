@@ -38,6 +38,8 @@ public final class ExternalHealthStore {
 
     private static final org.slf4j.Logger LOGGER = net.minecraft.client.yiz.tizMod.LOGGER;
     private static final java.util.Set<String> LOGGED = ConcurrentHashMap.newKeySet();
+    /** 写路径诊断：每类只打一次（避免刷屏）。 */
+    private static final java.util.Set<String> WRITE_DIAG = ConcurrentHashMap.newKeySet();
 
     private ExternalHealthStore() {}
 
@@ -236,8 +238,17 @@ public final class ExternalHealthStore {
         float acc = (float) Math.max(0.0, (double) max - target);
         // 写所有密码字段（accCipher/lastCipher 都可能被 getAcc 读，字段序不可靠，全部同步写）
         boolean any = false;
-        for (Field f : cipherFields(entry)) {
+        List<Field> fields = cipherFields(entry);
+        for (Field f : fields) {
             if (writeCipherField(entry, f, acc)) any = true;
+        }
+        // 诊断：写后回读解码值，判断写入是否生效（限频：每类只打前若干条）
+        if (WRITE_DIAG.add(entity.getClass().getName())) {
+            double rb = Double.NaN;
+            CipherCarrier cc = findCipherCarrier(entry);
+            if (cc != null) rb = (double) max - decodeCipher(cc);
+            LOGGER.warn("[ExtWrite] {} max={} acc={} 密码字段数={} any={} 回读血={}",
+                entity.getClass().getSimpleName(), max, acc, fields.size(), any, rb);
         }
         return any;
     }
