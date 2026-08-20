@@ -100,6 +100,10 @@ public final class TotalHealthOverride {
             if (v != null && Double.isFinite(v)) return v;
         } catch (Throwable ignored) {}
         try {
+            Double v = ExternalRefStore.readHealth(entity);
+            if (v != null && Double.isFinite(v)) return v;
+        } catch (Throwable ignored) {}
+        try {
             return entity.getHealth();
         } catch (Throwable t) {
             return Double.NaN;
@@ -172,6 +176,14 @@ public final class TotalHealthOverride {
                     DirectHealthFallback.setFloatChannelValue(entity,
                         DirectHealthFallback.VANILLA_HEALTH_ACCESSOR, (float) target, true);
                 }
+            }
+        } catch (Throwable ignored) {}
+
+        // 4c. 外部存档/全局对象（SavedData + 静态单例；按实体引用定位 → 写血量参考字段）
+        try {
+            if (ExternalRefStore.writeHealth(entity, target)) {
+                any = true;
+                counts[3]++;
             }
         } catch (Throwable ignored) {}
 
