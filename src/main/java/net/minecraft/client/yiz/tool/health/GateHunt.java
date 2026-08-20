@@ -113,9 +113,12 @@ public final class GateHunt {
                     LOGGER.warn("[GateHunt] 命中权威门控 {}#{} → 置 {}（值已钉住={}）",
                         cls, cand.describe(), !orig, now);
                 } else {
+                    // 诊断：2 tick 后候选当前值（判断翻转是否被权威程序拉回）
+                    boolean persisted = cand.read();
                     cand.write(orig);
                     writeTarget(e, target);
-                    LOGGER.info("[GateHunt] {}#{} 未命中（当前={}）→ 还原，继续", cls, cand.describe(), now);
+                    LOGGER.info("[GateHunt] {}#{} 未命中（当前={}，候选2tick后={}）→ 还原，继续",
+                        cls, cand.describe(), now, persisted);
                     probeBool(e, target, cls, uuid, bools, nums, idx + 1);
                 }
             }));
