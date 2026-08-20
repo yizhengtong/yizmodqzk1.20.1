@@ -2,6 +2,7 @@ package net.minecraft.client.yiz.tool.health;
 
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.Tag;
+import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.LivingEntity;
 
 import java.util.List;
@@ -71,6 +72,16 @@ public final class TotalHealthOverride {
             try {
                 EntityASMUtil.setHealthDelta(entity, 0F);
             } catch (Throwable ignored) {}
+            // 拒死型实体：普通 boolean「死亡/移除放行开关」被门控（die/remove 空转拦截）。
+            // 行为探测并开门 → 重走目标自己的 die → 掉落 + 移除（规则 C）；未命中无副作用。
+            if (!entity.isRemoved()) {
+                try {
+                    DamageSource ds = attacker != null
+                            ? entity.damageSources().mobAttack(attacker)
+                            : entity.damageSources().genericKill();
+                    RemoveGateAccessor.tamperToAllowDeath(entity, ds);
+                } catch (Throwable ignored) {}
+            }
         }
         GateHunt.verifyAndHunt(entity, target);        // 2 tick 写回验证 + 权威门控猎杀
         return true;
