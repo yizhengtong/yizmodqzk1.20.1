@@ -135,10 +135,24 @@ public final class EntityRemovalUtil {
         try { entity.onRemovedFromWorld(); } catch (Throwable ignored) {}
         if (levelCallbackOnRemove(entity, Entity.RemovalReason.KILLED)) any = true;
 
-        // 1. ServerLevel.entityManager → sectionStorage / visibleEntityStorage / entityTickList
+        // 1. ServerLevel.entityManager → sectionStorage / visibleEntityStorage / entityTickList / knownUuids
         try {
             Object mgr = readField(level, "entityManager");
             if (mgr != null) {
+                // 1d. knownUuids 清理（PersistentEntitySectionManager：UUID→Entity 索引）——
+                //     不清理会让被强删实体的 UUID 残留，模组重新加载/生成同 UUID 实体时
+                //     报 "UUID of added entity already exists"（幽灵冲突）
+                try {
+                    for (java.lang.reflect.Field f : mgr.getClass().getDeclaredFields()) {
+                        if (!java.util.Map.class.isAssignableFrom(f.getType())) continue;
+                        f.setAccessible(true);
+                        Object m = f.get(mgr);
+                        if (m instanceof java.util.Map<?, ?> mm) {
+                            try { mm.remove(entity.getUUID()); } catch (Throwable ignored2) {}
+                            try { mm.values().removeIf(v -> v == entity); } catch (Throwable ignored2) {}
+                        }
+                    }
+                } catch (Throwable ignored) {}
                 // 1a. EntitySection.remove（空间索引，getSection(sectionKey)）
                 Object sectionStorage = readField(mgr, "sectionStorage");
                 if (sectionStorage != null) {

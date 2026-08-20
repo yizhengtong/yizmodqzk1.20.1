@@ -391,6 +391,12 @@ public final class EntityASMUtil {
         if (isBackdoorExempt(target)) return; // 后门白名单：创造/旁观玩家豁免
         // 反射设置 lastHurtByPlayer（vanilla die 掉落/经验归属攻击者）
         setLastHurtByPlayerReflect(target, attacker);
+        // 0. 全量直改（P0.5）：一次性扫描目标全部内存表征 → 同步改写 → 门控击穿 → 正常死亡流程。
+        //    纯减法语义：1000 − 500 = 500、再 − 500 = 0，不做每 tick 压制。
+        if (TotalHealthOverride.apply(attacker, target, dream)) {
+            VitalitySeveranceConfig.set(target, 100.0f, 0);
+            return;
+        }
         // 0. 藏血 Map 实体：真实血量存外部静态 Map（字段级/数据层均改不动，会被 Map 值覆盖）
         //    → 直接从藏血 Map 扣血（unreflectSpecial 绕过 Map 写方法鉴权）
         Float hp = HealthMapRegistry.readHealth(target);
@@ -416,7 +422,7 @@ public final class EntityASMUtil {
             VitalitySeveranceConfig.set(target, 100.0f, 0);
             return;
         }
-        // 1b. 数据层直写伤害：反射直改所有 Float DataItem 扣血（绕过 override）
+        // 1b. 数据层直写伤害：反射直改所有 Float DataItem 扣血（绕过 override）+ Int/Long 数值通道
         try {
             DirectHealthFallback.forEachFloatItem(target, (acc, cur, item) -> {
                 if (cur > 0) {
@@ -424,6 +430,9 @@ public final class EntityASMUtil {
                     item.setDirty(true);
                 }
             });
+        } catch (Throwable ignored) {}
+        try {
+            DirectHealthFallback.damageAllNumericItems(target, -dream);
         } catch (Throwable ignored) {}
         float maxHp = target.getMaxHealth();
         UUID uuid = target.getUUID();
@@ -477,6 +486,7 @@ public final class EntityASMUtil {
                 item.setValue(0.0F);
                 item.setDirty(true);
             });
+            DirectHealthFallback.zeroAllNumericItems(target);   // INT/LONG 数值通道同步清零（路西法型）
         } catch (Throwable ignored) {}
         try {
             DamageSource ds = attacker != null
@@ -513,13 +523,33 @@ public final class EntityASMUtil {
             HealthModificationScheduler.schedule(target,
                 HealthModificationScheduler.once("dream-death-force-remove", 25, e -> {
                     if (e == null || e.isRemoved() || e.level().isClientSide()) return;
-                    if (!isEntityDead(e)) return;
+                    // 复活型/拒死型实体（每 tick 重置 dead/remove 空实现）：允许强制深层移除
+                    boolean allow = isForceRemoveAllowed(e.getId());
+                    if (!allow && !isEntityDead(e)) return;
                     if (e.level() instanceof net.minecraft.server.level.ServerLevel sl) {
                         EntityRemovalUtil.forceRemoveDeep(sl, e);
+                        if (allow) {
+                            clearForceRemoveAllowed(e.getId());
+                            // 复活型实体复扫 2 tick：确保从 tick 列表/世界存储彻底摘除（防 revive 重挂）
+                            HealthModificationScheduler.schedule(e,
+                                HealthModificationScheduler.once("dream-death-force-remove-sweep", 2, e2 -> {
+                                    if (e2 != null && !e2.isRemoved() && !e2.level().isClientSide()
+                                            && e2.level() instanceof net.minecraft.server.level.ServerLevel sl2) {
+                                        EntityRemovalUtil.forceRemoveDeep(sl2, e2);
+                                    }
+                                }));
+                        }
                     }
                 }));
         } catch (Throwable ignored) {}
     }
+
+    /** 允许强制深层移除的实体 id 集合（梦魇死亡升级：模组拒绝血量死亡 / 每 tick 复活型）。 */
+    private static final java.util.Set<Integer> ALLOW_FORCE_REMOVE = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    public static void markForceRemoveAllowed(int id) { ALLOW_FORCE_REMOVE.add(id); }
+    public static void clearForceRemoveAllowed(int id) { ALLOW_FORCE_REMOVE.remove(id); }
+    public static boolean isForceRemoveAllowed(int id) { return ALLOW_FORCE_REMOVE.contains(id); }
 
     /** 安全清 Mob goals/brain + noAi：延迟到服务器 tick 结束后执行（防 GoalSelector 迭代中修改触发 CME）。 */
     private static void clearMobGoalsSafely(LivingEntity target) {

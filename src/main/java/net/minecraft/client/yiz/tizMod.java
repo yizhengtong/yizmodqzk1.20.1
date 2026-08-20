@@ -90,12 +90,15 @@ public class tizMod {
 
         // 加载实体真实血量字段定位缓存（config/yizmodqzk/entity_health_slots.json）
         net.minecraft.client.yiz.tool.health.EntityHealthLocator.load();
+        // 加载声明式改血覆盖（config/yizmodqzk/health_overrides.json：槽 + 门控）
+        net.minecraft.client.yiz.tool.health.HealthOverridesConfig.load();
 
         // 简易指令注册器 + /yiz remove / /yiz agent / /yiz setHealth / /yiz key 指令
         net.minecraft.client.yiz.tool.SimpleCommandRegistry.init();
         net.minecraft.client.yiz.tool.YizRemoveCommand.register();
         net.minecraft.client.yiz.tool.YizAgentCommand.register();
         net.minecraft.client.yiz.tool.YizSetHealthCommand.register();
+        net.minecraft.client.yiz.tool.YizHealthLocateCommand.register();
         net.minecraft.client.yiz.tool.YizKeyCommand.register();
 
         modEventBus.addListener(this::commonSetup);

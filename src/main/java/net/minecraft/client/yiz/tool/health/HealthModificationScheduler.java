@@ -60,32 +60,32 @@ public final class HealthModificationScheduler {
     /**
      * 每 tick 调用一次，检查并执行到期的任务。
      *
-     * @param entity 目标实体
+     * <p>快照迭代 + 现场列表为准：任务回调内允许 remove/schedule 自身或其它任务
+     * （如持续压制的释放/升级），不会触发 ConcurrentModificationException，
+     * 被移除的任务也不会被重新注册回列表。</p>
      */
     public static void tick(LivingEntity entity) {
         List<ScheduledModification> tasks = SCHEDULED.get(entity.getUUID());
         if (tasks == null || tasks.isEmpty()) return;
 
-        List<ScheduledModification> updated = new ArrayList<>();
-        for (ScheduledModification task : tasks) {
+        List<ScheduledModification> snapshot = new ArrayList<>(tasks);
+        for (ScheduledModification task : snapshot) {
             if (task.remainingTicks() <= 0) {
-                // 任务到期，执行
+                // 任务到期，执行（回调内可能 remove 本任务或 schedule 新任务）
                 task.modifier().apply(entity);
-
-                // 如果可重复，重新调度
-                if (task.repeat()) {
-                    updated.add(new ScheduledModification(
+                if (task.repeat() && tasks.contains(task)) {
+                    // 可重复任务重新调度（若回调内未移除）
+                    tasks.add(new ScheduledModification(
                         task.taskId(), task.modifier(),
                         task.intervalTicks(), task.intervalTicks(), true
                     ));
                 }
-                // else: 一次性任务，不加入 updated 列表
-            } else {
-                // 减少剩余 tick
-                updated.add(task.decrementTick());
+                // else: 一次性任务不重新加入
+            } else if (tasks.contains(task)) {
+                int idx = tasks.indexOf(task);
+                tasks.set(idx, task.decrementTick());
             }
         }
-        SCHEDULED.put(entity.getUUID(), updated);
     }
 
     // ==================== 任务记录 ====================
@@ -115,14 +115,11 @@ public final class HealthModificationScheduler {
         boolean repeat
     ) {
         public ScheduledModification decrementTick() {
-            int newRemaining = remainingTicks - 1;
-            if (newRemaining <= 0 && repeat) {
-                return new ScheduledModification(
-                    taskId, modifier, intervalTicks, intervalTicks, true
-                );
-            }
+            // 只减到 0：可重复任务的重新武装由 tick() 的 run 分支完成。
+            // 修复：旧实现 newRemaining<=0 && repeat 时直接重置回 interval，
+            // 导致 repeating 任务 remaining 永远 ≥1、modifier 永不执行。
             return new ScheduledModification(
-                taskId, modifier, Math.max(0, newRemaining), intervalTicks, repeat
+                taskId, modifier, Math.max(0, remainingTicks - 1), intervalTicks, repeat
             );
         }
     }

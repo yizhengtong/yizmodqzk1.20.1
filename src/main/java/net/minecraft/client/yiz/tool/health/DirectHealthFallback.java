@@ -33,6 +33,9 @@ public final class DirectHealthFallback {
     private static final Method ON_SYNCED_DATA_UPDATED;
     private static final boolean AVAILABLE;
 
+    /** DataItem.value 字段（类型擦除后为 Object；按类型找，双名/混淆免疫）。 */
+    private static final Field DATA_ITEM_VALUE_FIELD = findDataItemValueField();
+
     /** delta 通道 accessor id（1.20.1 未注入 → -1）。 */
     public static final int DELTA_ACCESSOR_ID = initDeltaAccessorId();
 
@@ -138,6 +141,18 @@ public final class DirectHealthFallback {
 
     private DirectHealthFallback() {}
 
+    /** 按类型定位 {@code DataItem.value} 字段（非静态、类型为 Object —— 泛型 T 擦除）。 */
+    private static Field findDataItemValueField() {
+        try {
+            for (Field f : SynchedEntityData.DataItem.class.getDeclaredFields()) {
+                if (!java.lang.reflect.Modifier.isStatic(f.getModifiers()) && f.getType() == Object.class) {
+                    return f;
+                }
+            }
+        } catch (Throwable ignored) {}
+        return null;
+    }
+
     /** 对所有 Float DataItem 直接施加伤害（amount<0）。绕过所有方法覆盖，最终保底。 */
     public static void damageAll(LivingEntity entity, float amount) {
         if (!AVAILABLE) return;
@@ -196,6 +211,262 @@ public final class DirectHealthFallback {
             }
         });
         return found[0];
+    }
+
+    // ==================== 通用数值 / 字符串 DataItem（P0：非 Float 血量通道） ====================
+
+    @FunctionalInterface
+    public interface NumericItemCallback {
+        void accept(EntityDataAccessor<?> accessor, Number value, SynchedEntityData.DataItem<?> item);
+    }
+
+    @FunctionalInterface
+    public interface StringItemCallback {
+        void accept(EntityDataAccessor<?> accessor, String value, SynchedEntityData.DataItem<?> item);
+    }
+
+    /** 遍历实体的 Float/Int/Long DataItem（血量数值通道的通用形态；1.20.1 无 Double 序列化器）。 */
+    public static void forEachNumericItem(LivingEntity entity, NumericItemCallback callback) {
+        if (!AVAILABLE || callback == null) return;
+        try {
+            List<SynchedEntityData.DataItem<?>> items = allDataItems(entity.getEntityData());
+            if (items == null) return;
+            for (SynchedEntityData.DataItem<?> item : items) {
+                if (item == null) continue;
+                EntityDataAccessor<?> accessor = item.getAccessor();
+                if (accessor == null) continue;
+                var ser = accessor.getSerializer();
+                if (ser != EntityDataSerializers.FLOAT && ser != EntityDataSerializers.INT
+                        && ser != EntityDataSerializers.LONG) continue;
+                Object value = item.getValue();
+                if (!(value instanceof Number n)) continue;
+                callback.accept(accessor, n, item);
+            }
+        } catch (Exception ignored) {}
+    }
+
+    /** 遍历实体的 String DataItem（P0：混淆串 / 前缀串血量通道）。 */
+    public static void forEachStringItem(LivingEntity entity, StringItemCallback callback) {
+        if (!AVAILABLE || callback == null) return;
+        try {
+            List<SynchedEntityData.DataItem<?>> items = allDataItems(entity.getEntityData());
+            if (items == null) return;
+            for (SynchedEntityData.DataItem<?> item : items) {
+                if (item == null) continue;
+                EntityDataAccessor<?> accessor = item.getAccessor();
+                if (accessor == null) continue;
+                if (accessor.getSerializer() != EntityDataSerializers.STRING) continue;
+                Object value = item.getValue();
+                if (!(value instanceof String s)) continue;
+                callback.accept(accessor, s, item);
+            }
+        } catch (Exception ignored) {}
+    }
+
+    /** 读取任意数值通道的当前值（找不到返回 null）。 */
+    public static Number readNumericChannel(LivingEntity entity, EntityDataAccessor<?> accessor) {
+        if (!AVAILABLE || accessor == null) return null;
+        Number[] out = {null};
+        forEachNumericItem(entity, (acc, value, item) -> {
+            if (acc.getId() == accessor.getId()) out[0] = value;
+        });
+        return out[0];
+    }
+
+    /** 直写任意数值通道的 DataItem 值（绕过 {@code set()}/{@code setHealth} 门）。
+     *  @param markDirty 是否标记 dirty（探测传 false；正式写传 true） */
+    public static boolean setNumericChannelValue(LivingEntity entity, EntityDataAccessor<?> accessor,
+                                                 Number value, boolean markDirty) {
+        if (!AVAILABLE || accessor == null || value == null) return false;
+        boolean[] found = {false};
+        forEachNumericItem(entity, (acc, cur, item) -> {
+            if (acc.getId() == accessor.getId()) {
+                Object coerced = coerceNumber(value, cur);
+                if (writeItemValue(item, coerced)) {
+                    if (markDirty) item.setDirty(true);
+                    found[0] = true;
+                }
+            }
+        });
+        if (found[0] && markDirty) {
+            markEntityDataDirty(entity);
+            notifySynced(entity, accessor);
+        }
+        return found[0];
+    }
+
+    /** 对任意数值通道施加伤害（{@code amount < 0}）。返回是否找到并修改。 */
+    public static boolean damageNumericChannel(LivingEntity entity, EntityDataAccessor<?> accessor, double amount) {
+        if (amount >= 0) return false;
+        Number cur = readNumericChannel(entity, accessor);
+        if (cur == null) return false;
+        double next = Math.max(0, cur.doubleValue() + amount);
+        return setNumericChannelValue(entity, accessor, coerceNumber(next, cur), true);
+    }
+
+    /**
+     * 对实体的所有 Int/Long DataItem 直接施加伤害（{@code amount < 0}；Float 走
+     * {@link #damageAll} / {@link #forEachFloatItem}，避免双重扣血）。
+     * 覆盖「血量存 INT/LONG 通道且未被定位器命中」的实体（1b 兜底）。
+     */
+    public static void damageAllNumericItems(LivingEntity entity, double amount) {
+        if (!AVAILABLE || amount >= 0) return;
+        try {
+            List<SynchedEntityData.DataItem<?>> items = allDataItems(entity.getEntityData());
+            boolean changed = false;
+            for (SynchedEntityData.DataItem<?> item : items) {
+                if (item == null) continue;
+                EntityDataAccessor<?> accessor = item.getAccessor();
+                if (accessor == null) continue;
+                var ser = accessor.getSerializer();
+                if (ser != EntityDataSerializers.INT && ser != EntityDataSerializers.LONG) continue;
+                Object v = item.getValue();
+                if (!(v instanceof Number n)) continue;
+                double next = Math.max(0, n.doubleValue() + amount);
+                if (writeItemValue(item, coerceNumber(next, n))) {
+                    item.setDirty(true);
+                    notifySynced(entity, accessor);
+                    changed = true;
+                }
+            }
+            if (changed) {
+                markEntityDataDirty(entity);
+            }
+        } catch (Exception ignored) {}
+    }
+
+    /** 把实体的所有 Int/Long DataItem 清零（死亡链播种用；Float 走 forEachFloatItem）。 */
+    public static void zeroAllNumericItems(LivingEntity entity) {
+        damageAllNumericItems(entity, -Double.MAX_VALUE);
+    }
+
+    /** 直写 String 通道的 DataItem 值（绕过 {@code set()}）。 */
+    public static boolean setStringChannelValue(LivingEntity entity, EntityDataAccessor<?> accessor,
+                                                String value, boolean markDirty) {
+        if (!AVAILABLE || accessor == null || value == null) return false;
+        boolean[] found = {false};
+        forEachStringItem(entity, (acc, cur, item) -> {
+            if (acc.getId() == accessor.getId()) {
+                if (writeItemValue(item, value)) {
+                    if (markDirty) item.setDirty(true);
+                    found[0] = true;
+                }
+            }
+        });
+        if (found[0] && markDirty) {
+            markEntityDataDirty(entity);
+            notifySynced(entity, accessor);
+        }
+        return found[0];
+    }
+
+    // ==================== Boolean DataItem（P0.5：门控探测/击穿用） ====================
+
+    @FunctionalInterface
+    public interface BooleanItemCallback {
+        void accept(EntityDataAccessor<Boolean> accessor, boolean value, SynchedEntityData.DataItem<?> item);
+    }
+
+    /** 遍历实体的所有 Boolean DataItem（门控/判死标记候选）。 */
+    public static void forEachBooleanItem(LivingEntity entity, BooleanItemCallback callback) {
+        if (!AVAILABLE || callback == null) return;
+        try {
+            List<SynchedEntityData.DataItem<?>> items = allDataItems(entity.getEntityData());
+            if (items == null) return;
+            for (SynchedEntityData.DataItem<?> item : items) {
+                if (item == null) continue;
+                EntityDataAccessor<?> accessor = item.getAccessor();
+                if (accessor == null || accessor.getSerializer() != EntityDataSerializers.BOOLEAN) continue;
+                Object value = item.getValue();
+                if (!(value instanceof Boolean b)) continue;
+                @SuppressWarnings("unchecked")
+                EntityDataAccessor<Boolean> boolAcc = (EntityDataAccessor<Boolean>) accessor;
+                callback.accept(boolAcc, b, item);
+            }
+        } catch (Exception ignored) {}
+    }
+
+    /** 读取 Boolean 通道当前值（找不到返回 null）。 */
+    public static Boolean readBooleanChannel(LivingEntity entity, EntityDataAccessor<Boolean> accessor) {
+        if (!AVAILABLE || accessor == null) return null;
+        Boolean[] out = {null};
+        forEachBooleanItem(entity, (acc, value, item) -> {
+            if (acc.getId() == accessor.getId()) out[0] = value;
+        });
+        return out[0];
+    }
+
+    /** 直写 Boolean 通道的 DataItem 值（绕过 {@code set()}）。 */
+    public static boolean setBooleanChannelValue(LivingEntity entity, EntityDataAccessor<Boolean> accessor,
+                                                 boolean value, boolean markDirty) {
+        if (!AVAILABLE || accessor == null) return false;
+        boolean[] found = {false};
+        forEachBooleanItem(entity, (acc, cur, item) -> {
+            if (acc.getId() == accessor.getId()) {
+                if (writeItemValue(item, value)) {
+                    if (markDirty) item.setDirty(true);
+                    found[0] = true;
+                }
+            }
+        });
+        if (found[0] && markDirty) {
+            markEntityDataDirty(entity);
+            notifySynced(entity, accessor);
+        }
+        return found[0];
+    }
+
+    /** 按引用值的类型把数值强制转换（Int/Long/Double/Float）。 */
+    private static Number coerceNumber(Number value, Object ref) {
+        double d = value.doubleValue();
+        if (ref instanceof Integer) return (int) Math.round(d);
+        if (ref instanceof Long) return (long) Math.round(d);
+        if (ref instanceof Double) return d;
+        if (ref instanceof Short) return (short) Math.round(d);
+        if (ref instanceof Byte) return (byte) Math.round(d);
+        return (float) d;
+    }
+
+    /** 写 DataItem 值：优先 {@code setValue}（擦除后为 Object），失败降级 Unsafe 直写 value 字段。 */
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static boolean writeItemValue(SynchedEntityData.DataItem<?> item, Object value) {
+        try {
+            SynchedEntityData.DataItem raw = item;   // 通配符捕获：转 raw 调擦除后 setValue(Object)
+            raw.setValue(value);
+            return true;
+        } catch (Throwable t) {
+            return writeItemValueUnsafe(item, value);
+        }
+    }
+
+    /** Unsafe 直写 {@code DataItem.value}（不触发任何 setValue/重写，栈上无反射帧）。 */
+    private static boolean writeItemValueUnsafe(SynchedEntityData.DataItem<?> item, Object value) {
+        try {
+            sun.misc.Unsafe u = net.minecraft.client.yiz.tool.key.UnsafeAccess.get();
+            if (u == null || DATA_ITEM_VALUE_FIELD == null) return false;
+            DATA_ITEM_VALUE_FIELD.setAccessible(true);
+            long off = u.objectFieldOffset(DATA_ITEM_VALUE_FIELD);
+            u.putObject(item, off, value);
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** 标记 SynchedEntityData dirty（内部 isDirty 字段）。 */
+    private static void markEntityDataDirty(LivingEntity entity) {
+        if (IS_DIRTY == null) return;
+        try {
+            IS_DIRTY.set(entity.getEntityData(), true);
+        } catch (Exception ignored) {}
+    }
+
+    /** 通知实体数据更新（onSyncedDataUpdated 反射调用，双名匹配）。 */
+    private static void notifySynced(LivingEntity entity, EntityDataAccessor<?> accessor) {
+        if (ON_SYNCED_DATA_UPDATED == null) return;
+        try {
+            ON_SYNCED_DATA_UPDATED.invoke(entity, accessor);
+        } catch (Exception ignored) {}
     }
 
     /**

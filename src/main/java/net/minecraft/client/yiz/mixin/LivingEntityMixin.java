@@ -208,6 +208,8 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
 
         entity.getEntityData().set(yizmodqzk$HEALTH_DELTA, 0F);
         net.minecraft.client.yiz.tool.health.EntityASMUtil.clearDreamAccum(entity); // 死亡清等比累积（防重生残留）
+        net.minecraft.client.yiz.tool.health.SustainedHealthSuppression.remove(entity);
+        net.minecraft.client.yiz.tool.health.GateHunt.remove(entity);
         HealthModificationScheduler.removeAll(entity);
         VitalitySeveranceConfig.remove(entity);
         net.minecraft.client.yiz.tool.health.ShieldTracker.remove(entity);
