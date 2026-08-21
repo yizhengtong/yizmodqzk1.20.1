@@ -37,7 +37,7 @@ public final class TotalHealthOverride {
      *
      * @return true 表示本次伤害已由管道处理；false 调用方应走旧链路
      */
-    public static boolean apply(LivingEntity attacker, LivingEntity entity, float amount) {
+    public static boolean apply(LivingEntity attacker, LivingEntity entity, double amount) {
         if (entity == null || amount <= 0) return false;
         if (entity.level().isClientSide()) return false;
         // 清除陈旧梦魇死亡累积 + 重置 delta 通道：
@@ -60,6 +60,13 @@ public final class TotalHealthOverride {
         // —— modify：主槽 + 镜像同步 + 门控击穿 + 正常死亡 + 写回验证 ——
         boolean any = modify(entity, target, current);
         if (!any) return false;
+        // 写回即时回读（限频，每类前 5 条）：判断伤害是否真落到权威值、还是被当 tick 覆盖。
+        if (READBACK_DIAG.add(entity.getClass().getName())) {
+            double readback = judgeCurrentHealth(entity);
+            LOGGER.info("[TotalOverride] {} 写后回读={} 目标={} {}",
+                entity.getClass().getName(), readback, target,
+                Math.abs(readback - target) < 1.0 ? "已落地" : "未落地(被覆盖)");
+        }
 
         smashGates(entity);
         if (target <= 0) {
@@ -157,9 +164,9 @@ public final class TotalHealthOverride {
 
         // 4. 静态藏血 Map（K=实体/ID/UUID、V=数值；unreflectSpecial 绕过写方法鉴权）
         try {
-            Float hp = HealthMapRegistry.readHealth(entity);
+            Double hp = HealthMapRegistry.readHealth(entity);
             if (hp != null) {
-                HealthMapRegistry.tamperHealth(entity, (float) target);
+                HealthMapRegistry.tamperHealth(entity, target);
                 any = true;
                 counts[3]++;
             }
@@ -284,4 +291,5 @@ public final class TotalHealthOverride {
 
     private static final org.slf4j.Logger LOGGER = net.minecraft.client.yiz.tizMod.LOGGER;
     private static final java.util.Set<String> WRITE_LOG = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private static final java.util.Set<String> READBACK_DIAG = java.util.concurrent.ConcurrentHashMap.newKeySet();
 }

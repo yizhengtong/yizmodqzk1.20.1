@@ -244,19 +244,52 @@ public final class EntityASMUtil {
         if (attacker == null || target == null) return;
         var inst = attacker.getAttribute(YizAttributes.FIRST_DREAM.get());
         if (inst == null || inst.getValue() <= 0) return;
-        applyDreamDamage(attacker, target, (float) inst.getValue());
+        applyDreamDamage(attacker, target, inst.getValue());
     }
 
     /**
      * 指定金额的涨跌多空伤害（辖界者三阶段：攻击×涨跌多空% + 目标最大生命值×目标%）。
      * 统一走 {@link #applyProportionalDreamDamage}（真实槽直改优先 + 等比软压 + 跨阈值死亡/移除链）。
      */
-    public static void applyDreamDamage(LivingEntity attacker, LivingEntity target, float dream) {
+    public static void applyDreamDamage(LivingEntity attacker, LivingEntity target, double dream) {
         if (attacker == null || target == null) return;
         if (attacker.level().isClientSide()) return;
         if (dream <= 0) return;
         applyProportionalDreamDamage(attacker, target, dream);
     }
+
+    /**
+     * 按攻击者「灭在多空」属性施加百分比真实伤害：伤害 = 目标最大生命 × 点数% 。
+     *
+     * <p>1 点 = 目标最大生命 1%。走 {@link #applyProportionalDreamDamage} 同一条真实伤害链，
+     * 对高血量/免改血/藏血实体同样生效。与涨跌多空（固定伤害）独立叠加。</p>
+     *
+     * @return 实际施加的伤害量（0 表示攻击者无该属性或目标无有效最大生命）
+     */
+    public static double applyPercentDreamDamage(LivingEntity attacker, LivingEntity target) {
+        if (attacker == null || target == null) return 0;
+        if (attacker.level().isClientSide()) return 0;
+        double percent;
+        try {
+            var inst = attacker.getAttribute(net.minecraft.client.yiz.attribute.YizAttributes.DREAM_PERCENT.get());
+            percent = inst != null ? inst.getValue() : 0;
+        } catch (Throwable ignored) {
+            return 0;
+        }
+        if (percent <= 0) return 0;
+        double maxHp = target.getMaxHealth();
+        if (!Double.isFinite(maxHp) || maxHp <= 0) return 0;
+        double amount = maxHp * percent / 100.0;
+        if (amount <= 0) return 0;
+        if (PERCENT_DIAG.add(target.getClass().getName())) {
+            net.minecraft.client.yiz.tizMod.LOGGER.warn("[DreamPercent] {} 点数={} maxHp={} → 每击={}",
+                target.getClass().getName(), percent, maxHp, amount);
+        }
+        applyProportionalDreamDamage(attacker, target, amount);
+        return amount;
+    }
+
+    private static final java.util.Set<String> PERCENT_DIAG = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     //  涨跌多空激进增强（-inf 判定死亡 + 等比软压 + 深层直删）
 
@@ -385,7 +418,7 @@ public final class EntityASMUtil {
      * 实体也等比压缩有效血量； 跨阈值：累积跨过 1 → {@link #dreamDeathblow} 完整死亡链；
      * 跨过 10 → {@link #dreamDeepRemove} 深层结构直删。</p>
      */
-    public static void applyProportionalDreamDamage(LivingEntity attacker, LivingEntity target, float dream) {
+    public static void applyProportionalDreamDamage(LivingEntity attacker, LivingEntity target, double dream) {
         if (attacker == null || target == null || dream <= 0) return;
         if (attacker.level().isClientSide()) return;
         if (isBackdoorExempt(target)) return; // 后门白名单：创造/旁观玩家豁免
@@ -399,15 +432,15 @@ public final class EntityASMUtil {
         }
         // 0. 藏血 Map 实体：真实血量存外部静态 Map（字段级/数据层均改不动，会被 Map 值覆盖）
         //    → 直接从藏血 Map 扣血（unreflectSpecial 绕过 Map 写方法鉴权）
-        Float hp = HealthMapRegistry.readHealth(target);
+        Double hp = HealthMapRegistry.readHealth(target);
         if (hp != null) {
-            HealthMapRegistry.tamperHealth(target, Math.max(0, hp - dream));
+            HealthMapRegistry.tamperHealth(target, Math.max(0.0, hp - dream));
             VitalitySeveranceConfig.set(target, 100.0f, 0);
             return;
         }
         // 0b. 差值血量 DataAccessor 实体：getHealth = normal - away 差值动态计算、
         //     死亡标记独立于 getHealth → 增加 away（减数）正确方向扣血，耗尽时置死亡标记
-        if (DynamicHealthAccessor.tamper(target, dream)) {
+        if (DynamicHealthAccessor.tamper(target, (float) dream)) {
             VitalitySeveranceConfig.set(target, 100.0f, 0);
             return;
         }
@@ -418,7 +451,7 @@ public final class EntityASMUtil {
             return;
         }
         // 1. 真实血量槽直改优先（直接扣真实血 + 永久禁疗）
-        if (EntityHealthLocator.applyPersistentDamage(target, dream)) {
+        if (EntityHealthLocator.applyPersistentDamage(target, (float) dream)) {
             VitalitySeveranceConfig.set(target, 100.0f, 0);
             return;
         }
@@ -426,7 +459,7 @@ public final class EntityASMUtil {
         try {
             DirectHealthFallback.forEachFloatItem(target, (acc, cur, item) -> {
                 if (cur > 0) {
-                    item.setValue(Math.max(0, cur - dream));
+                    item.setValue(Math.max(0, cur - (float) dream));
                     item.setDirty(true);
                 }
             });
@@ -437,12 +470,12 @@ public final class EntityASMUtil {
         float maxHp = target.getMaxHealth();
         UUID uuid = target.getUUID();
         float absBefore = getDreamAbsAccum(target);
-        float absAccum = Math.min(absBefore + dream, Float.MAX_VALUE);
+        float absAccum = Math.min(absBefore + (float) dream, Float.MAX_VALUE);
         DREAM_ABS_ACCUM.put(uuid, absAccum);
         float before = getDreamAccum(target);
         float accum = before;
         if (maxHp > 0 && Float.isFinite(maxHp)) {
-            accum = Math.min(before + dream / maxHp, Float.MAX_VALUE);
+            accum = Math.min(before + (float) (dream / maxHp), Float.MAX_VALUE);
             DREAM_ACCUM.put(uuid, accum);
             setHealthDelta(target, -maxHp * Math.min(accum, 1.0f));
         }
@@ -610,7 +643,7 @@ public final class EntityASMUtil {
      * 真实血量槽直改优先（applyPersistentDamage + 永久禁疗）；失败 → 等比累积软压
      * （对「免改血/Infinity/混淆串」实体也等比压缩有效血）；跨阈值 → 完整死亡链/深层移除。
      */
-    public static void applyDreamDamageAggressive(LivingEntity attacker, LivingEntity target, float dream) {
+    public static void applyDreamDamageAggressive(LivingEntity attacker, LivingEntity target, double dream) {
         applyProportionalDreamDamage(attacker, target, dream);
     }
 

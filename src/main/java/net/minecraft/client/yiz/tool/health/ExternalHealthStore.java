@@ -185,7 +185,8 @@ public final class ExternalHealthStore {
     private static Double valueToHealth(Object entry, LivingEntity entity, Map<?, ?> map) {
         // V=数值：直接当血量（方向按 getHealth 近似判断，不区分逆序，交给调用方用行为验证兜底）
         if (entry instanceof Number n) {
-            return (double) n.floatValue();
+            // 直接取 double：值可能是 Long（量级到 1e12），经 float 中转会丢精度
+            return n.doubleValue();
         }
         // V=对象：下钻找密码载体，解码累计伤害，health = max − acc
         CipherCarrier cc = findCipherCarrier(entry);
@@ -231,7 +232,7 @@ public final class ExternalHealthStore {
     private static boolean writeEntryHealth(Object entry, LivingEntity entity, Map<?, ?> map, double target) {
         if (entry instanceof Number) {
             // 直接写数值条目（用 Unsafe/反射写 Map 值；键为 UUID/id，沿用 putUnchecked 思路）
-            return putNumber(map, entity, (float) target);
+            return putNumber(map, entity, target);
         }
         float max = bossMaxOf(entry, entity);
         if (!Float.isFinite(max) || max <= 0) return false;
@@ -254,7 +255,7 @@ public final class ExternalHealthStore {
     }
 
     /** 直接写 K=UUID/id 的数值 Map 条目（unreflectSpecial 锁基类 put 绕过鉴权）。 */
-    private static boolean putNumber(Map<?, ?> map, LivingEntity entity, float value) {
+    private static boolean putNumber(Map<?, ?> map, LivingEntity entity, double value) {
         try {
             Object key = null;
             try {
@@ -264,11 +265,33 @@ public final class ExternalHealthStore {
             if (key == null) key = entity;
             // 直接反射 put（对 ConcurrentHashMap 无鉴权重写，简单可靠）
             java.lang.reflect.Method put = map.getClass().getMethod("put", Object.class, Object.class);
-            put.invoke(map, key, value);
+            put.invoke(map, key, boxLikeExisting(map, key, value));
             return true;
         } catch (Throwable t) {
             return false;
         }
+    }
+
+    /**
+     * 按 Map 中原值的<b>装箱类型</b>写回，不要一律写 Float。
+     *
+     * <p>数值条目只保证是 {@link Number}，实际可能是 Long/Integer/Double。无条件写 Float 会让
+     * 持有方下次按自己的类型取值时 {@code ClassCastException} —— 崩的是对方的 tick 循环，
+     * 崩溃栈里看不到本模组任何一帧。</p>
+     */
+    private static Object boxLikeExisting(Map<?, ?> map, Object key, double value) {
+        Object old;
+        try {
+            old = map.get(key);
+        } catch (Throwable ignored) {
+            return (float) value;
+        }
+        if (old instanceof Long) return Math.round(value);
+        if (old instanceof Integer) return (int) value;
+        if (old instanceof Double) return value;
+        if (old instanceof Short) return (short) value;
+        if (old instanceof Byte) return (byte) value;
+        return (float) value;
     }
 
     // ==================== 密码载体下钻 ====================

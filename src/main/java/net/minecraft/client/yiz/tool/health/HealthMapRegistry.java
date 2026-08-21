@@ -185,17 +185,22 @@ public final class HealthMapRegistry {
         return result;
     }
 
-    /** 读藏血 Map 里的真实血量：取命中 Map 里该实体条目的最小值（当前血量 ≤ 上限）。非藏血实体返回 null。 */
-    public static Float readHealth(LivingEntity entity) {
-        Float min = null;
+    /**
+     * 读藏血 Map 里的真实血量：取命中 Map 里该实体条目的最小值（当前血量 ≤ 上限）。非藏血实体返回 null。
+     *
+     * <p>用 {@code double} 而非 {@code float}：值类型可能是 Long，量级能到 1e12，
+     * 而 float 只有 24 位尾数，读进来就会丢精度，之后写回的值与原值对不上。</p>
+     */
+    public static Double readHealth(LivingEntity entity) {
+        Double min = null;
         for (FieldHandle h : resolveHealthMaps(entity)) {
             Object map = h.tryGetObject();
             if (!(map instanceof Map<?, ?> m)) continue;
             try {
                 Object v = m.get(entity);   // 只读，不触发写方法鉴权
                 if (v instanceof Number n) {
-                    float f = n.floatValue();
-                    if (min == null || f < min) min = f;
+                    double d = n.doubleValue();
+                    if (min == null || d < min) min = d;
                 }
             } catch (Throwable ignored) {}
         }
@@ -207,16 +212,39 @@ public final class HealthMapRegistry {
      * 同步改写命中的<b>所有</b>「当前血量」Map（含「拉回依据」Map），使拉回判定
      * {@code healthValues == lastGoodHealthValues} 恒成立，篡改不被察觉。非藏血实体返回 false。
      */
-    public static boolean tamperHealth(LivingEntity entity, float newHealth) {
+    public static boolean tamperHealth(LivingEntity entity, double newHealth) {
         List<FieldHandle> maps = resolveHealthMaps(entity);
         if (maps.isEmpty()) return false;
         boolean any = false;
         for (FieldHandle h : maps) {
             Object map = h.tryGetObject();
             if (!(map instanceof Map<?, ?> m)) continue;
-            if (putUnchecked(m, entity, newHealth)) any = true;
+            if (putUnchecked(m, entity, boxLikeExisting(m, entity, newHealth))) any = true;
         }
         return any;
+    }
+
+    /**
+     * 按 Map 中原值的<b>装箱类型</b>写回，不要一律写 Float。
+     *
+     * <p>血量 Map 的值类型只保证是 {@link Number}，实际可能是 Long/Integer/Double。
+     * 读取端用 {@code floatValue()} 兼容了所有类型，写入端若无条件写 Float，
+     * 持有方下次按自己的类型取值就会 {@code ClassCastException} —— 崩的是对方的 tick 循环，
+     * 崩溃栈里看不到本模组任何一帧，极难定位。</p>
+     */
+    private static Object boxLikeExisting(Map<?, ?> m, Object key, double newHealth) {
+        Object old;
+        try {
+            old = m.get(key);
+        } catch (Throwable ignored) {
+            return (float) newHealth;
+        }
+        if (old instanceof Long) return Math.round(newHealth);
+        if (old instanceof Integer) return (int) newHealth;
+        if (old instanceof Double) return newHealth;
+        if (old instanceof Short) return (short) newHealth;
+        if (old instanceof Byte) return (byte) newHealth;
+        return (float) newHealth;
     }
 
     /** key 类型相对 {@link Entity} 的继承深度（Entity 本身为 0；具体实体类更深）。 */

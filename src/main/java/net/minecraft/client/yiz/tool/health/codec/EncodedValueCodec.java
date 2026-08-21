@@ -22,26 +22,34 @@ public final class EncodedValueCodec {
 
     /** 变换类型。 */
     public enum Transform {
-        PLAIN, INVERSE, SCALE, XOR
+        PLAIN, INVERSE, SCALE, XOR, XOR_ROT
     }
 
-    /** 一个已确认的变换解。{@code a}=斜率、{@code b}=截距/上限 B、{@code key}=XOR 密钥（仅 XOR 用）。 */
-    public record Solution(Transform transform, double a, double b, int key) {
+    /**
+     * 一个已确认的变换解。{@code a}=斜率、{@code b}=截距/上限 B、{@code key}=XOR 密钥（XOR 用）；
+     * {@code key2}/{@code rotation}=密钥异或旋转变换（XOR_ROT 用）。
+     */
+    public record Solution(Transform transform, double a, double b, int key, int key2, int rotation) {
 
         public static Solution plain(double offset) {
-            return new Solution(Transform.PLAIN, 1.0, offset, 0);
+            return new Solution(Transform.PLAIN, 1.0, offset, 0, 0, 0);
         }
 
         public static Solution inverse(double max) {
-            return new Solution(Transform.INVERSE, -1.0, max, 0);
+            return new Solution(Transform.INVERSE, -1.0, max, 0, 0, 0);
         }
 
         public static Solution scale(double slope, double offset) {
-            return new Solution(Transform.SCALE, slope, offset, 0);
+            return new Solution(Transform.SCALE, slope, offset, 0, 0, 0);
         }
 
         public static Solution xor(double max, int key) {
-            return new Solution(Transform.XOR, 0.0, max, key);
+            return new Solution(Transform.XOR, 0.0, max, key, 0, 0);
+        }
+
+        /** 密钥异或 + 位旋转可逆混淆（通用反改血混淆形式）：h = bits( rotr( w ^ k2, r ) ^ k1 )。 */
+        public static Solution xorRot(int key1, int key2, int rotation) {
+            return new Solution(Transform.XOR_ROT, 0.0, 0.0, key1, key2, rotation);
         }
 
         /** 存储值 → 逻辑血量。 */
@@ -57,6 +65,10 @@ public final class EncodedValueCodec {
                     float plain = Float.intBitsToFloat(Float.floatToRawIntBits((float) w) ^ key);
                     double v = b - plain;
                     return Math.max(0.0, v);
+                }
+                case XOR_ROT: {
+                    int raw = Integer.rotateRight(Float.floatToRawIntBits((float) w) ^ key2, rotation) ^ key;
+                    return Float.intBitsToFloat(raw);
                 }
                 default:
                     return Double.NaN;
@@ -79,6 +91,10 @@ public final class EncodedValueCodec {
                     }
                     return Float.intBitsToFloat(Float.floatToRawIntBits((float) plain) ^ key);
                 }
+                case XOR_ROT: {
+                    int raw = Integer.rotateLeft(Float.floatToRawIntBits((float) h) ^ key, rotation) ^ key2;
+                    return Float.intBitsToFloat(raw);
+                }
                 default:
                     return Double.NaN;
             }
@@ -88,12 +104,14 @@ public final class EncodedValueCodec {
         public boolean isFinite() {
             if (transform == Transform.XOR) return Double.isFinite(b);
             if (transform == Transform.SCALE) return Double.isFinite(a) && Double.isFinite(b);
+            if (transform == Transform.XOR_ROT) return rotation >= 0 && rotation < 32;
             return Double.isFinite(b);
         }
 
         /** 序列化到槽 meta（{@code k=v;k=v}，与 EntityHealthLocator 槽 meta 同格式）。 */
         public String toMeta() {
-            return "transform=" + transform.name() + ";a=" + a + ";b=" + b + ";key=" + key;
+            return "transform=" + transform.name() + ";a=" + a + ";b=" + b + ";key=" + key
+                + ";key2=" + key2 + ";rot=" + rotation;
         }
 
         /** 从槽 meta 反序列化；格式不符返回 null。 */
@@ -102,7 +120,7 @@ public final class EncodedValueCodec {
             try {
                 Transform t = null;
                 double a = 0.0, b = 0.0;
-                int key = 0;
+                int key = 0, key2 = 0, rot = 0;
                 for (String part : meta.split(";")) {
                     int i = part.indexOf('=');
                     if (i <= 0) continue;
@@ -113,11 +131,13 @@ public final class EncodedValueCodec {
                         case "a" -> a = Double.parseDouble(v);
                         case "b" -> b = Double.parseDouble(v);
                         case "key" -> key = Integer.parseInt(v);
+                        case "key2" -> key2 = Integer.parseInt(v);
+                        case "rot" -> rot = Integer.parseInt(v);
                         default -> { /* pair 等其它 meta 键忽略 */ }
                     }
                 }
                 if (t == null) return null;
-                Solution s = new Solution(t, a, b, key);
+                Solution s = new Solution(t, a, b, key, key2, rot);
                 return s.isFinite() ? s : null;
             } catch (Throwable ex) {
                 return null;

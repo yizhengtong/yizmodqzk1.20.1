@@ -51,6 +51,7 @@ public class tizMod {
             e.add(player, YizAttributes.VITALITY_SEVERANCE_RATE.get());
             e.add(player, YizAttributes.VITALITY_SEVERANCE_TIME.get());
             e.add(player, YizAttributes.FIRST_DREAM.get());
+            e.add(player, YizAttributes.DREAM_PERCENT.get());
             e.add(player, YizAttributes.CONDUCTION_CAP.get());
             e.add(player, YizAttributes.SECURE_PULSE.get());
             // LivingEntityMixin 扩展属性

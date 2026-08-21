@@ -100,6 +100,11 @@ public final class YizAttributes {
         ATTRIBUTES.register("long_short",
             () -> new RangedAttribute("attribute.yizmodqzk.long_short", 0.0, 0.0, Double.MAX_VALUE).setSyncable(true));
 
+    /** 灭在多空 — 百分比真实伤害，值域 ≥0。1 点 = 目标最大生命 1%（走涨跌多空真实伤害链）。 */
+    public static final RegistryObject<Attribute> DREAM_PERCENT =
+        ATTRIBUTES.register("dream_percent",
+            () -> new RangedAttribute("attribute.yizmodqzk.dream_percent", 0.0, 0.0, Double.MAX_VALUE).setSyncable(true));
+
     /** 传导限伤上限(%) — 值域 ≥0。辖界者困难模板 25（每击上限 = maxHealth×cap%）。 */
     public static final RegistryObject<Attribute> CONDUCTION_CAP =
         ATTRIBUTES.register("conduction_cap",

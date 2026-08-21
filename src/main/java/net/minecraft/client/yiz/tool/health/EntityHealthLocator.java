@@ -70,6 +70,9 @@ public final class EntityHealthLocator {
 
     private static final Map<String, Field> FIELD_CACHE = new ConcurrentHashMap<>();
     private static final Map<String, HealthSlot> CACHE = new ConcurrentHashMap<>();
+    private static final Set<String> SS_CIPHER_DIAG = ConcurrentHashMap.newKeySet();
+    private static final java.util.concurrent.atomic.AtomicInteger SS_WRITE_DIAG2 = new java.util.concurrent.atomic.AtomicInteger();
+    private static final java.util.concurrent.atomic.AtomicInteger SS_STR_SCAN_DIAG = new java.util.concurrent.atomic.AtomicInteger();
     /** 已确认无槽的实体类（负缓存，避免每次攻击重复全量扫描；仅健康实例探测失败才入）。 */
     private static final Set<String> NON_SLOT_CLASSES = ConcurrentHashMap.newKeySet();
     /** 累加器配对字段缓存：主字段 → 镜像字段名（空串=无配对）。 */
@@ -242,6 +245,16 @@ public final class EntityHealthLocator {
                         return null;
                     }
                 }
+                case "sscipher": {
+                    EncodedValueCodec.Solution sol = effectiveSscipherSolution(slot, entity);
+                    if (sol == null) return null;
+                    String value = sscipherValue(entity);
+                    if (value == null) return null;
+                    int[] tok = extractTokenAfterHash(value, entity.getUUID().hashCode());
+                    if (tok == null) return null;
+                    double d = sol.decode(Float.intBitsToFloat(tok[0]));
+                    return Double.isFinite(d) ? d : null;
+                }
                 default: { // field
                     Field f = resolveField(slot);
                     if (f == null) return null;
@@ -308,6 +321,37 @@ public final class EntityHealthLocator {
                     if (acc == null) return false;
                     return DirectHealthFallback.setFloatChannelValue(entity, acc, (float) logical, true);
                 }
+                case "sscipher": {
+                    EncodedValueCodec.Solution sol = effectiveSscipherSolution(slot, entity);
+                    if (sol == null) return false;
+                    // 按 hash 值模式重新定位 accessor，不依赖缓存的 accessor id（每只隐藏类实体的
+                    // SS_HEALTH id 可能不同，缓存 id 会在「新召唤的实体」上失效 → 没效果）
+                    EntityDataAccessor<?> acc = findSscipherAccessor(entity);
+                    if (acc == null) return false;
+                    String value = stringValueById(entity, acc.getId());
+                    if (value == null) return false;
+                    // 每次按当前串 + hash 重新定位加密值位置（不依赖检测时缓存的 tokStart/tokEnd，
+                    // 防止目标自己重写串、位数变化后区间错位 → 「有时改得到实际位置有时改不到」）
+                    int[] tok = extractTokenAfterHash(value, entity.getUUID().hashCode());
+                    if (tok == null) return false;
+                    double encoded = sol.encode(logical);
+                    if (!Double.isFinite(encoded)) return false;
+                    int encInt = Float.floatToRawIntBits((float) encoded);
+                    // extractTokenAfterHash 返回 [值, start, end]，rebuildToken 需要 [start, end]
+                    String rebuilt = rebuildToken(value, new int[]{tok[1], tok[2]}, Integer.toString(encInt));
+                    boolean ok = setStringById(entity, acc.getId(), rebuilt);
+                    if (SS_WRITE_DIAG2.incrementAndGet() <= 8) {
+                        String after = stringValueById(entity, acc.getId());
+                        Double rb = null;
+                        if (after != null) {
+                            int[] tok2 = extractTokenAfterHash(after, entity.getUUID().hashCode());
+                            if (tok2 != null) rb = sol.decode(Float.intBitsToFloat(tok2[0]));
+                        }
+                        net.minecraft.client.yiz.tizMod.LOGGER.warn("[EHL-SSW2] accId={} 目标={} 写前串={} 编码int={} 重建串={} 写后串={} 回读血={} ok={}",
+                            acc.getId(), logical, value, encInt, rebuilt, after, rb, ok);
+                    }
+                    return ok;
+                }
                 default: { // field
                     Field f = resolveField(slot);
                     if (f == null) return false;
@@ -370,9 +414,47 @@ public final class EntityHealthLocator {
                 }
             });
             if (found[0] != null) return found[0];
-            // 字符串通道（前缀/后缀数值编码）
+            // 字符串通道（前缀/后缀数值编码 / 密钥异或+旋转可逆混淆）
+            // 注意：不共享数值通道的 probed 预算（加密藏血实体可能数值通道很多、先耗尽预算，
+            // 导致字符串检测被跳过 → 同一类实体「有的测得到有的测不到」）。
             DirectHealthFallback.forEachStringItem(entity, (acc, value, item) -> {
-                if (found[0] != null || probed[0] >= MAX_CHANNEL_PROBES) return;
+                if (found[0] != null) return;
+                // 通用可逆混淆检测：扫描串内每个有符号整数 token，用实体 UUID 哈希作候选密钥
+                // 做「密钥异或 + 位旋转」反解（黑箱推断，不依赖前缀/类名/字段名）。
+                int hash = entity.getUUID().hashCode();
+                java.util.List<int[]> tokens = scanIntTokens(value);
+                if (SS_STR_SCAN_DIAG.incrementAndGet() <= 5) {
+                    net.minecraft.client.yiz.tizMod.LOGGER.warn("[EHL-STRSCAN] {} value={} hash={} tokens={} maxHp={}",
+                        entity.getClass().getName(), value, hash, tokens.size(), maxHp);
+                }
+                for (int[] tok : tokens) {
+                    EncodedValueCodec.Solution sol =
+                        net.minecraft.client.yiz.tool.health.codec.BlackBoxInverseSolver.inferKeyedRotation(entity, tok[0], hash);
+                    if (sol == null) continue;
+                    if (SS_CIPHER_DIAG.add(entity.getClass().getName())) {
+                        net.minecraft.client.yiz.tizMod.LOGGER.warn("[EHL-CIPHER] {} value={} 命中token={} {}",
+                            entity.getClass().getName(), value, tok[0], sol.toMeta());
+                    }
+                    String fieldName = findAccessorFieldName(entity, acc);
+                    if (fieldName == null) fieldName = "#id:" + acc.getId();
+                    String meta = sol.toMeta() + ";tokStart=" + tok[1] + ";tokEnd=" + tok[2];
+                    found[0] = new HealthSlot(entity.getClass().getName(), fieldName, "string", false, "sscipher", meta);
+                    return;
+                }
+                // 无分隔符拼接（加密值为正数时哈希与加密值连成一个超长数字，scanIntTokens 会溢出跳过）：
+                // 用已知的哈希十进制串在 value 中定位，取其后的有符号整数作加密值。
+                int[] htok = extractTokenAfterHash(value, hash);
+                if (htok != null) {
+                    EncodedValueCodec.Solution sol =
+                        net.minecraft.client.yiz.tool.health.codec.BlackBoxInverseSolver.inferKeyedRotation(entity, htok[0], hash);
+                    if (sol != null) {
+                        String fieldName = findAccessorFieldName(entity, acc);
+                        if (fieldName == null) fieldName = "#id:" + acc.getId();
+                        String meta = sol.toMeta() + ";tokStart=" + htok[1] + ";tokEnd=" + htok[2];
+                        found[0] = new HealthSlot(entity.getClass().getName(), fieldName, "string", false, "sscipher", meta);
+                        return;
+                    }
+                }
                 double[] parsed = parseNumberFromString(value);
                 if (parsed == null) return;
                 if (parsed[0] < 0 || parsed[0] > maxHp * 1.5f) return;
@@ -686,6 +768,29 @@ public final class EntityHealthLocator {
     private static EntityDataAccessor<Float> resolveAccessor(HealthSlot slot) {
         try {
             Class<?> c = Class.forName(slot.className());
+            // 字段名匹配失败时的兜底：按访问器 id 定位（fieldName 形如 "#id:<n>"）
+            if (slot.fieldName() != null && slot.fieldName().startsWith("#id:")) {
+                int wantId;
+                try {
+                    wantId = Integer.parseInt(slot.fieldName().substring(4));
+                } catch (NumberFormatException ignored) {
+                    return null;
+                }
+                for (Class<?> cl = c; cl != null && cl != Object.class; cl = cl.getSuperclass()) {
+                    for (Field f : cl.getDeclaredFields()) {
+                        if (!Modifier.isStatic(f.getModifiers())) continue;
+                        if (!EntityDataAccessor.class.isAssignableFrom(f.getType())) continue;
+                        try {
+                            f.setAccessible(true);
+                            Object v = f.get(null);
+                            if (v instanceof EntityDataAccessor<?> acc && acc.getId() == wantId) {
+                                return (EntityDataAccessor<Float>) acc;
+                            }
+                        } catch (Exception ignored) {}
+                    }
+                }
+                return null;
+            }
             for (Class<?> cl = c; cl != null && cl != Object.class; cl = cl.getSuperclass()) {
                 try {
                     Field f = cl.getDeclaredField(slot.fieldName());
@@ -715,6 +820,148 @@ public final class EntityHealthLocator {
     }
 
     // ==================== 字符串数值解析 ====================
+
+    /**
+     * 加密串藏血槽的通用解密/加密（XOR + rotate 可逆变换）。
+     *
+     * <p>存储格式为 {@code <前缀><hash>-<加密值>}，其中 {@code <hash>} 是实体 UUID 的 hashCode 的
+     * 十进制文本，{@code <加密值>} 是对血量做可逆混淆后的有符号十进制。这类实体同时把
+     * {@code setHealth} 写成空方法（绕普通改血），真实血量只经此加密串进出。解密只依赖
+     * 「字符串尾部的有符号整数」与实体 UUID，不依赖任何具体类名。</p>
+     */
+    /** 从槽 fieldName（形如 "#id:<n>"）解析访问器 id；失败返回 -1。 */
+    private static int accessorIdFromSlot(HealthSlot slot) {
+        String fn = slot.fieldName();
+        if (fn != null && fn.startsWith("#id:")) {
+            try {
+                return Integer.parseInt(fn.substring(4));
+            } catch (NumberFormatException ignored) {}
+        }
+        return -1;
+    }
+
+    /** 用当前实体的 UUID 哈希重新推导 XOR_ROT 密钥（只复用缓存的旋转量；密钥每实体不同，不能缓存）。 */
+    private static EncodedValueCodec.Solution effectiveSscipherSolution(HealthSlot slot, LivingEntity entity) {
+        EncodedValueCodec.Solution cached = EncodedValueCodec.Solution.fromMeta(slot.meta());
+        if (cached == null) return null;
+        int hash = entity.getUUID().hashCode();
+        return EncodedValueCodec.Solution.xorRot(hash, -hash, cached.rotation());
+    }
+
+    /** 按「串内含 UUID 哈希 + 后跟有符号整数」通用特征找加密藏血槽的访问器（不认前缀/类名/字段名/id）。 */
+    private static EntityDataAccessor<?> findSscipherAccessor(LivingEntity entity) {
+        int hash = entity.getUUID().hashCode();
+        final EntityDataAccessor<?>[] found = {null};
+        DirectHealthFallback.forEachStringItem(entity, (acc, value, item) -> {
+            if (found[0] == null && extractTokenAfterHash(value, hash) != null) found[0] = acc;
+        });
+        return found[0];
+    }
+
+    /** 读取加密藏血槽的当前字符串值（按「串内含哈希 + 有符号整数」定位，不依赖缓存的 accessor id）。 */
+    private static String sscipherValue(LivingEntity entity) {
+        int hash = entity.getUUID().hashCode();
+        final String[] val = {null};
+        DirectHealthFallback.forEachStringItem(entity, (acc, value, item) -> {
+            if (val[0] == null && extractTokenAfterHash(value, hash) != null) val[0] = value;
+        });
+        return val[0];
+    }
+
+    /** 按访问器 id 读字符串通道值（遍历实际 DataItem，不依赖反射/类名）。 */
+    private static String stringValueById(LivingEntity entity, int accId) {
+        final String[] cur = {null};
+        DirectHealthFallback.forEachStringItem(entity, (a, v, item) -> {
+            if (cur[0] == null && a.getId() == accId) cur[0] = v;
+        });
+        return cur[0];
+    }
+
+    /** 按访问器 id 写字符串通道值。 */
+    private static boolean setStringById(LivingEntity entity, int accId, String value) {
+        final EntityDataAccessor<?>[] acc = {null};
+        DirectHealthFallback.forEachStringItem(entity, (a, v, item) -> {
+            if (acc[0] == null && a.getId() == accId) acc[0] = a;
+        });
+        return acc[0] != null && DirectHealthFallback.setStringChannelValue(entity, acc[0], value, true);
+    }
+
+    /** 从槽 meta 解析 token 区间 [start, end)；缺失返回 null。 */
+    private static int[] tokenRangeFromMeta(String meta) {
+        int start = -1, end = -1;
+        if (meta != null) {
+            for (String part : meta.split(";")) {
+                int i = part.indexOf('=');
+                if (i <= 0) continue;
+                String k = part.substring(0, i);
+                String v = part.substring(i + 1);
+                try {
+                    if (k.equals("tokStart")) start = Integer.parseInt(v);
+                    else if (k.equals("tokEnd")) end = Integer.parseInt(v);
+                } catch (NumberFormatException ignored) {}
+            }
+        }
+        return (start >= 0 && end > start) ? new int[]{start, end} : null;
+    }
+
+    /** 解析串内 [start, end) 处的有符号整数；失败返回 null。 */
+    private static Integer parseIntToken(String value, int[] tok) {
+        try {
+            if (value == null || tok[0] < 0 || tok[1] > value.length()) return null;
+            return Integer.parseInt(value.substring(tok[0], tok[1]).trim());
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    /** 用已知哈希十进制串在 value 中定位，取其后的有符号整数（处理无分隔符拼接的情况）。 */
+    private static int[] extractTokenAfterHash(String value, int hash) {
+        if (value == null) return null;
+        String hashStr = Integer.toString(hash);
+        int idx = value.indexOf(hashStr);
+        if (idx < 0) return null;
+        int start = idx + hashStr.length();
+        if (start >= value.length()) return null;
+        int end = start;
+        char c0 = value.charAt(start);
+        if (c0 == '-' || c0 == '+') end++;
+        while (end < value.length() && Character.isDigit(value.charAt(end))) end++;
+        if (end <= start || (end == start + 1 && (c0 == '-' || c0 == '+'))) return null;
+        try {
+            int enc = Integer.parseInt(value.substring(start, end));
+            return new int[]{enc, start, end};
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /** 扫描字符串内所有有符号十进制整数 token，返回 {值, 起点, 终点} 列表。 */
+    private static java.util.List<int[]> scanIntTokens(String s) {
+        java.util.List<int[]> out = new java.util.ArrayList<>();
+        if (s == null || s.isEmpty()) return out;
+        int n = s.length();
+        int i = 0;
+        while (i < n) {
+            if (Character.isDigit(s.charAt(i)) || ((s.charAt(i) == '-' || s.charAt(i) == '+')
+                    && i + 1 < n && Character.isDigit(s.charAt(i + 1)))) {
+                int start = i;
+                i++;
+                while (i < n && Character.isDigit(s.charAt(i))) i++;
+                try {
+                    out.add(new int[]{Integer.parseInt(s.substring(start, i)), start, i});
+                } catch (NumberFormatException ignored) {}
+            } else {
+                i++;
+            }
+        }
+        return out;
+    }
+
+    /** 用新整数字面量替换串内 [start, end) 区间。 */
+    private static String rebuildToken(String value, int[] tok, String newInt) {
+        if (value == null || tok[0] < 0 || tok[1] > value.length()) return value;
+        return value.substring(0, tok[0]) + newInt + value.substring(tok[1]);
+    }
 
     /**
      * 从字符串解析数值：支持「前缀+数值」（如 {@code HEC0.0}）与「数值+后缀」（如 {@code 12HP}）。
