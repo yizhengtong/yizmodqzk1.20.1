@@ -112,7 +112,19 @@ public final class ExternalHealthStore {
                     if (!isEntityKey(f.getGenericType())) continue;
                     try {
                         f.setAccessible(true);
-                        Object v = f.get(null);
+                        // 用 Unsafe 读静态字段，避免 Field.get(null) 触发声明类 <clinit>：
+                        // 反射 get 会 ensureClassInitialized，把 Registrate 等第三方库的 <clinit> 引爆
+                        // （其 <clinit> 里 ObfuscationReflectionHelper 找 LootContextParamSets.REGISTRY 失败
+                        // → NoSuchFieldException / NoClassDefFoundError）。Unsafe 读绕过类初始化。
+                        Object v;
+                        sun.misc.Unsafe u = UnsafeAccess.get();
+                        if (u != null) {
+                            Object base = u.staticFieldBase(f);
+                            long offset = u.staticFieldOffset(f);
+                            v = u.getObject(base, offset);
+                        } else {
+                            v = f.get(null);
+                        }
                         if (v instanceof Map<?, ?> map) out.add(map);
                     } catch (Throwable ignored) {}
                 }
