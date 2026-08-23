@@ -38,8 +38,8 @@ public abstract class SynchedEntityDataMixin {
             at = @At("HEAD"), cancellable = true)
     private <T> void yizmodqzk$onSet(EntityDataAccessor<T> accessor, T value, boolean force, CallbackInfo ci) {
         int id = accessor.getId();
-        boolean obf = id == HealthChannels.SECURE_OBF.getId();
-        boolean key = id == HealthChannels.SECURE_OBF_KEY.getId();
+        boolean obf = id == HealthChannels.getSecureObf().getId();
+        boolean key = id == HealthChannels.getSecureObfKey().getId();
         if ((obf || key) && !SecureHealthClosure.isObfWriteAllowed()) {
             ci.cancel();
         }

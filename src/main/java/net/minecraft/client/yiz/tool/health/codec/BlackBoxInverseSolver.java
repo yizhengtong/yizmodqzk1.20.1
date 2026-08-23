@@ -6,6 +6,10 @@ import net.minecraft.world.entity.ai.attributes.AttributeMap;
 import net.minecraft.world.entity.ai.attributes.Attributes;
 
 import java.lang.reflect.Field;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -166,48 +170,59 @@ public final class BlackBoxInverseSolver {
         return Math.max(1.0, Math.min(d, hd));
     }
 
-    // ==================== XOR 推断 ====================
+    // ==================== XOR_ROT 密钥候选 + 反推求解 ====================
+
+    /** 密钥候选：具体 int 值 + 来源（用于跨实体重推与元数据序列化）。 */
+    public record KeyCandidate(int value, EncodedValueCodec.KeySource source) {}
 
     /**
-     * 密钥异或 + 位旋转可逆混淆推断（通用反改血混淆形式）：
-     * {@code h = bits( rotr( enc ^ k2, r ) ^ k1 )}，密钥取自实体身份（UUID 哈希及其负值）。
-     *
-     * <p>密钥候选 {@code {0, hash, -hash}}、旋转 {@code r ∈ [0,32)}，暴力匹配当前
-     * (enc, h) 后以「编码往返还原」二次确认，避免多候选假阳性。不依赖任何类名/字段名/前缀。</p>
-     *
-     * @param enc  存储的加密整数（从字符串/字段提取）
-     * @param hash 实体 UUID 哈希（候选密钥源）
-     * @return 确认的 XOR_ROT 解；无法确认返回 null
+     * 从实体身份特征派生通用密钥候选集（去重、确定性顺序）。
+     * 候选值来自 {@link EncodedValueCodec.KeySource#resolve}，不再硬编码 {@code {0, hash, -hash}}。
      */
-    public static EncodedValueCodec.Solution inferKeyedRotation(LivingEntity entity, int enc, int hash) {
-        if (entity == null) return null;
-        try {
-            double h = entity.getHealth();
-            if (!Double.isFinite(h) || h < 0 || h > 1.0e9) return null;
-            int raw = Float.floatToRawIntBits((float) h);
-            int[] keys = {0, hash, -hash};
-            for (int k1 : keys) {
-                for (int k2 : keys) {
-                    for (int r = 0; r < 32; r++) {
-                        if ((Integer.rotateRight(enc ^ k2, r) ^ k1) != raw) continue;
-                        EncodedValueCodec.Solution sol = EncodedValueCodec.Solution.xorRot(k1, k2, r);
-                        double w = sol.encode(h);
-                        if (Double.isFinite(w) && Float.floatToRawIntBits((float) w) == enc) {
-                            return sol;
-                        }
-                    }
-                }
-            }
-            // 诊断：无匹配时记录，帮助定位为何黑箱推断失败
-            if (KR_DIAG.add(entity.getClass().getName())) {
-                net.minecraft.client.yiz.tizMod.LOGGER.warn("[KR] {} getHealth={} enc={} hash={} raw={} 无匹配",
-                    entity.getClass().getName(), h, enc, hash, raw);
-            }
-        } catch (Throwable ignored) {}
-        return null;
+    public static List<KeyCandidate> deriveKeyCandidates(LivingEntity entity) {
+        List<KeyCandidate> out = new ArrayList<>();
+        if (entity == null) return out;
+        LinkedHashSet<Integer> seen = new LinkedHashSet<>();
+        for (EncodedValueCodec.KeySource src : EncodedValueCodec.KeySource.values()) {
+            try {
+                int v = src.resolve(entity);
+                if (seen.add(v)) out.add(new KeyCandidate(v, src));
+            } catch (Throwable ignored) {}
+        }
+        return out;
     }
 
-    private static final java.util.Set<String> KR_DIAG = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /**
+     * 纯求解 XOR_ROT 密钥（软预筛，不确认）：枚举 r(32) × 每个候选 k1，k2 由公式
+     * {@code k2 = enc ^ rotl(raw ^ k1, r)} 唯一反推，k2 命中候选集则产出候选解。
+     *
+     * <p>注意：「编码往返验证」是数学冗余（等式成立时 encode(h)==enc 恒成立），不能当假阳性
+     * 过滤器；满血实体上 raw==maxHealth bits 会使 k2 坍缩为 enc。权威确认必须由调用方用
+     * 独立写探针（写 → 读 getHealth → 还原）完成，本方法只做软预筛。</p>
+     *
+     * @param enc        存储的加密整数（从字符串 token 提取）
+     * @param raw        逻辑血量的 {@code floatToRawIntBits}
+     * @param candidates 密钥候选集（{@link #deriveKeyCandidates}）
+     * @return 候选解列表（可能为空）；每个解携带密钥源 keySrc1/keySrc2
+     */
+    public static List<EncodedValueCodec.Solution> solveKeyedRotation(
+            int enc, int raw, List<KeyCandidate> candidates) {
+        List<EncodedValueCodec.Solution> out = new ArrayList<>();
+        if (candidates == null || candidates.isEmpty()) return out;
+        Map<Integer, EncodedValueCodec.KeySource> byValue = new HashMap<>();
+        for (KeyCandidate c : candidates) {
+            byValue.putIfAbsent(c.value(), c.source());  // value 去重后唯一，保留确定性顺序首个源
+        }
+        for (int r = 0; r < 32; r++) {
+            for (KeyCandidate k1 : candidates) {
+                int k2 = enc ^ Integer.rotateLeft(raw ^ k1.value(), r);
+                EncodedValueCodec.KeySource k2src = byValue.get(k2);
+                if (k2src == null) continue;
+                out.add(EncodedValueCodec.Solution.xorRotKeyed(k1.source(), k2src, r, k1.value(), k2));
+            }
+        }
+        return out;
+    }
 
     /**
      * XOR 候选：B 取 AttributeMap 中 MAX_HEALTH 基值（绕过 getAttribute 换柱/覆盖），
@@ -264,7 +279,7 @@ public final class BlackBoxInverseSolver {
      * （反射 map 字段，绕过实体对 {@code getAttribute(MAX_HEALTH)} 的换柱/覆盖），
      * 失败回退 {@code getMaxHealth()}。
      */
-    private static double maxHealthBase(LivingEntity entity) {
+    public static double maxHealthBase(LivingEntity entity) {
         try {
             AttributeMap map = entity.getAttributes();
             if (map != null) {

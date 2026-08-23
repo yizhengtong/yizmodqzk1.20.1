@@ -47,7 +47,7 @@ public final class SecureHealthClosure {
     public static boolean hasObfStorage(LivingEntity entity) {
         if (entity == null) return false;
         try {
-            return entity.getEntityData().hasItem(HealthChannels.SECURE_OBF);
+            return entity.getEntityData().hasItem(HealthChannels.getSecureObf());
         } catch (Throwable t) {
             return false;
         }
@@ -95,8 +95,8 @@ public final class SecureHealthClosure {
             }
             beginObfWrite();
             try {
-                int key = entity.getEntityData().get(HealthChannels.SECURE_OBF_KEY);
-                entity.getEntityData().set(HealthChannels.SECURE_OBF, FloatObf.enc(last, key));
+                int key = entity.getEntityData().get(HealthChannels.getSecureObfKey());
+                entity.getEntityData().set(HealthChannels.getSecureObf(), FloatObf.enc(last, key));
             } finally {
                 endObfWrite();
             }
@@ -242,8 +242,8 @@ public final class SecureHealthClosure {
                 if (DirectHealthFallback.VANILLA_HEALTH_ACCESSOR != null) {
                     v = entity.getEntityData().get(DirectHealthFallback.VANILLA_HEALTH_ACCESSOR);
                 } else {
-                    String enc = entity.getEntityData().get(HealthChannels.SECURE_OBF);
-                    int key = entity.getEntityData().get(HealthChannels.SECURE_OBF_KEY);
+                    String enc = entity.getEntityData().get(HealthChannels.getSecureObf());
+                    int key = entity.getEntityData().get(HealthChannels.getSecureObfKey());
                     v = FloatObf.dec(enc, key);
                 }
                 if (Float.isNaN(v) || Float.isInfinite(v)) return 0;
@@ -255,8 +255,8 @@ public final class SecureHealthClosure {
                 float obf = Float.NaN;
                 if (DirectHealthFallback.VANILLA_HEALTH_ACCESSOR != null) {
                     try {
-                        obf = FloatObf.dec(entity.getEntityData().get(HealthChannels.SECURE_OBF),
-                            entity.getEntityData().get(HealthChannels.SECURE_OBF_KEY));
+                        obf = FloatObf.dec(entity.getEntityData().get(HealthChannels.getSecureObf()),
+                            entity.getEntityData().get(HealthChannels.getSecureObfKey()));
                     } catch (Throwable ignored) { obf = Float.NaN; }
                 }
                 String br;
@@ -308,8 +308,8 @@ public final class SecureHealthClosure {
         if (v != null) return v;
         // 表未初始化兜底：读串
         try {
-            String enc = entity.getEntityData().get(HealthChannels.SECURE_OBF);
-            int key = entity.getEntityData().get(HealthChannels.SECURE_OBF_KEY);
+            String enc = entity.getEntityData().get(HealthChannels.getSecureObf());
+            int key = entity.getEntityData().get(HealthChannels.getSecureObfKey());
             float sv = FloatObf.dec(enc, key);
             if (Float.isNaN(sv) || Float.isInfinite(sv)) return 0;
             if (sv < 0) return entity.getMaxHealth(); // 哨兵 enc(-1) 未初始化 → 按满血（生成竞态窗口不判死）
@@ -339,8 +339,8 @@ public final class SecureHealthClosure {
         Float v = AUTHORITY_TABLE.get(entity.getUUID());
         if (v == null) return;
         try {
-            int key = entity.getEntityData().get(HealthChannels.SECURE_OBF_KEY);
-            String enc = entity.getEntityData().get(HealthChannels.SECURE_OBF);
+            int key = entity.getEntityData().get(HealthChannels.getSecureObfKey());
+            String enc = entity.getEntityData().get(HealthChannels.getSecureObf());
             float obf = FloatObf.dec(enc, key);
             // 诊断：表值 vs 串值不一致 = 外部注入 直写混淆串痕迹（本 tick 内被改）
             if (!Float.isNaN(obf) && Math.abs(obf - v) > 0.5f && DRIFT_LOG.incrementAndGet() <= 20) {
@@ -349,7 +349,7 @@ public final class SecureHealthClosure {
             }
             beginObfWrite();
             try {
-                entity.getEntityData().set(HealthChannels.SECURE_OBF, FloatObf.enc(v, key));
+                entity.getEntityData().set(HealthChannels.getSecureObf(), FloatObf.enc(v, key));
             } finally {
                 endObfWrite();
             }
@@ -366,8 +366,8 @@ public final class SecureHealthClosure {
     private static void logDecFailOnce(LivingEntity entity, Throwable t) {
         if (DEC_FAIL_LOG.incrementAndGet() > 5) return;
         try {
-            int k = entity.getEntityData().get(HealthChannels.SECURE_OBF_KEY);
-            String e = entity.getEntityData().get(HealthChannels.SECURE_OBF);
+            int k = entity.getEntityData().get(HealthChannels.getSecureObfKey());
+            String e = entity.getEntityData().get(HealthChannels.getSecureObf());
             StringBuilder sb = new StringBuilder();
             StackTraceElement[] st = Thread.currentThread().getStackTrace();
             for (int i = 3; i < Math.min(st.length, 10); i++) sb.append("\n    ").append(st[i]);
@@ -422,8 +422,8 @@ public final class SecureHealthClosure {
                 StringBuilder sb = new StringBuilder();
                 StackTraceElement[] st = Thread.currentThread().getStackTrace();
                 for (int i = 2; i < Math.min(st.length, 14); i++) sb.append("\n    ").append(st[i]);
-                int k = entity.getEntityData().get(HealthChannels.SECURE_OBF_KEY);
-                String e = entity.getEntityData().get(HealthChannels.SECURE_OBF);
+                int k = entity.getEntityData().get(HealthChannels.getSecureObfKey());
+                String e = entity.getEntityData().get(HealthChannels.getSecureObf());
                 net.minecraft.client.yiz.tizMod.LOGGER.warn("[SecureHealthClosure] 大幅扣串[{}] {} -> {} (uuid={} hasObfStorage={} key={} 串={}):{}",
                     Thread.currentThread().getName(), old, value, entity.getUUID(),
                     hasObfStorage(entity), k, e.length() > 12 ? e.substring(0, 12) : e, sb);
@@ -432,10 +432,10 @@ public final class SecureHealthClosure {
         AUTHORITY_TABLE.put(entity.getUUID(), value);   // 服务端权威表（逻辑血量唯一来源，外部注入 直写串不影响）
         logSetCall(entity, value);   // 诊断：写表调用方（定位 外部注入 是否直调 setHealth）
         try {
-            int key = entity.getEntityData().get(HealthChannels.SECURE_OBF_KEY);
+            int key = entity.getEntityData().get(HealthChannels.getSecureObfKey());
             beginObfWrite();
             try {
-                entity.getEntityData().set(HealthChannels.SECURE_OBF, FloatObf.enc(value, key));
+                entity.getEntityData().set(HealthChannels.getSecureObf(), FloatObf.enc(value, key));
             } finally {
                 endObfWrite();
             }
@@ -461,10 +461,10 @@ public final class SecureHealthClosure {
         removeIntegrity(entity.getUUID());                          // 清完整性记录（防回滚）
         AUTHORITY_TABLE.put(entity.getUUID(), value);               // 服务端权威表（无 clamp）
         try {
-            int key = entity.getEntityData().get(HealthChannels.SECURE_OBF_KEY);
+            int key = entity.getEntityData().get(HealthChannels.getSecureObfKey());
             beginObfWrite();
             try {
-                entity.getEntityData().set(HealthChannels.SECURE_OBF, FloatObf.enc(value, key));
+                entity.getEntityData().set(HealthChannels.getSecureObf(), FloatObf.enc(value, key));
             } finally {
                 endObfWrite();
             }

@@ -68,7 +68,7 @@ public final class DirectHealthFallback {
     private static int initDeltaAccessorId() {
         try {
             // delta 通道改从独立 holder 读取（不再反射 LivingEntity 上的 mixin @Unique 字段）
-            return HealthChannels.DELTA_HEALTH.getId();
+            return HealthChannels.getDeltaHealth().getId();
         } catch (Exception e) {
             return -1;
         }

@@ -13,8 +13,7 @@
     "YizLevelInvoker",
     "YizServerLevelAccessor",
     "ItemStackMaxSizeMixin",
-    "SlotMaxStackSizeMixin",
-    "ContainerMaxStackSizeMixin"
+    "SlotMaxStackSizeMixin"
   ],
   "client": [
   ],

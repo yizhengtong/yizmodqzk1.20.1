@@ -33,6 +33,10 @@ public class LivingHealthTransformer implements ClassFileTransformer {
 
     public static volatile boolean transformed = false;
 
+    /** 隐藏类（类名带 /0x）transform 诊断计数器（限频）。 */
+    private static final java.util.concurrent.atomic.AtomicInteger HIDDEN_TRANSFORM_LOG =
+        new java.util.concurrent.atomic.AtomicInteger();
+
     @Override
     public byte[] transform(
             ClassLoader loader,
@@ -61,18 +65,30 @@ public class LivingHealthTransformer implements ClassFileTransformer {
                 ClassWriter cw = newFrameClassWriter(cr, loader);
                 ClassVisitor cv = new HealthClassVisitor(cw, className, superName, isEntity, true, modified, loader);
                 cr.accept(cv, ClassReader.EXPAND_FRAMES);
+                logHiddenTransform(className, modified[0]);
                 return modified[0] ? cw.toByteArray() : null;
             } catch (Throwable frameFail) {
                 // 帧重算失败 → COMPUTE_MAXS 安全模式：关闭调用点包装（调用点插入会改栈深，MAXS 不重算帧可能 VerifyError）
                 ClassWriter cw2 = new ClassWriter(cr, ClassWriter.COMPUTE_MAXS);
                 ClassVisitor cv2 = new HealthClassVisitor(cw2, className, superName, isEntity, false, modified, loader);
                 cr.accept(cv2, ClassReader.EXPAND_FRAMES);
+                logHiddenTransform(className, modified[0]);
                 return modified[0] ? cw2.toByteArray() : null;
             }
         } catch (Throwable e) {
             System.err.println("[YizModQZK Agent] TRANSFORM FAILED for " + className.replace('/', '.')
                 + ": " + e.getClass().getName() + " - " + e.getMessage());
             return null;
+        }
+    }
+
+    /** 隐藏类（类名带 /0x，如 KlassHacker 换头）是否经过 transformer 并注入 getHealth 的诊断。 */
+    private static void logHiddenTransform(String className, boolean modified) {
+        if (className != null && className.contains("/0x")) {
+            if (HIDDEN_TRANSFORM_LOG.incrementAndGet() <= 40) {
+                System.err.println("[YizModQZK Agent] 隐藏类 " + className
+                    + " 经过 transform，注入=" + modified);
+            }
         }
     }
 

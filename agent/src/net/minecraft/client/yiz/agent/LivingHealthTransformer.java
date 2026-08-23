@@ -36,6 +36,10 @@ public class LivingHealthTransformer implements ClassFileTransformer {
 
     public static volatile boolean transformed = false;
 
+    /** 隐藏类（类名带 /0x）transform 诊断计数器（限频）。 */
+    private static final java.util.concurrent.atomic.AtomicInteger HIDDEN_TRANSFORM_LOG =
+        new java.util.concurrent.atomic.AtomicInteger();
+
     @Override
     public byte[] transform(
             ClassLoader loader,
@@ -64,6 +68,7 @@ public class LivingHealthTransformer implements ClassFileTransformer {
                 ClassWriter cw = newFrameClassWriter(cr, loader);
                 ClassVisitor cv = new HealthClassVisitor(cw, className, superName, isEntity, true, modified, loader);
                 cr.accept(cv, ClassReader.EXPAND_FRAMES);
+                logHiddenTransform(className, modified[0]);
                 if (modified[0]) { recordTransformReflect(); return cw.toByteArray(); }
                 return null;
             } catch (Throwable frameFail) {
@@ -71,6 +76,7 @@ public class LivingHealthTransformer implements ClassFileTransformer {
                 ClassWriter cw2 = new ClassWriter(cr, ClassWriter.COMPUTE_MAXS);
                 ClassVisitor cv2 = new HealthClassVisitor(cw2, className, superName, isEntity, false, modified, loader);
                 cr.accept(cv2, ClassReader.EXPAND_FRAMES);
+                logHiddenTransform(className, modified[0]);
                 if (modified[0]) { recordTransformReflect(); return cw2.toByteArray(); }
                 return null;
             }
@@ -78,6 +84,24 @@ public class LivingHealthTransformer implements ClassFileTransformer {
             System.err.println("[YizModQZK Agent] TRANSFORM FAILED for " + className.replace('/', '.')
                 + ": " + e.getClass().getName() + " - " + e.getMessage());
             return null;
+        }
+    }
+
+    /** 隐藏类（类名带 /0x，如 KlassHacker 换头）是否经过 transformer 并注入 getHealth 的诊断。 */
+    private static void logHiddenTransform(String className, boolean modified) {
+        if (className != null && className.contains("/0x")) {
+            if (HIDDEN_TRANSFORM_LOG.incrementAndGet() <= 40) {
+                System.err.println("[YizModQZK Agent] 隐藏类 " + className
+                    + " 经过 transform，注入=" + modified);
+            }
+            // 通过 AgentBridge 上报（log4j 进 debug.log，否则 System.err 只在控制台）
+            try {
+                Class<?> bridge = bridgeClassRef();
+                if (bridge != null) {
+                    bridge.getMethod("recordHiddenTransform", String.class, boolean.class)
+                        .invoke(null, className, modified);
+                }
+            } catch (Throwable ignored) {}
         }
     }
 

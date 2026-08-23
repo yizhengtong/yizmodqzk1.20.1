@@ -44,8 +44,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 public abstract class LivingEntityMixin implements HealthDataBridge, ControlDataBridge {
 
     // ==================== DataParameter 定义 ====================
-    // delta 通道：定义在 tool/health/HealthChannels.DELTA_HEALTH（独立 holder，vanilla 字段引用由
-    // 本模组 reobf 正确映射）。本 @Unique 字段用 = HealthChannels.DELTA_HEALTH 初始化——
+    // delta 通道：定义在 tool/health/HealthChannels.getDeltaHealth()（独立 holder，vanilla 字段引用由
+    // 本模组 reobf 正确映射）。本 @Unique 字段用 = HealthChannels.getDeltaHealth() 初始化——
     // 让该初始化代码在 LivingEntity.<clinit>（Bootstrap 期）触发 HealthChannels 提前 defineId，
     // 保证 ID 早于 Player 等实体 accessor 分配（避免懒加载进世界时 ID 冲突）。
     //  不能在这里直接 SynchedEntityData.defineId(...EntityDataSerializers.FLOAT)：vanilla 字段引用
@@ -53,7 +53,7 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
 
     @Unique
     private static final EntityDataAccessor<Float> yizmodqzk$HEALTH_DELTA =
-        net.minecraft.client.yiz.tool.health.HealthChannels.DELTA_HEALTH;
+        net.minecraft.client.yiz.tool.health.HealthChannels.getDeltaHealth();
 
     /** SPELL 伤害类型——临时卸下的抗性效果（hurt 后恢复） */
     @Unique

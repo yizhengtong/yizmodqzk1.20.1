@@ -339,6 +339,8 @@ public final class EntityASMUtil {
 
     private static final ConcurrentHashMap<UUID, Float> DREAM_ABS_ACCUM = new ConcurrentHashMap<>();
 
+    private static final java.util.concurrent.atomic.AtomicInteger DREAM_ACCUM_DIAG = new java.util.concurrent.atomic.AtomicInteger();
+
     private static final float DREAM_ABS_DEATH = 1000f;
     private static final float DREAM_ABS_REMOVE = 10000f;
 
@@ -483,6 +485,12 @@ public final class EntityASMUtil {
                 || (absBefore < DREAM_ABS_DEATH && absAccum >= DREAM_ABS_DEATH);
         boolean remove = (before < 10 && accum >= 10)
                 || (absBefore < DREAM_ABS_REMOVE && absAccum >= DREAM_ABS_REMOVE);
+        // 诊断（限频）：确认累积 + death 判定，定位大贤者（隐藏类/AES）改不动是哪一环
+        if (DREAM_ACCUM_DIAG.incrementAndGet() <= 40) {
+            net.minecraft.client.yiz.tizMod.LOGGER.warn(
+                "[DreamAccum] {} maxHp={} dream={} before={} accum={} death={} remove={}",
+                target.getClass().getName(), maxHp, dream, before, accum, death, remove);
+        }
         if (death) {
             dreamDeathblow(attacker, target);
         } else if (remove) {
@@ -515,8 +523,15 @@ public final class EntityASMUtil {
     private static void finishDeathblow(LivingEntity attacker, LivingEntity target) {
         if (target == null || target.isRemoved() || target.level().isClientSide()) return;
         try {
-            setHealthDelta(target, Float.NEGATIVE_INFINITY);
-            target.setHealth(Float.NEGATIVE_INFINITY);
+            // 绕开 SynchedEntityData.set 直写 delta + 原版血量通道：set 会触发第三方 Boss 模组
+            // （village_mod 大贤者 / omnimobs / Ashes 等）的 SynchedEntityDataMixin，其 flag 操作把
+            // DATA_SHARED_FLAGS_ID(Byte) 写成 Boolean → 后续 vanilla 读 boolean 通道 Byte→Boolean 崩溃
+            // （与下方「补 hurt」注释同款坑）。DirectHealthFallback.setFloatChannelValue 走
+            // DataItem.setValue，不触发 SynchedEntityData.set，故不触发第三方 mixin。
+            DirectHealthFallback.setFloatChannelValue(target, HealthChannels.getDeltaHealth(),
+                Float.NEGATIVE_INFINITY, true);
+            DirectHealthFallback.setFloatChannelValue(target, DirectHealthFallback.VANILLA_HEALTH_ACCESSOR,
+                Float.NEGATIVE_INFINITY, true);
             net.minecraft.client.yiz.tool.health.EntityActuallyHurt.catchSetTrueHealth(target, Float.NEGATIVE_INFINITY);
             DirectHealthFallback.forEachFloatItem(target, (acc, cur, item) -> {
                 item.setValue(0.0F);
@@ -530,21 +545,8 @@ public final class EntityASMUtil {
                     : target.damageSources().genericKill();
             target.getCombatTracker().recordDamage(ds, Float.MAX_VALUE);
         } catch (Throwable ignored) {}
-        // 主动补一次受击：部分模组把「血≤阈值→进死亡状态机→掉落/移除」挂在受击事件(LivingHurtEvent)上，
-        // 纯直写血不走受击，模组自己的死亡检测不会跑 → 补一次小伤害让模组受击/死亡检测正常运行。
-        try {
-            if (!DEATHBLOW_HURT.get()) {
-                DEATHBLOW_HURT.set(true);
-                try {
-                    DamageSource dsHurt = attacker != null
-                            ? target.damageSources().mobAttack(attacker)
-                            : target.damageSources().genericKill();
-                    target.hurt(dsHurt, 1.0F);
-                } finally {
-                    DEATHBLOW_HURT.set(false);
-                }
-            }
-        } catch (Throwable ignored) {}
+        // （已移除"补 hurt"：village_mod 大贤者死亡时补 hurt 会触发其 SynchedEntityDataMixin 的 flag 操作，
+        // 把神圣悦灵的 DATA_SHARED_FLAGS_ID(Byte) 写成 Boolean → 渲染崩溃。Trial onSoulDeath 不补 hurt，不崩。）
         try {
             DamageSource dsDie = attacker != null
                     ? target.damageSources().mobAttack(attacker) : target.damageSources().genericKill();
@@ -560,7 +562,10 @@ public final class EntityASMUtil {
                 dropAllDeathLootReflect(target, ds2);
             } catch (Throwable ignored) {}
         }
-        if (target.isDeadOrDying() && !target.isRemoved()) {             //  kill() 兜底
+        //  kill() 兜底：判死用 isEntityDead（读 dead 字段，die 反射已置 true），
+        // 不用 isDeadOrDying()——隐藏类（KlassHacker 换头）getHealth 恒返回原值，isDeadOrDying 恒 false
+        // 会导致 kill 兜底永远不触发（学 Trial onSoulDeath 无条件 kill）。
+        if (isEntityDead(target) && !target.isRemoved()) {
             try { target.kill(); } catch (Throwable ignored) {}
         }
         // die 后 onDie 清空了累积 → 重新置 1 保持判死（isAlive=false），否则实体"复活"被再次攻击，

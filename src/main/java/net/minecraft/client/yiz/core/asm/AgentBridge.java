@@ -27,6 +27,7 @@ public final class AgentBridge {
     private static volatile boolean agentTransformed = false;      // 至少一次 transform
     private static volatile boolean transformerRegistered = false; // addTransformer 成功
     private static final AtomicInteger transformCount = new AtomicInteger();
+    private static final AtomicInteger HIDDEN_LOG = new AtomicInteger();
     private static volatile String lastError = null;
 
     private AgentBridge() {}
@@ -55,6 +56,15 @@ public final class AgentBridge {
         agentTransformed = true;
         transformerRegistered = true;
         agentActive = true;
+    }
+
+    /** 记录隐藏类（类名带 /0x，如 KlassHacker 换头）transform 结果（诊断 getHealth 是否被注入）。 */
+    @SuppressWarnings("unused")
+    public static void recordHiddenTransform(String className, boolean injected) {
+        if (className == null || !className.contains("/0x")) return;
+        if (HIDDEN_LOG.incrementAndGet() <= 40) {
+            LOGGER.warn("[AgentBridge] 隐藏类 {} 经过 transform，注入={}", className, injected);
+        }
     }
 
     /** 记录加载/注册错误（静默失败检测用）。 */

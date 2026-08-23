@@ -40,11 +40,15 @@ public final class TotalHealthOverride {
     public static boolean apply(LivingEntity attacker, LivingEntity entity, double amount) {
         if (entity == null || amount <= 0) return false;
         if (entity.level().isClientSide()) return false;
-        // 清除陈旧梦魇死亡累积 + 重置 delta 通道：
+        // 差值血量实体（getHealth = 两个 Float 来源相减 + 独立死亡标记）交给 FSUB 判据处理：
+        // 全量直改只改一个分量、不改死亡标记，会误判「已落地」但实体不死 → 让路
+        if (DynamicHealthAccessor.detect(entity) != null) return false;
+        // 重置 delta 通道（不清 DREAM_ACCUM 累积）：
         // agent specialGetHealth/isAlive 按 delta 钳制读值；死亡链残留的 delta(-inf)
         // 会让 agent 包装的 getHealth 与存储真值不一致 → 模组每 tick 看门狗（按 getHealth
         // 推断血量）误判「被篡改」→ 把我们的写入拉回/重置。重置后 agent 读值即存储真值。
-        EntityASMUtil.clearDreamAccum(entity);
+        // 注意：不能 clearDreamAccum——大贤者等「隐藏类/AES 定位失败」实体靠 DREAM_ACCUM
+        // 持续累积到阈值触发 dreamDeathblow 死亡链，每次攻击清累积会让 accum 永远到不了 1。
         try {
             EntityASMUtil.setHealthDelta(entity, 0F);
         } catch (Throwable ignored) {}
@@ -60,12 +64,16 @@ public final class TotalHealthOverride {
         // —— modify：主槽 + 镜像同步 + 门控击穿 + 正常死亡 + 写回验证 ——
         boolean any = modify(entity, target, current);
         if (!any) return false;
-        // 写回即时回读（限频，每类前 5 条）：判断伤害是否真落到权威值、还是被当 tick 覆盖。
-        if (READBACK_DIAG.add(entity.getClass().getName())) {
-            double readback = judgeCurrentHealth(entity);
-            LOGGER.info("[TotalOverride] {} 写后回读={} 目标={} {}",
-                entity.getClass().getName(), readback, target,
-                Math.abs(readback - target) < 1.0 ? "已落地" : "未落地(被覆盖)");
+        // 写后回读验证（每次）：未落地说明改到的是误判字段（如 castCooldown），不是真实血量 →
+        // 返回 false 让调用方（applyProportionalDreamDamage）继续走到 DREAM_ACCUM 累积软压，
+        // 否则大贤者这类「定位误判」实体会卡在 TotalOverride 空转、永远到不了死亡链。
+        double readback = judgeCurrentHealth(entity);
+        if (Double.isFinite(readback) && Math.abs(readback - target) >= 1.0) {
+            if (READBACK_DIAG.add(entity.getClass().getName())) {
+                LOGGER.info("[TotalOverride] {} 写后回读={} 目标={} 未落地(误判槽) → 回退累积软压",
+                    entity.getClass().getName(), readback, target);
+            }
+            return false;
         }
 
         smashGates(entity);

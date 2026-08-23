@@ -3,7 +3,15 @@ package net.minecraft.client.yiz.tool.health;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.world.entity.LivingEntity;
+import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.tree.AbstractInsnNode;
+import org.objectweb.asm.tree.ClassNode;
+import org.objectweb.asm.tree.FieldInsnNode;
+import org.objectweb.asm.tree.MethodInsnNode;
+import org.objectweb.asm.tree.MethodNode;
 
+import java.io.InputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
@@ -45,13 +53,19 @@ public final class DynamicHealthAccessor {
     /** 检测目标是否为「差值血量」实体；是返回 Slot（缓存），否则 null。 */
     public static Slot detect(LivingEntity entity) {
         if (entity == null || entity.level().isClientSide()) return null;
-        String key = entity.getClass().getName();
+        String key = stableClassName(entity.getClass());
         Slot cached = CACHE.get(key);
         if (cached != null) return cached;
         if (NON_DYNAMIC.contains(key)) return null;
         // 已死/无血实例检测结果不可靠（doDetect 会短路返回 null），
         // 不要缓存为「非差值血量」，下次健康实例再检，避免首次检测污染该类缓存
         boolean unhealthy = entity.getHealth() <= 0 || entity.isDeadOrDying();
+        // 字节码静态判据优先：识别 getHealth = 两个 Float 来源相减（FSUB），不依赖 getHealth 运行时值
+        Slot bytecodeSlot = detectDifferenceByBytecode(entity);
+        if (bytecodeSlot != null) {
+            CACHE.put(key, bytecodeSlot);
+            return bytecodeSlot;
+        }
         Slot slot = doDetect(entity);
         if (slot != null) {
             CACHE.put(key, slot);
@@ -192,5 +206,129 @@ public final class DynamicHealthAccessor {
         } catch (Throwable t) {
             return false;
         }
+    }
+
+    // ==================== 字节码静态判据（不依赖 getHealth 运行时值） ====================
+
+    /**
+     * 字节码判据：分析 getHealth() 方法体，识别「两个 Float 来源相减（FSUB）」的差值血量结构，
+     * 方向由 FSUB 栈序确定（左=被减数/上限，右=减数/损失）。全程不读 getHealth 运行时值，
+     * 不被第三方 coremod 对 getHealth 的截断/改写干扰。
+     */
+    private static Slot detectDifferenceByBytecode(LivingEntity entity) {
+        try {
+            Class<?> clazz = entity.getClass();
+            ClassNode cn = readClassNode(clazz);
+            if (cn == null) return null;
+            MethodNode getHealth = findMethod(cn, "getHealth", "()F");
+            if (getHealth == null) getHealth = findMethod(cn, "m_21223_", "()F");
+            if (getHealth == null) return null;
+            // 找 FSUB 的两个操作数字段（[0]=被减数 normal，[1]=减数 away）
+            String[] fields = findFsubFieldSources(cn, getHealth);
+            if (fields == null) return null;
+            EntityDataAccessor<Float> normal = resolveAccessorByField(entity, fields[0]);
+            EntityDataAccessor<Float> away = resolveAccessorByField(entity, fields[1]);
+            if (normal == null || away == null) return null;
+            // 死亡标记仍用行为验证（isDeadOrDying 不被 coremod 截断）
+            List<Field> boolFields = new ArrayList<>();
+            collectAccessorFields(entity, new ArrayList<>(), boolFields);
+            EntityDataAccessor<Boolean> death = findDeathMarker(entity, boolFields);
+            return new Slot(away, normal, death);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private static ClassNode readClassNode(Class<?> clazz) {
+        try {
+            String internalName = clazz.getName().replace('.', '/');
+            InputStream in = clazz.getClassLoader().getResourceAsStream(internalName + ".class");
+            if (in == null) return null;
+            byte[] bytes = in.readAllBytes();
+            in.close();
+            ClassNode cn = new ClassNode();
+            new ClassReader(bytes).accept(cn, ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+            return cn;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private static MethodNode findMethod(ClassNode cn, String name, String desc) {
+        for (MethodNode m : cn.methods) {
+            if (name.equals(m.name) && desc.equals(m.desc)) return m;
+        }
+        return null;
+    }
+
+    /** 在 getHealth 方法体里找 FSUB，并往回扫两个「Float 来源」，返回 [被减数字段, 减数字段]。 */
+    private static String[] findFsubFieldSources(ClassNode cn, MethodNode m) {
+        AbstractInsnNode fsub = null;
+        for (AbstractInsnNode insn : m.instructions) {
+            if (insn.getOpcode() == Opcodes.FSUB) { fsub = insn; break; }
+        }
+        if (fsub == null) return null;
+        List<String> sources = new ArrayList<>();
+        for (AbstractInsnNode insn = fsub.getPrevious(); insn != null && sources.size() < 2; insn = insn.getPrevious()) {
+            String src = floatSourceOf(cn, insn);
+            if (src != null) sources.add(src);
+        }
+        if (sources.size() != 2) return null;
+        // sources[0] 更靠近 FSUB = 栈顶 = 减数；sources[1] 更远 = 栈底 = 被减数
+        return new String[]{sources.get(1), sources.get(0)};
+    }
+
+    /** 识别单条指令是否为「返回 Float 的来源」，是则返回其 DataAccessor 字段名。 */
+    private static String floatSourceOf(ClassNode cn, AbstractInsnNode insn) {
+        if (insn instanceof MethodInsnNode min) {
+            if (!min.desc.endsWith(")F")) return null;
+            return resolveGetterField(cn, min.name, min.desc);
+        }
+        if (insn instanceof FieldInsnNode fin && fin.getOpcode() == Opcodes.GETSTATIC) {
+            if (fin.desc.startsWith("Lnet/minecraft/network/syncher/EntityDataAccessor;")) {
+                return fin.name;
+            }
+        }
+        return null;
+    }
+
+    /** 递归解析 getter 方法，找其内部第一个读的 EntityDataAccessor 字段名。 */
+    private static String resolveGetterField(ClassNode cn, String getterName, String getterDesc) {
+        MethodNode getter = findMethod(cn, getterName, getterDesc);
+        if (getter == null) return null;
+        for (AbstractInsnNode insn : getter.instructions) {
+            if (insn.getOpcode() == Opcodes.GETSTATIC) {
+                FieldInsnNode fin = (FieldInsnNode) insn;
+                if (fin.desc.startsWith("Lnet/minecraft/network/syncher/EntityDataAccessor;")) {
+                    return fin.name;
+                }
+            }
+        }
+        return null;
+    }
+
+    /** 由字段名反射解析静态 EntityDataAccessor 字段。 */
+    private static EntityDataAccessor<Float> resolveAccessorByField(LivingEntity entity, String fieldName) {
+        for (Class<?> c = entity.getClass(); c != null && c != Object.class; c = c.getSuperclass()) {
+            try {
+                Field f = c.getDeclaredField(fieldName);
+                f.setAccessible(true);
+                Object v = f.get(null);
+                if (v instanceof EntityDataAccessor<?> acc
+                        && acc.getSerializer() == EntityDataSerializers.FLOAT) {
+                    @SuppressWarnings("unchecked")
+                    EntityDataAccessor<Float> fa = (EntityDataAccessor<Float>) acc;
+                    return fa;
+                }
+            } catch (Throwable ignored) {}
+        }
+        return null;
+    }
+
+    /** 隐藏类名（带 /0x 内存地址）→ 稳定父类名，普通类原样返回，作缓存 key。 */
+    private static String stableClassName(Class<?> c) {
+        String name = c.getName();
+        int slash = name.indexOf('/');
+        return slash > 0 ? name.substring(0, slash) : name;
     }
 }

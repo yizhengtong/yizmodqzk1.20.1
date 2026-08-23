@@ -137,7 +137,9 @@ public final class EntityAttributeGate {
 
     private static boolean isDecisiveFrame(Class<?> clazz) {
         String pkg = clazz.getPackageName();
-        if (pkg.equals(EntityAttributeGate.class.getPackageName())) return false;
+        // 跳过整个 tool 包（EntityAttributeGate/SecureHealthClosure 等工具类的帧不算「决定性调用者」，
+        // 否则外部直接调 SecureHealthClosure.setHealth 时第一个决定性帧是它自己 → 鉴权失效、绕过限伤）
+        if (pkg.startsWith("net.minecraft.client.yiz.tool")) return false;
         if (pkg.startsWith("net.minecraft.client.yiz.mixin")) return false;
         return !clazz.getName().equals(TARGET_CLASS);
     }
