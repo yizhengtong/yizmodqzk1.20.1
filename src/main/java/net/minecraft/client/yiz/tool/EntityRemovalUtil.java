@@ -200,7 +200,9 @@ public final class EntityRemovalUtil {
         // 3. 主动发 ClientboundRemoveEntitiesPacket（即使服务器内部已摘，也要让客户端知道实体没了）
         try {
             ClientboundRemoveEntitiesPacket packet = new ClientboundRemoveEntitiesPacket(entity.getId());
-            for (ServerPlayer player : level.players()) {
+            // 覆盖所有在线玩家（含死亡/重生切换中的玩家）：level.players() 在玩家死亡重生窗口
+            // 可能不含该玩家 → 移除包丢失 → 客户端残留实体模型。
+            for (ServerPlayer player : level.getServer().getPlayerList().getPlayers()) {
                 player.connection.send(packet);
             }
         } catch (Throwable ignored) {}
