@@ -134,6 +134,12 @@ public final class SecureHealthClosure {
      *  enforce 每 tick 用表值覆盖。仅服务端维护。 */
     private static final ProtectedHealthMap AUTHORITY_TABLE = new ProtectedHealthMap();
 
+    /** 受保护最大生命值权威表（独立于 vanilla MAX_HEALTH 属性）：
+     *  /attribute ... max_health base set 会直改 vanilla MAX_HEALTH 属性，若 getMaxHealth 直接读属性
+     *  会被篡改（进而 setHealth 的 clamp 把真实血量压到 1）。权威值 = 模板值 × 难度乘数，
+     *  由 applyVanillaDifficultyScale 经 setMaxHealth 记录；外部改属性不影响逻辑上限。 */
+    private static final java.util.Map<java.util.UUID, Float> AUTHORITATIVE_MAX = new java.util.concurrent.ConcurrentHashMap<>();
+
     /** 诊断：外部反射写权威表（限频前 20 次），打印调用栈定位 外部注入 用哪个方法绕过。 */
     private static final java.util.concurrent.atomic.AtomicInteger TABLE_REJECT_LOG = new java.util.concurrent.atomic.AtomicInteger();
 
@@ -376,9 +382,12 @@ public final class SecureHealthClosure {
         } catch (Throwable ignored) {}
     }
 
-    /** 受保护最大生命值：读 vanilla MAX_HEALTH 属性（由属性标准化守护/enforce 保护）。 */
+    /** 受保护最大生命值：优先读独立权威表（防 /attribute base set 直改 vanilla 属性穿透），
+     *  fallback 读 vanilla MAX_HEALTH 属性。 */
     public static float getMaxHealth(LivingEntity entity) {
         if (entity == null) return 20.0F;
+        Float auth = AUTHORITATIVE_MAX.get(entity.getUUID());
+        if (auth != null && auth > 0) return auth;
         var inst = entity.getAttribute(Attributes.MAX_HEALTH);
         return inst != null ? (float) inst.getValue() : 20.0F;
     }
@@ -410,9 +419,10 @@ public final class SecureHealthClosure {
         if (!requireTrusted("setHealth")) return;
         if (value < 0) value = 0;
         if (Float.isNaN(value)) value = 0;
-        // 不超 maxHp（secure 实体回血/直写不突破上限；getMaxHealth 走 MAX_HEALTH 属性）
+        // 不超 maxHp（secure 实体回血/直写不突破上限；必须走权威表 getMaxHealth 而非 entity.getMaxHealth——
+        // entity.getMaxHealth() 读 vanilla MAX_HEALTH 属性，/attribute base set 改属性后 clamp 会把血量压到 1）
         try {
-            float maxHp = entity.getMaxHealth();
+            float maxHp = SecureHealthClosure.getMaxHealth(entity);
             if (maxHp > 0 && value > maxHp) value = maxHp;
         } catch (Throwable ignored) {}
         //  临时诊断（排查"玩家打 -100 隐藏扣表"）：大幅扣串打印调用栈 + hasObfStorage/key/串
@@ -471,12 +481,21 @@ public final class SecureHealthClosure {
         } catch (Throwable ignored) {}
     }
 
-    /** 兼容旧 API：设最大生命（getMaxHealth 读属性，此处 no-op）。 */
-    public static void setMaxHealth(LivingEntity entity, float value) {}
+    /** 记录受保护最大生命值权威值（applyVanillaDifficultyScale 调用）。服务端 + 调用栈鉴权，
+     *  外部模组直调被拒。getMaxHealth 优先读此表，防 /attribute base set 改 vanilla 属性穿透。 */
+    public static void setMaxHealth(LivingEntity entity, float value) {
+        if (entity == null || value <= 0) return;
+        if (entity.level().isClientSide()) return;
+        if (!requireTrusted("setMaxHealth")) return;
+        AUTHORITATIVE_MAX.put(entity.getUUID(), value);
+    }
 
     /** 兼容旧 API：tick（无表可清，no-op）。 */
     public static void tick(LivingEntity entity) {}
 
-    /** 兼容旧 API：removeAll（无表可清，no-op）。 */
-    public static void removeAll(LivingEntity entity) {}
+    /** 实体移除时清理权威最大生命值表（LivingEntityMixin 移除路径调用）。 */
+    public static void removeAll(LivingEntity entity) {
+        if (entity == null) return;
+        AUTHORITATIVE_MAX.remove(entity.getUUID());
+    }
 }
