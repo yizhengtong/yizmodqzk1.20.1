@@ -13,9 +13,23 @@
     "YizLevelInvoker",
     "YizServerLevelAccessor",
     "ItemStackMaxSizeMixin",
-    "SlotMaxStackSizeMixin"
+    "SlotMaxStackSizeMixin",
+    "PlayerMovementMixin",
+    "PlayerJumpMixin",
+    "FallDamageMixin",
+    "BlockDestroyProgressMixin",
+    "BlockPlayerDestroyMixin",
+    "ServerDestroyBlockMixin",
+    "AttackInterceptorMixin",
+    "NoCollisionMixin",
+    "ProjectileHitMixin"
   ],
   "client": [
+    "LiquidBlockShapeMixin",
+    "ItemRendererStarMixin",
+    "LivingEntityRendererSurfaceLightningMixin",
+    "ClientMultiJumpMixin",
+    "ItemNbtTooltipMixin"
   ],
   "injectors": {
     "defaultRequire": 1

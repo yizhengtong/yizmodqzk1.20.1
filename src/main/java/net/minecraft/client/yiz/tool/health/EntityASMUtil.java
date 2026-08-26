@@ -853,4 +853,23 @@ public final class EntityASMUtil {
             });
         }
     }
+
+    // ==================== 不死（UNDYING）====================
+
+    private static final java.util.Map<java.util.UUID, Integer> UNDYING_CHARGES = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** 获取剩余复活次数（未初始化则返回 -1）。 */
+    public static int getUndyingCharges(java.util.UUID uuid) {
+        return UNDYING_CHARGES.getOrDefault(uuid, -1);
+    }
+
+    /** 消耗一次复活，返回剩余次数。 */
+    public static int consumeUndyingCharge(java.util.UUID uuid) {
+        return UNDYING_CHARGES.merge(uuid, -1, (old, v) -> Math.max(0, old - 1));
+    }
+
+    /** 重置复活次数到上限（玩家复活/登录时调用）。 */
+    public static void resetUndyingCharges(java.util.UUID uuid, int max) {
+        UNDYING_CHARGES.put(uuid, Math.max(0, max));
+    }
 }

@@ -282,6 +282,20 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
             if (!net.minecraft.client.yiz.core.StatusEffectDispatcher.DISPATCHING.get()) {
                 if (attacker instanceof net.minecraft.world.entity.player.Player pl) {
                     boolean vanillaCrit = net.minecraft.client.yiz.api.CritTracker.consume(pl);
+                    // 精准 + 暴击伤害：PRECISION>0 时非近战来源也按 CRIT_RATE 概率暴击，倍率 1.5 + CRIT_DAMAGE/100
+                    var precInst = pl.getAttribute(net.minecraft.client.yiz.attribute.YizAttributes.PRECISION.get());
+                    if (precInst != null && precInst.getValue() > 0 && !vanillaCrit) {
+                        double critRate = pl.getAttributeValue(net.minecraft.client.yiz.attribute.YizAttributes.CRIT_RATE.get());
+                        if (critRate > 0 && Math.random() < critRate / 100.0) {
+                            double critDmg = pl.getAttributeValue(net.minecraft.client.yiz.attribute.YizAttributes.CRIT_DAMAGE.get());
+                            amount *= (1.5f + (float)(critDmg / 100.0));
+                        }
+                    }
+                    // 原版暴击（1.5x 已 baked）：追加 CRIT_DAMAGE/150 使最终倍率 = 1.5 + CD/100
+                    if (vanillaCrit) {
+                        double critDmg = pl.getAttributeValue(net.minecraft.client.yiz.attribute.YizAttributes.CRIT_DAMAGE.get());
+                        if (critDmg > 0) amount *= (1.0f + (float)(critDmg / 150.0));
+                    }
                     float[] bonus = net.minecraft.client.yiz.handler.PostSkillAttackTracker.tryConsume(pl);
                     if (bonus != null) { amount += bonus[0]; pl.heal(bonus[1]); }
                 }
@@ -316,6 +330,14 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
             if (addSum > 0) amount *= (1.0F + addSum);
             var atkStr = attacker.getAttribute(YizAttributes.ATTACK_STRENGTH.get());
             if (atkStr != null && atkStr.getValue() > 0) amount *= (1.0F + (float)(atkStr.getValue() / 100.0));
+            // 护甲穿透：存下攻击者的百分比+固定穿透值，供目标 getArmorValue() 注入扣减
+            var penPctInst = attacker.getAttribute(YizAttributes.ARMOR_PENETRATION.get());
+            var penFlatInst = attacker.getAttribute(YizAttributes.ARMOR_PENETRATION_FLAT.get());
+            float penPct = penPctInst != null ? (float) penPctInst.getValue() : 0f;
+            float penFlat = penFlatInst != null ? (float) penFlatInst.getValue() : 0f;
+            if (penPct > 0 || penFlat > 0) {
+                net.minecraft.client.yiz.tool.health.EntityASMUtil.setArmorPenetration(penPct, penFlat);
+            }
         }
 
         // === 熔岩/火焰防护 ===
@@ -600,5 +622,31 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
             }
             cir.setReturnValue(Math.max(0, armor));
         }
+    }
+
+    // ==================== 不死（UNDYING，1.21.1 移植）====================
+
+    /** 注入图腾复活检查：UNDYING 属性驱动的不死复活（次数 = UNDYING 值）。 */
+    @Inject(method = "checkTotemDeathProtection", at = @At("RETURN"), cancellable = true)
+    private void yizmodqzk(net.minecraft.world.damagesource.DamageSource source,
+                                                       CallbackInfoReturnable<Boolean> cir) {
+        if (cir.getReturnValue()) return; // 图腾已复活
+        LivingEntity self = (LivingEntity) (Object) this;
+        var undyingInst = self.getAttribute(net.minecraft.client.yiz.attribute.YizAttributes.UNDYING.get());
+        if (undyingInst == null) return;
+        int max = (int) undyingInst.getValue();
+        if (max <= 0) return;
+
+        java.util.UUID uuid = self.getUUID();
+        int remaining = net.minecraft.client.yiz.tool.health.EntityASMUtil.getUndyingCharges(uuid);
+        if (remaining < 0) { // 首次使用，用属性值初始化
+            remaining = max;
+            net.minecraft.client.yiz.tool.health.EntityASMUtil.resetUndyingCharges(uuid, max);
+        }
+        if (remaining <= 0) return;
+
+        net.minecraft.client.yiz.tool.health.EntityASMUtil.consumeUndyingCharge(uuid);
+        self.setHealth(self.getMaxHealth());
+        cir.setReturnValue(true);
     }
 }

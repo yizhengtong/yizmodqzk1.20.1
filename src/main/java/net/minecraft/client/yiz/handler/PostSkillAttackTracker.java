@@ -47,15 +47,22 @@ public final class PostSkillAttackTracker {
 
     private static float computeDamage(Player player, ItemStack item) {
         float base = (float) readAttr(item, YizAttributes.DAMAGE_BASE);
+        float coeff = (float) readAttr(item, YizAttributes.DAMAGE_SPELL_COEFF);
         double spellPow = YizAttributes.getEffectiveSpellPower(player);
-        return (float)(base * spellPow / 100.0);
+        return (float)(base + spellPow * coeff / 100.0);
     }
 
     private static float computeHeal(Player player, ItemStack item) {
         float base = (float) readAttr(item, YizAttributes.HEAL_BASE);
         float hpCoeff = (float) readAttr(item, YizAttributes.HEAL_HP_COEFF);
+        float atkCoeff = (float) readAttr(item, YizAttributes.HEAL_ATK_COEFF);
+        float spellCoeff = (float) readAttr(item, YizAttributes.HEAL_SPELL_COEFF);
         float maxHp = player.getMaxHealth();
-        return base + maxHp * hpCoeff / 100f;
+        double atk = player.getAttributeValue(net.minecraft.world.entity.ai.attributes.Attributes.ATTACK_DAMAGE);
+        double spellPow = YizAttributes.getEffectiveSpellPower(player);
+        return base + maxHp * hpCoeff / 100f
+            + (float)(atk * atkCoeff / 100.0)
+            + (float)(spellPow * spellCoeff / 100.0);
     }
 
     /** 1.20.1：遍历所有槽位的 AttributeModifier Multimap 累加目标属性值。 */

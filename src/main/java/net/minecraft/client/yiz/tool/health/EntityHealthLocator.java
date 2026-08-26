@@ -291,12 +291,9 @@ public final class EntityHealthLocator {
                 case "sscipher": {
                     EncodedValueCodec.Solution sol = effectiveSscipherSolution(slot, entity);
                     if (sol == null) return null;
-                    float h = entity.getHealth();
-                    if (!Float.isFinite(h)) return null;
-                    int rawInt = Float.floatToRawIntBits(h);
-                    String value = sscipherValue(entity, sol, rawInt);
+                    String value = sscipherString(slot, entity, sol);
                     if (value == null) return null;
-                    int[] tok = locateSscipherToken(value, sol, rawInt);
+                    int[] tok = sscipherToken(slot, entity, sol, value);
                     if (tok == null) return null;
                     double d = sol.decode(Float.intBitsToFloat(tok[0]));
                     return Double.isFinite(d) ? d : null;
@@ -378,32 +375,36 @@ public final class EntityHealthLocator {
                 case "sscipher": {
                     EncodedValueCodec.Solution sol = effectiveSscipherSolution(slot, entity);
                     if (sol == null) return false;
-                    float curH = entity.getHealth();
-                    if (!Float.isFinite(curH)) return false;
-                    int rawInt = Float.floatToRawIntBits(curH);
-                    // 运行时等式匹配定位 accessor + token（不依赖缓存 accessor id / hash 文本）
-                    EntityDataAccessor<?> acc = findSscipherAccessor(entity, sol, rawInt);
-                    if (acc == null) return false;
-                    String value = stringValueById(entity, acc.getId());
+                    // 多重兼容定位：优先缓存 accessor id + token 区间，失效回退等式匹配（getHealth 可能是障眼值）
+                    String value = sscipherString(slot, entity, sol);
                     if (value == null) return false;
-                    int[] tok = locateSscipherToken(value, sol, rawInt);
+                    int[] tok = sscipherToken(slot, entity, sol, value);
                     if (tok == null) return false;
                     double encoded = sol.encode(logical);
                     if (!Double.isFinite(encoded)) return false;
                     int encInt = Float.floatToRawIntBits((float) encoded);
-                    // locateSscipherToken 返回 [值, start, end]，rebuildToken 需要 [start, end]
+                    // tok 返回 [值, start, end]，rebuildToken 需要 [start, end]
                     String rebuilt = rebuildToken(value, new int[]{tok[1], tok[2]}, Integer.toString(encInt));
-                    boolean ok = setStringById(entity, acc.getId(), rebuilt);
+                    int accId = accessorIdFromSlot(slot);
+                    boolean ok;
+                    if (accId >= 0) {
+                        ok = setStringById(entity, accId, rebuilt);
+                    } else {
+                        float h = entity.getHealth();
+                        EntityDataAccessor<?> acc = Float.isFinite(h)
+                                ? findSscipherAccessor(entity, sol, Float.floatToRawIntBits(h)) : null;
+                        ok = acc != null && setStringById(entity, acc.getId(), rebuilt);
+                    }
                     if (SS_WRITE_DIAG2.incrementAndGet() <= 8) {
-                        String after = stringValueById(entity, acc.getId());
+                        int diagId = accId >= 0 ? accId : -1;
+                        String after = diagId >= 0 ? stringValueById(entity, diagId) : null;
                         Double rb = null;
                         if (after != null) {
-                            int rawIntAfter = Float.floatToRawIntBits((float) logical);
-                            int[] tok2 = locateSscipherToken(after, sol, rawIntAfter);
+                            int[] tok2 = locateSscipherTokenByRange(slot, after);
                             if (tok2 != null) rb = sol.decode(Float.intBitsToFloat(tok2[0]));
                         }
                         net.minecraft.client.yiz.tizMod.LOGGER.warn("[EHL-SSW2] accId={} 目标={} 写前串={} 编码int={} 重建串={} 写后串={} 回读血={} ok={}",
-                            acc.getId(), logical, value, encInt, rebuilt, after, rb, ok);
+                            diagId, logical, value, encInt, rebuilt, after, rb, ok);
                     }
                     return ok;
                 }
@@ -483,7 +484,6 @@ public final class EntityHealthLocator {
                 if (found[0] != null) return;
                 // 通用可逆混淆检测：扫描串内每个有符号整数 token，用「实体身份特征派生的候选密钥集」
                 // 反解 XOR_ROT，再用写探针权威确认（不依赖前缀/类名/字段名，也不假设密钥 = UUID hash）。
-                int raw = Float.floatToRawIntBits(entity.getHealth());
                 java.util.List<BlackBoxInverseSolver.KeyCandidate> candidates =
                     BlackBoxInverseSolver.deriveKeyCandidates(entity);
                 java.util.List<int[]> tokens = scanIntTokens(value);
@@ -491,21 +491,27 @@ public final class EntityHealthLocator {
                     net.minecraft.client.yiz.tizMod.LOGGER.warn("[EHL-STRSCAN] {} value={} tokens={} maxHp={}",
                         stableClassName(entity.getClass()), value, tokens.size(), maxHp);
                 }
+                // 多重 plaintext 参考：getHealth 可能是障眼值（藏血实体），同时试 maxHealth（满血时
+                // token 解码 = maxHealth），写探针是最终权威确认，误配会被 verifySscipherFollows 打回
+                int[] rawRefs = { Float.floatToRawIntBits(entity.getHealth()),
+                                  Float.floatToRawIntBits(maxHp) };
                 for (int[] tok : tokens) {
-                    java.util.List<EncodedValueCodec.Solution> sols =
-                        BlackBoxInverseSolver.solveKeyedRotation(tok[0], raw, candidates);
-                    for (EncodedValueCodec.Solution sol : sols) {
-                        // 写探针权威确认（防满血坍缩/假阳性）
-                        if (!verifySscipherFollows(entity, acc, value, sol, tok)) continue;
-                        if (SS_CIPHER_DIAG.add(stableClassName(entity.getClass()))) {
-                            net.minecraft.client.yiz.tizMod.LOGGER.warn("[EHL-CIPHER] {} value={} 命中token={} {}",
-                                stableClassName(entity.getClass()), value, tok[0], sol.toMeta());
+                    for (int raw : rawRefs) {
+                        java.util.List<EncodedValueCodec.Solution> sols =
+                            BlackBoxInverseSolver.solveKeyedRotation(tok[0], raw, candidates);
+                        for (EncodedValueCodec.Solution sol : sols) {
+                            // 写探针权威确认（防满血坍缩/假阳性）
+                            if (!verifySscipherFollows(entity, acc, value, sol, tok)) continue;
+                            if (SS_CIPHER_DIAG.add(stableClassName(entity.getClass()))) {
+                                net.minecraft.client.yiz.tizMod.LOGGER.warn("[EHL-CIPHER] {} value={} 命中token={} {}",
+                                    stableClassName(entity.getClass()), value, tok[0], sol.toMeta());
+                            }
+                            String fieldName = findAccessorFieldName(entity, acc);
+                            if (fieldName == null) fieldName = "#id:" + acc.getId();
+                            String meta = sol.toMeta() + ";tokStart=" + tok[1] + ";tokEnd=" + tok[2];
+                            found[0] = new HealthSlot(stableClassName(entity.getClass()), fieldName, "string", false, "sscipher", meta);
+                            return;
                         }
-                        String fieldName = findAccessorFieldName(entity, acc);
-                        if (fieldName == null) fieldName = "#id:" + acc.getId();
-                        String meta = sol.toMeta() + ";tokStart=" + tok[1] + ";tokEnd=" + tok[2];
-                        found[0] = new HealthSlot(stableClassName(entity.getClass()), fieldName, "string", false, "sscipher", meta);
-                        return;
                     }
                 }
                 double[] parsed = parseNumberFromString(value);
@@ -985,6 +991,35 @@ public final class EntityHealthLocator {
             if (dec == rawInt) return tok;
         }
         return null;
+    }
+
+    /** 按缓存的 tokStart/tokEnd 定位 token（不依赖 getHealth/等式匹配，最稳；跨实体血量变化也有效）。 */
+    private static int[] locateSscipherTokenByRange(HealthSlot slot, String value) {
+        int[] range = tokenRangeFromMeta(slot.meta());
+        if (range == null) return null;
+        Integer v = parseIntToken(value, range);
+        return v == null ? null : new int[]{v, range[0], range[1]};
+    }
+
+    /** 读 sscipher 槽当前字符串：优先缓存 accessor id（#id:N），失效回退按 getHealth 等式匹配。 */
+    private static String sscipherString(HealthSlot slot, LivingEntity entity, EncodedValueCodec.Solution sol) {
+        int id = accessorIdFromSlot(slot);
+        if (id >= 0) {
+            String v = stringValueById(entity, id);
+            if (v != null) return v;
+        }
+        float h = entity.getHealth();
+        if (!Float.isFinite(h)) return null;
+        return sscipherValue(entity, sol, Float.floatToRawIntBits(h));
+    }
+
+    /** 定位 sscipher 槽当前加密 token：优先缓存 tokStart/tokEnd，失效回退等式匹配。 */
+    private static int[] sscipherToken(HealthSlot slot, LivingEntity entity, EncodedValueCodec.Solution sol, String value) {
+        int[] byRange = locateSscipherTokenByRange(slot, value);
+        if (byRange != null) return byRange;
+        float h = entity.getHealth();
+        if (!Float.isFinite(h)) return null;
+        return locateSscipherToken(value, sol, Float.floatToRawIntBits(h));
     }
 
     /** 按访问器 id 读字符串通道值（遍历实际 DataItem，不依赖反射/类名）。 */

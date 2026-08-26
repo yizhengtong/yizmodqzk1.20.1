@@ -1,0 +1,9 @@
+{
+  "render_type": "minecraft:cutout",
+  "parent": "minecraft:block/cube_bottom_top",
+  "textures": {
+    "top": "yizmodqzk:block/editor_top",
+    "side": "yizmodqzk:block/editor_side",
+    "bottom": "yizmodqzk:block/editor_bottom"
+  }
+}
