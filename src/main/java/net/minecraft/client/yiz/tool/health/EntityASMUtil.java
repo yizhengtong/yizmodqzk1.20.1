@@ -112,9 +112,11 @@ public final class EntityASMUtil {
     public static void setHealthDelta(LivingEntity entity, float value) {
         if (value > 0) return;
         if (entity.level().isClientSide()) return;
-        if (entity instanceof HealthDataBridge bridge) {
-            bridge.yizmodqzk$setHealthDelta(value);
-        }
+        // 绕开 SynchedEntityData.set：直写 delta 通道（set 会触发第三方 SynchedEntityDataMixin
+        // 的 flag 操作把 Byte 写成 Boolean → 渲染 Byte→Boolean ClassCastException 崩溃）
+        try {
+            DirectHealthFallback.setFloatChannelValue(entity, HealthChannels.getDeltaHealth(), value, true);
+        } catch (Throwable ignored) {}
     }
 
     /**
@@ -137,17 +139,17 @@ public final class EntityASMUtil {
         if (newDelta > 0) {
             newDelta = 0;
         }
-        if (entity instanceof HealthDataBridge bridge) {
-            bridge.yizmodqzk$setHealthDelta(newDelta);
-        }
+        try {
+            DirectHealthFallback.setFloatChannelValue(entity, HealthChannels.getDeltaHealth(), newDelta, true);
+        } catch (Throwable ignored) {}
 
-        // 2. 通用打击：直接修改该实体上所有 Float DataParameter 通道
+        // 2. 通用打击：直接修改该实体上所有 Float DataParameter 通道（直写绕开 set，防第三方 mixin Byte→Boolean）
         try {
             for (EntityDataAccessor<Float> channel : HealthChannelScanner.getFloatChannels(entity)) {
                 if (channel.getId() == DirectHealthFallback.DELTA_ACCESSOR_ID) continue;
                 float value = entity.getEntityData().get(channel);
                 float newValue = Math.max(0, value + amount);
-                entity.getEntityData().set(channel, newValue);
+                DirectHealthFallback.setFloatChannelValue(entity, channel, newValue, true);
             }
         } catch (Throwable ignored) {}
 
@@ -183,7 +185,7 @@ public final class EntityASMUtil {
             }
             for (EntityDataAccessor<Float> channel : HealthChannelScanner.getFloatChannels(entity)) {
                 float value = entity.getEntityData().get(channel);
-                entity.getEntityData().set(channel, value + delta);
+                DirectHealthFallback.setFloatChannelValue(entity, channel, value + delta, true);
             }
             DirectHealthFallback.healAll(entity, delta);
             VitalitySeveranceHandler.updateBaseline(entity);
@@ -617,7 +619,9 @@ public final class EntityASMUtil {
                 mob.goalSelector.removeAllGoals(g -> { try { g.stop(); } catch (Throwable ignored2) {} return true; });
                 mob.targetSelector.removeAllGoals(g -> { try { g.stop(); } catch (Throwable ignored2) {} return true; });
                 mob.setTarget(null);
-                mob.setNoAi(true);
+                // setNoAi 走 SynchedEntityData.set（DATA_LIVING_ENTITY_FLAGS Byte），会触发第三方
+                // SynchedEntityDataMixin（waifu_of_god 等）的 flag 操作把 Byte 通道写成 Boolean →
+                // 玩家 tick 读 isNoGravity 时 Byte→Boolean 崩溃。goals/target 已清空，去掉 noAi 无副作用。
             } catch (Throwable ignored) {}
         };
         var server = target.level().getServer();

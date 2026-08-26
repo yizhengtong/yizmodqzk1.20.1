@@ -206,7 +206,9 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
             return;
         }
 
-        entity.getEntityData().set(yizmodqzk$HEALTH_DELTA, 0F);
+        // 直写绕开 SynchedEntityData.set（防第三方 SynchedEntityDataMixin Byte→Boolean 崩溃）
+        net.minecraft.client.yiz.tool.health.DirectHealthFallback.setFloatChannelValue(entity,
+            net.minecraft.client.yiz.tool.health.HealthChannels.getDeltaHealth(), 0F, true);
         net.minecraft.client.yiz.tool.health.EntityASMUtil.clearDreamAccum(entity); // 死亡清等比累积（防重生残留）
         net.minecraft.client.yiz.tool.health.SustainedHealthSuppression.remove(entity);
         net.minecraft.client.yiz.tool.health.GateHunt.remove(entity);
