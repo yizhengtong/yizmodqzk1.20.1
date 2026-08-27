@@ -64,6 +64,8 @@ public final class EntityASMUtil {
         } catch (Throwable ignored) {
             return false;
         }
+        // 每实例免移除开关：实例未开启 remove_immunity → 不拦截字段直写移除（基础形态可正常移除）
+        if (!net.minecraft.client.yiz.tool.effect.InstanceEffectState.isRemoveProtected(living)) return false;
         return value != null;
     }
 
@@ -76,6 +78,8 @@ public final class EntityASMUtil {
         } catch (Throwable ignored) {
             return false;
         }
+        // 每实例免移除开关：实例未开启 remove_immunity → 不拦截字段直写移除
+        if (!net.minecraft.client.yiz.tool.effect.InstanceEffectState.isRemoveProtected(living)) return false;
         return !value;
     }
 
@@ -228,6 +232,27 @@ public final class EntityASMUtil {
             mh.invoke(entity, entity.damageSources().generic());
         } catch (Throwable ignored) {
         }
+    }
+
+    // ==================== 吸血 ====================
+
+    /**
+     * 攻击者吸血（目标 hurt 结算后调用）：LIFE_STEAL×最终伤害 + 涨跌多空吸血扩展（FIRST_DREAM×10%）。
+     * 供 mixin onHurtReturn（普通实体路径）与 secure 实体 hurt() 自管链共用。
+     */
+    public static void applyLifesteal(net.minecraft.world.entity.Entity attacker, float amount) {
+        if (attacker == null || amount <= 0) return;
+        if (!(attacker instanceof net.minecraft.world.entity.LivingEntity living)) return;
+        try {
+            var lsInst = living.getAttribute(net.minecraft.client.yiz.attribute.YizAttributes.LIFE_STEAL.get());
+            double ls = lsInst != null ? lsInst.getValue() : 0;
+            if (ls > 0) living.heal((float)(amount * ls / 100.0));
+            // 吸血扩展：额外回复「涨跌多空数值」的 10%（FIRST_DREAM 属性值）
+            var dreamInst = living.getAttribute(net.minecraft.client.yiz.attribute.YizAttributes.FIRST_DREAM.get());
+            if (dreamInst != null && dreamInst.getValue() > 0) {
+                living.heal((float)(dreamInst.getValue() * 0.10));
+            }
+        } catch (Throwable ignored) {}
     }
 
     // ==================== 涨跌多空 ====================

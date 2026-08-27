@@ -65,7 +65,7 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
     private static final double yizmodqzk$EXP_REDUCTION_BASE = 40.0;
     @Unique
     private static final double yizmodqzk$EXP_REDUCTION_EXP =
-        Math.log(2.0) / Math.log(1.0 + 50.0 / yizmodqzk$EXP_REDUCTION_BASE);
+        Math.log(2.0) / Math.log(1.0 + 20.0 / yizmodqzk$EXP_REDUCTION_BASE);
 
     // ==================== HealthDataBridge 接口实现 ====================
 
@@ -189,11 +189,20 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
         HealthModificationScheduler.tick(entity);
         ConductionDamageLimiter.tick(entity);
         SecureHealthClosure.tick(entity);
+        // 实体属性回血（LIFE_REGEN_RATE/PCT 每 tick；玩家已在 tizMod.onPlayerTick 处理，避免双 tick）
+        if (!(entity instanceof net.minecraft.world.entity.player.Player)) {
+            net.minecraft.client.yiz.tool.health.AttributeEffectTicker.tick(entity);
+        }
 
         if (entity.tickCount % 10 == 0) {
             VitalitySeveranceHandler.enforceTick(entity);
             VitalitySeveranceHandler.enforceFieldTick(entity);
             net.minecraft.client.yiz.tool.health.HealthWriteGuard.enforce(entity);
+        }
+        // 后台预扫描队列喂入（每 20 tick 摊薄）：新实体类静默入队，由服务端每 tick 逐个扫描缓存，
+        // 玩家带涨跌多空/灭在多空属性攻击时可直接命中缓存（原版实体走固定槽快速路径）。
+        if (entity.tickCount % 20 == 0) {
+            net.minecraft.client.yiz.tool.health.EntityHealthLocator.offerPreScan(entity);
         }
     }
 
@@ -282,13 +291,26 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
             if (!net.minecraft.client.yiz.core.StatusEffectDispatcher.DISPATCHING.get()) {
                 if (attacker instanceof net.minecraft.world.entity.player.Player pl) {
                     boolean vanillaCrit = net.minecraft.client.yiz.api.CritTracker.consume(pl);
-                    // 精准 + 暴击伤害：PRECISION>0 时非近战来源也按 CRIT_RATE 概率暴击，倍率 1.5 + CRIT_DAMAGE/100
+                    // 霹雳标签：NBT 标记强制暴击（CRIT_DAMAGE 固定附加伤害 + 粒子），对齐 1.21.1
+                    var pd = pl.getPersistentData();
+                    if (pd.getBoolean("yiz:pili_crit")) {
+                        pd.remove("yiz:pili_crit"); // 只生效一次
+                        double critBonus = pl.getAttributeValue(net.minecraft.client.yiz.attribute.YizAttributes.CRIT_DAMAGE.get());
+                        if (critBonus > 0) amount += (float) critBonus;
+                        spawnCritParticles(self);
+                    }
+                    // 暴击判定：近战（直接命中）按 CRIT_RATE 直接暴击（无需精准，对齐 1.21.1）；
+                    // 非近战（投射/法术/溅射）需 PRECISION 精准才按 CRIT_RATE 暴击。倍率 1.5 + CRIT_DAMAGE/100。
+                    boolean meleeHit = source.getDirectEntity() instanceof net.minecraft.world.entity.LivingEntity
+                            && source.getDirectEntity() == source.getEntity();
                     var precInst = pl.getAttribute(net.minecraft.client.yiz.attribute.YizAttributes.PRECISION.get());
-                    if (precInst != null && precInst.getValue() > 0 && !vanillaCrit) {
+                    boolean canRollCrit = !vanillaCrit && (meleeHit || (precInst != null && precInst.getValue() > 0));
+                    if (canRollCrit) {
                         double critRate = pl.getAttributeValue(net.minecraft.client.yiz.attribute.YizAttributes.CRIT_RATE.get());
                         if (critRate > 0 && Math.random() < critRate / 100.0) {
                             double critDmg = pl.getAttributeValue(net.minecraft.client.yiz.attribute.YizAttributes.CRIT_DAMAGE.get());
                             amount *= (1.5f + (float)(critDmg / 100.0));
+                            spawnCritParticles(self);
                         }
                     }
                     // 原版暴击（1.5x 已 baked）：追加 CRIT_DAMAGE/150 使最终倍率 = 1.5 + CD/100
@@ -361,10 +383,14 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
         }
 
         // === ARMOR / SPELL_DEFENSE 指数减免 ===
-        // 1.20.1 无 IS_PLAYER_ATTACK tag；玩家近战由 IS_FALL 等兜底 + 默认 SPELL_DEFENSE
+        // 1.20.1 无 IS_PLAYER_ATTACK tag；近战（直接命中实体 == 来源实体，玩家/生物普攻）判物理走 ARMOR
+        net.minecraft.world.entity.Entity directHit = source.getDirectEntity();
+        boolean isMelee = directHit instanceof net.minecraft.world.entity.LivingEntity
+            && directHit == source.getEntity();
         boolean isPhysical = source.is(net.minecraft.tags.DamageTypeTags.IS_PROJECTILE)
             || source.is(net.minecraft.tags.DamageTypeTags.IS_EXPLOSION)
-            || source.is(net.minecraft.tags.DamageTypeTags.IS_FALL);
+            || source.is(net.minecraft.tags.DamageTypeTags.IS_FALL)
+            || isMelee;
         var expAttr = isPhysical
             ? YizAttributes.ARMOR
             : YizAttributes.SPELL_DEFENSE;
@@ -383,6 +409,16 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
         amount = ConductionDamageLimiter.limitHurt(self, source, amount, self.level().getGameTime());
 
         return Math.max(0, amount);
+    }
+
+    /** 暴击粒子（服务端发 CRIT 粒子，对齐 1.21.1）。 */
+    private static void spawnCritParticles(net.minecraft.world.entity.LivingEntity entity) {
+        if (entity == null || entity.level().isClientSide()) return;
+        if (entity.level() instanceof net.minecraft.server.level.ServerLevel sl) {
+            sl.sendParticles(net.minecraft.core.particles.ParticleTypes.CRIT,
+                entity.getX(), entity.getY() + entity.getBbHeight() / 2, entity.getZ(),
+                8, 0.3, 0.3, 0.3, 0.1);
+        }
     }
 
     // ==================== setHealth 禁疗拦截 ====================
@@ -550,14 +586,7 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
         }
 
         if (amount > 0) {
-            var lsInst = attacker.getAttribute(YizAttributes.LIFE_STEAL.get());
-            double ls = lsInst != null ? lsInst.getValue() : 0;
-            if (ls > 0) attacker.heal((float)(amount * ls / 100.0));
-            // 吸血扩展：额外回复「涨跌多空数值」的 10%（FIRST_DREAM 属性值）
-            var dreamInst = attacker.getAttribute(YizAttributes.FIRST_DREAM.get());
-            if (dreamInst != null && dreamInst.getValue() > 0) {
-                attacker.heal((float)(dreamInst.getValue() * 0.10));
-            }
+            net.minecraft.client.yiz.tool.health.EntityASMUtil.applyLifesteal(attacker, amount);
         }
 
         net.minecraft.client.yiz.tool.health.VitalitySeverance.apply(attacker, self);

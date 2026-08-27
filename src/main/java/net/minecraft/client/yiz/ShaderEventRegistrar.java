@@ -29,5 +29,6 @@ public final class ShaderEventRegistrar {
         ShaderProtectionRegistry.onRegisterShaders(event);
         ShaderManager.onRegisterShaders(event);
         LightningShaders.onRegisterShaders(event);
+        net.minecraft.client.yiz.client.render.LockOutlineShaders.onRegisterShaders(event);
     }
 }

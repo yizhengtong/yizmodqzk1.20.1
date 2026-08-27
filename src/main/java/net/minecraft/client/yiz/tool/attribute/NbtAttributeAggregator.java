@@ -25,7 +25,8 @@ public final class NbtAttributeAggregator {
 
     /** 每 tick 聚合（由 tizMod.onPlayerTick 服务端分支调用）。 */
     public static void aggregate(Player player) {
-        if (player.level().isClientSide()) return;
+        // 服务端权威（tizMod.onPlayerTick）；客户端也聚合本地玩家（LockOnProvider 渲染读 HUIXIN/KEGONG，
+        // 需要客户端属性值；客户端本地加 modifier 不回传服务端，安全）。1.20.1 单机/联机都适用。
         for (net.minecraft.client.yiz.editor.EditableAttribute attr
                 : net.minecraft.client.yiz.editor.EditableAttribute.getAll()) {
             Attribute attribute = resolveAttribute(attr.id());
@@ -54,6 +55,11 @@ public final class NbtAttributeAggregator {
                 "yiz_attack_range_block", range, AttributeModifier.Operation.ADDITION);
         ItemAttributeHandler.setEntityAttribute(player, net.minecraftforge.common.ForgeMod.ENTITY_REACH.get(),
                 "yiz_attack_range_entity", range, AttributeModifier.Operation.ADDITION);
+
+        // 护甲/法防镜像到原版：自定义护甲值提供原版护甲+韧性（护甲条/原版护甲公式）；法防镜像击退韧性。
+        // 模组指数减伤仍读自定义属性（不受原版护甲值变动影响）。
+        net.minecraft.client.yiz.tizMod.mirrorArmor(player);
+        net.minecraft.client.yiz.tizMod.mirrorSpellDefense(player);
     }
 
     /** 从属性 id 解析 Attribute（generic.* → minecraft，否则 yizmodqzk）。 */

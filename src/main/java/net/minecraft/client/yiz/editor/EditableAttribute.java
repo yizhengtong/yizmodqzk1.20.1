@@ -68,7 +68,8 @@ public record EditableAttribute(
         yiz("splash_falloff",       "溅射衰减",     false, "%"),
         yiz("huixin",               "会心",         false, "格"),
         yiz("kegong",               "渴攻",         false, "tick"),
-        yiz("cooldown_reduction",   "冷却缩减",     false, "%"),
+        yiz("cooldown_reduction",   "攻击速度加成", false, "%"),
+        yiz("auto_attack",          "自动攻击",     false, ""),
 
         // 库 — 点数/次数类
         yiz("attack_strength",   "攻击加成",     false, "%"),
@@ -122,7 +123,6 @@ public record EditableAttribute(
         yiz("water_breath_time",    "水下呼吸时间", false, "秒"),
 
         // 触发器（次数）/ 布尔型
-        yiz("on_hurt",              "受伤触发",     false, "次"),
         yiz("projectile_reflection","投射物反弹",   false, "格"),
         yiz("no_collision",         "无碰撞",       false, ""),
         yiz("knockback_immunity",   "击退免疫",     false, ""),

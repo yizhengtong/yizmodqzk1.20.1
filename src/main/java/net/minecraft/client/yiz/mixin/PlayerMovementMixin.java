@@ -65,6 +65,16 @@ public abstract class PlayerMovementMixin {
         cir.setReturnValue(walkSpeed * (float) sprintMult);
     }
 
+    /** 攻击速度加成（COOLDOWN_REDUCTION）：改写攻击冷却延迟 = 原值 / (1 + cdr/100)。100%=延迟减半、攻速翻倍。 */
+    @Inject(method = "getCurrentItemAttackStrengthDelay", at = @At("RETURN"), cancellable = true)
+    private void yizmodqzk$modifyAttackDelay(CallbackInfoReturnable<Float> cir) {
+        Player player = (Player) (Object) this;
+        double speed = readAttr(player, YizAttributes.COOLDOWN_REDUCTION);
+        if (speed <= 0) return;
+        float original = cir.getReturnValue();
+        cir.setReturnValue((float) (original / (1.0 + speed / 100.0)));
+    }
+
     /**
      * AIR_SPEED：降低空中水平摩擦力，增加跳跃水平距离。
      * <p>反解目标摩擦 {@code f' = 1 - 0.09 / (1 + airPct×2/100)}（2× 倍率修正），

@@ -81,6 +81,7 @@ public final class LockOnHandler {
 
         UUID tuid = target.getUUID();
         int timer;
+        boolean wasReady = state != null && state.targetUuid.equals(tuid) && state.timer >= chargeTicks;
         if (state != null && state.targetUuid.equals(tuid)) {
             timer = Math.min(state.timer + 1, chargeTicks);
         } else {
@@ -89,6 +90,12 @@ public final class LockOnHandler {
 
         STATES.put(puid, new LockState(tuid, timer));
         PROGRESS.put(puid, Math.min(1f, (float) timer / chargeTicks));
+
+        // 满充能 → 挂交互距离修饰符（1.20.1 用 ForgeMod.ENTITY_REACH，延至会心值格）
+        boolean ready = timer >= chargeTicks;
+        if (ready && !wasReady) {
+            applyRangeModifier(player, range);
+        }
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -108,11 +115,36 @@ public final class LockOnHandler {
     //  内部工具
     // ═══════════════════════════════════════════════════════════
 
-    /** 完全重置：清状态 + 进度。 */
+    /** 满充能距离修饰符 id（确定性 UUID，remove 幂等）。 */
+    private static final java.util.UUID LOCK_RANGE_ID =
+        java.util.UUID.nameUUIDFromBytes("yizmodqzk:lock_range".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+    /** 完全重置：清状态 + 进度 + 移除距离修饰符（攻击/死亡/登出时调用）。 */
     private static void reset(Player player) {
         UUID puid = player.getUUID();
         STATES.remove(puid);
         PROGRESS.remove(puid);
+        removeRangeModifier(player);
+    }
+
+    /** 满充能：挂 ForgeMod.ENTITY_REACH 修饰符，交互/攻击距离延至会心值格。 */
+    private static void applyRangeModifier(Player player, double range) {
+        try {
+            var inst = player.getAttribute(net.minecraftforge.common.ForgeMod.ENTITY_REACH.get());
+            if (inst == null) return;
+            inst.removeModifier(LOCK_RANGE_ID);
+            inst.addPermanentModifier(new net.minecraft.world.entity.ai.attributes.AttributeModifier(
+                LOCK_RANGE_ID, "yizmodqzk:lock_range", range,
+                net.minecraft.world.entity.ai.attributes.AttributeModifier.Operation.ADDITION));
+        } catch (Throwable ignored) {}
+    }
+
+    /** 移除满充能距离修饰符。 */
+    private static void removeRangeModifier(Player player) {
+        try {
+            var inst = player.getAttribute(net.minecraftforge.common.ForgeMod.ENTITY_REACH.get());
+            if (inst != null) inst.removeModifier(LOCK_RANGE_ID);
+        } catch (Throwable ignored) {}
     }
 
     /** 仅清锁状态（移开视线）。 */

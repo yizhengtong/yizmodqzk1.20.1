@@ -215,6 +215,7 @@ public final class YizAttributes {
         ATTRIBUTES.register("skill_interval",
             () -> new RangedAttribute("attribute.yizmodqzk.skill_interval", 0.0, 0.0, 100.0).setSyncable(true));
 
+    /** 攻击速度加成(%) — 攻击冷却延迟 ÷(1+cdr/100)（100%=攻速翻倍）；同时破目标无敌帧（InvulnBreakHandler）。 */
     public static final RegistryObject<Attribute> COOLDOWN_REDUCTION =
         ATTRIBUTES.register("cooldown_reduction",
             () -> new RangedAttribute("attribute.yizmodqzk.cooldown_reduction", 0.0, 0.0, Double.MAX_VALUE).setSyncable(true));
@@ -252,11 +253,6 @@ public final class YizAttributes {
         ATTRIBUTES.register("shield_value",
             () -> new RangedAttribute("attribute.yizmodqzk.shield_value", 0.0, 0.0, Double.MAX_VALUE).setSyncable(true));
 
-    /** 伤害类型(0物理/1-5元素) — 值域 0~5。仅 HUD 显示图标，无伤害系统读取。 */
-    public static final RegistryObject<Attribute> DAMAGE_TYPE =
-        ATTRIBUTES.register("damage_type",
-            () -> new RangedAttribute("attribute.yizmodqzk.damage_type", 0.0, 0.0, 5.0).setSyncable(true));
-
     /** 治疗攻击系数(%) — 值域 0~100。1.21.1 未挂载未消费，死属性。 */
     public static final RegistryObject<Attribute> HEAL_ATK_COEFF =
         ATTRIBUTES.register("heal_atk_coeff",
@@ -267,20 +263,10 @@ public final class YizAttributes {
         ATTRIBUTES.register("heal_spell_coeff",
             () -> new RangedAttribute("attribute.yizmodqzk.heal_spell_coeff", 0.0, 0.0, 100.0).setSyncable(true));
 
-    /** 飞行时间 — 值域 ≥0。1.21.1 无运行时消费（飞行由 FlightAbilityRegistry 驱动），预留。 */
-    public static final RegistryObject<Attribute> FLIGHT_TIME =
-        ATTRIBUTES.register("flight_time",
-            () -> new RangedAttribute("attribute.yizmodqzk.flight_time", 0.0, 0.0, Double.MAX_VALUE).setSyncable(true));
-
     /** 最大哨兵数 — 值域 ≥0。1.21.1 无任何哨兵实体读取，死属性。 */
     public static final RegistryObject<Attribute> MAX_SENTRIES =
         ATTRIBUTES.register("max_sentries",
             () -> new RangedAttribute("attribute.yizmodqzk.max_sentries", 0.0, 0.0, Double.MAX_VALUE).setSyncable(true));
-
-    /** 受伤触发通知次数 — 值域 ≥0。1.21.1 无事件处理读取，死属性。 */
-    public static final RegistryObject<Attribute> ON_HURT =
-        ATTRIBUTES.register("on_hurt",
-            () -> new RangedAttribute("attribute.yizmodqzk.on_hurt", 0.0, 0.0, Double.MAX_VALUE).setSyncable(true));
 
     //  === 组B 玩家向独立属性（消费逻辑在阶段 3 接线）===
 

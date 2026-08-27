@@ -36,7 +36,7 @@ public final class AttributeEffectTicker {
     /**
      * 生命恢复公式（每 tick）：
      * <pre>regen = LIFE_REGEN_RATE × 0.05 + maxHealth × LIFE_REGEN_PCT × 0.0005</pre>
-     * 对齐 yizxian {@code applyAccessoryRegen} 语义。满血时 healthRegen 内部直接 return。
+     * 对齐 yizxian {@code applyAccessoryRegen} 语义。满血时 heal/healthRegen 内部直接 return。
      */
     private static void applyLifeRegen(LivingEntity entity) {
         AttributeInstance rateInst = entity.getAttribute(YizAttributes.LIFE_REGEN_RATE.get());
@@ -48,6 +48,17 @@ public final class AttributeEffectTicker {
         float regen = 0f;
         if (rate > 0) regen += (float) (rate * 0.05);
         if (pct > 0) regen += entity.getMaxHealth() * (float) pct * 0.0005f;
-        if (regen > 0) YizModQZKAPI.healthRegen(entity, regen);
+        if (regen <= 0) return;
+        // 免改血实体（已注册外部血量权威表）：healthRegen 走 healAll 直改 Float 通道，会被每 tick
+        // 权威表校正拉回（不回血）→ 必须用 entity.heal() 走 heal override 写混淆串表。
+        // 普通实体/玩家：保持 Delta 通道（禁疗拦截仍生效）。
+        try {
+            if (net.minecraft.client.yiz.tool.health.SecureHealthClosure.hasObf(entity)
+                    || net.minecraft.client.yiz.tool.health.SecureHealthClosure.isRegistered(entity)) {
+                entity.heal(regen);
+            } else {
+                YizModQZKAPI.healthRegen(entity, regen);
+            }
+        } catch (Throwable ignored) {}
     }
 }

@@ -90,14 +90,11 @@ public class tizMod {
             e.add(player, YizAttributes.HEAL_BASE.get());
             e.add(player, YizAttributes.HEAL_HP_COEFF.get());
 
-            // 1.21.1 移植属性挂载（2026-08-26）：组A 死属性 7 + 组B 玩家向独立 24
+            // 1.21.1 移植属性挂载（2026-08-26）：组A 预留属性 4 + 组B 玩家向独立 24
             e.add(player, YizAttributes.SHIELD_VALUE.get());
-            e.add(player, YizAttributes.DAMAGE_TYPE.get());
             e.add(player, YizAttributes.HEAL_ATK_COEFF.get());
             e.add(player, YizAttributes.HEAL_SPELL_COEFF.get());
-            e.add(player, YizAttributes.FLIGHT_TIME.get());
             e.add(player, YizAttributes.MAX_SENTRIES.get());
-            e.add(player, YizAttributes.ON_HURT.get());
             e.add(player, YizAttributes.MOVE_SPEED.get());
             e.add(player, YizAttributes.MAX_RUN_SPEED.get());
             e.add(player, YizAttributes.AIR_SPEED.get());
@@ -200,6 +197,8 @@ public class tizMod {
         net.minecraft.client.yiz.tool.YizFxCommand.register();
         // 物品描边指令（/yiz mb <0-5> 给主手物品加描边）
         net.minecraft.client.yiz.tool.YizOutlineCommand.register();
+        // 每实例效果开关指令（/yiz eff，隔离模型测试）
+        net.minecraft.client.yiz.tool.YizEffectCommand.register();
 
         modEventBus.addListener(this::commonSetup);
         net.minecraftforge.common.MinecraftForge.EVENT_BUS.register(this);
@@ -215,6 +214,8 @@ public class tizMod {
         LOGGER.info("YizMod QZK 1.20.1 前置库初始化完成");
         // 感电视觉 S2C 网络通道（1.20.1 SimpleChannel）
         net.minecraft.client.yiz.network.NetworkHandler.register();
+        // 锁定系统客户端事件注册（会心/渴攻目标框渲染 + 客户端属性聚合；服务端调用无害）
+        net.minecraft.client.yiz.handler.LockOnClientEvents.init();
         // 动态加载 JavaAgent（同进程 self-attach，用于涨跌多空 getHealth 字节码改写配合扫描）
         try {
             net.minecraft.client.yiz.core.asm.AgentLoader.init();
@@ -303,9 +304,25 @@ public class tizMod {
         }
     }
 
+    /** 服务端每 tick：驱动实体血量定位后台预扫描队列（静默匹配，摊薄首击扫描延迟）。 */
+    @SubscribeEvent
+    public void onServerTick(net.minecraftforge.event.TickEvent.ServerTickEvent event) {
+        if (event.phase != net.minecraftforge.event.TickEvent.Phase.END) return;
+        net.minecraft.client.yiz.tool.health.EntityHealthLocator.tickPreScan();
+    }
+
     /** 多段跳落地充能（LivingFallEvent）。 */
     @SubscribeEvent
     public void onLivingFall(net.minecraftforge.event.entity.living.LivingFallEvent event) {
         net.minecraft.client.yiz.handler.MultiJumpRechargeHandler.onLivingFall(event);
+    }
+
+    /** 原版暴击标记 → 桥接 CriticalHitEvent → mixin 的 CRIT_DAMAGE/150 换算（近战暴击在 mixin 统一处理）。 */
+    @SubscribeEvent
+    public void onCriticalHit(net.minecraftforge.event.entity.player.CriticalHitEvent event) {
+        net.minecraft.world.entity.Entity entity = event.getEntity();
+        if (entity instanceof net.minecraft.world.entity.player.Player) {
+            net.minecraft.client.yiz.api.CritTracker.mark((net.minecraft.world.entity.player.Player) entity, event.isVanillaCritical());
+        }
     }
 }

@@ -2,12 +2,12 @@ package net.minecraft.client.yiz.tool.health;
 
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 import net.minecraft.client.yiz.tool.health.codec.BlackBoxInverseSolver;
 import net.minecraft.client.yiz.tool.health.codec.EncodedValueCodec;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.player.Player;
 import net.minecraftforge.fml.loading.FMLPaths;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
@@ -15,15 +15,18 @@ import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
 
 import java.io.InputStream;
+import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedDeque;
 
 /**
  * 实体真实血量定位器（1.20.1 P0 扩展版）—「全能扫描 / 偏移匹配 / 字节码探测 / 数值通道 / 混淆串 / 编码反解」。
@@ -88,6 +91,28 @@ public final class EntityHealthLocator {
 
     private static final ThreadLocal<Boolean> SCANNING = ThreadLocal.withInitial(() -> false);
 
+    /** 原版血量样式（getHealth/setHealth 未在该类层级 override → 健康走原版 DATA_HEALTH_ID）按稳定类名缓存。 */
+    private static final Map<String, Boolean> VANILLA_HEALTH_STYLE = new ConcurrentHashMap<>();
+
+    /** 后台预扫描队列（静默匹配）：实体 tick 入队，服务端每 tick 逐个静默扫描。 */
+    private static final Deque<WeakRefSample> PRE_SCAN_QUEUE = new ConcurrentLinkedDeque<>();
+    /** 已入队/处理中的稳定类名（去重）。 */
+    private static final Set<String> PRE_SCAN_QUEUED = ConcurrentHashMap.newKeySet();
+    /** 每 tick 最多预扫描实体数（摊薄，避免单 tick 卡顿）。 */
+    private static final int PRE_SCAN_PER_TICK = 2;
+    /** 预扫描队列长度上限（超限丢队尾最旧，防无限增长）。 */
+    private static final int PRE_SCAN_QUEUE_CAP = 256;
+
+    /** 预扫描样本：稳定类名 + 弱引用实体实例（实体消失后样本失效，类可再入队）。 */
+    private static final class WeakRefSample {
+        final String key;
+        final WeakReference<LivingEntity> ref;
+        WeakRefSample(String key, LivingEntity entity) {
+            this.key = key;
+            this.ref = new WeakReference<>(entity);
+        }
+    }
+
     private EntityHealthLocator() {}
 
     // ==================== 公共 API ====================
@@ -109,6 +134,10 @@ public final class EntityHealthLocator {
         String key = stableClassName(entity.getClass());
         HealthSlot cached = CACHE.get(key);
         if (cached != null) return cached;
+        // 原版固定位置快速路径：getHealth/setHealth 未 override 的实体健康走原版 DATA_HEALTH_ID，
+        // 直接命中固定槽，跳过全链路扫描。误判由写后验证失败 → invalidateSlot → 全量重扫自愈兜底。
+        HealthSlot vanilla = vanillaFastSlot(key, entity);
+        if (vanilla != null) return vanilla;
         if (NON_SLOT_CLASSES.contains(key)) {
             // 负缓存失效：血量在中间范围（非满血、非濒死）时，之前的「无槽」可能是满血/临界值误判，
             // 允许重试一次（每类只重试一次，防频繁重扫）
@@ -186,6 +215,49 @@ public final class EntityHealthLocator {
         return slash > 0 ? name.substring(0, slash) : name;
     }
 
+    /**
+     * 原版固定位置快速路径：实体类 getHealth/setHealth 未 override（健康走原版 DATA_HEALTH_ID）
+     * → 直接返回原版血量通道固定槽并缓存，不扫描。生产 SRG 名安全（槽 fieldName 用 {@code #id:}）。
+     * 判定按稳定类名缓存（getDeclaredMethods 每类只跑一次）。
+     */
+    private static HealthSlot vanillaFastSlot(String key, LivingEntity entity) {
+        EntityDataAccessor<Float> vh = DirectHealthFallback.VANILLA_HEALTH_ACCESSOR;
+        if (vh == null) return null;
+        if (!isVanillaHealthStyle(entity.getClass())) return null;
+        HealthSlot slot = new HealthSlot(key, "#id:" + vh.getId(), "Float", false, "accessor", "");
+        CACHE.put(key, slot);
+        save();
+        if (SLOT_LOG_DONE.add(key)) {
+            LOGGER.info("[EHL] 原版固定槽 {}: kind=accessor field=#id:{} (getHealth/setHealth 未 override)",
+                key, vh.getId());
+        }
+        return slot;
+    }
+
+    /** 实体类是否「原版血量样式」（getHealth/setHealth 未在类层级 override）。按稳定类名缓存。 */
+    private static boolean isVanillaHealthStyle(Class<?> clazz) {
+        String key = stableClassName(clazz);
+        Boolean cached = VANILLA_HEALTH_STYLE.get(key);
+        if (cached != null) return cached;
+        boolean vanilla = computeVanillaHealthStyle(clazz);
+        VANILLA_HEALTH_STYLE.put(key, vanilla);
+        return vanilla;
+    }
+
+    private static boolean computeVanillaHealthStyle(Class<?> clazz) {
+        try {
+            for (Class<?> c = clazz; c != null && c != LivingEntity.class; c = c.getSuperclass()) {
+                for (java.lang.reflect.Method m : c.getDeclaredMethods()) {
+                    String n = m.getName();
+                    if (("getHealth".equals(n) || "m_21223_".equals(n)) && m.getReturnType() == float.class) return false;
+                    if (("setHealth".equals(n) || "m_21153_".equals(n)) && m.getParameterCount() == 1
+                            && m.getParameterTypes()[0] == float.class) return false;
+                }
+            }
+        } catch (Throwable ignored) {}
+        return true;
+    }
+
     /** 清除某实体的槽缓存（正缓存 + 负缓存），下次 locate 重新探测。 */
     private static void invalidateSlot(LivingEntity entity) {
         if (entity == null) return;
@@ -235,6 +307,48 @@ public final class EntityHealthLocator {
         VitalitySeveranceHandler.updateFieldBaseline(entity);
         HealthWriteGuard.updateBaseline(entity);
         return true;
+    }
+
+    // ==================== 后台预扫描队列（静默匹配） ====================
+
+    /**
+     * 预扫描喂入口：服务端实体 tick 时调用。未缓存/未负缓存/未入队的新类才入队，
+     * 样本为实体弱引用（消失后失效可再入队）。成本 = 稳定类名 + 几次 Map/Set 查，可忽略。
+     */
+    public static void offerPreScan(LivingEntity entity) {
+        if (entity == null || entity.level().isClientSide()) return;
+        if (entity instanceof Player) return;
+        try {
+            if (SecureHealthClosure.isRegistered(entity)) return; // 本模组受保护实体不走定位器
+        } catch (Throwable ignored) {}
+        String key = stableClassName(entity.getClass());
+        if (CACHE.containsKey(key) || NON_SLOT_CLASSES.contains(key)) return;
+        if (!PRE_SCAN_QUEUED.add(key)) return; // 已在队/处理中
+        if (PRE_SCAN_QUEUE.size() >= PRE_SCAN_QUEUE_CAP) {
+            WeakRefSample stale = PRE_SCAN_QUEUE.pollLast(); // 丢队尾最旧，防无限增长
+            if (stale != null) PRE_SCAN_QUEUED.remove(stale.key);
+        }
+        PRE_SCAN_QUEUE.addFirst(new WeakRefSample(key, entity));
+    }
+
+    /**
+     * 预扫描处理器：服务端每 tick 调用（ServerTickEvent END）。静默逐个扫描队列实体
+     * （每 tick 上限 {@link #PRE_SCAN_PER_TICK} 个，摊薄避免单 tick 卡顿），使常见实体类型
+     * 在玩家攻击前就被定位缓存；主动触发效果（dream 伤害）仍同步优先扫当前目标。
+     */
+    public static void tickPreScan() {
+        if (PRE_SCAN_QUEUE.isEmpty() || SCANNING.get()) return;
+        int n = 0;
+        while (n < PRE_SCAN_PER_TICK && !PRE_SCAN_QUEUE.isEmpty()) {
+            WeakRefSample s = PRE_SCAN_QUEUE.pollFirst();
+            if (s == null) break;
+            PRE_SCAN_QUEUED.remove(s.key);
+            LivingEntity e = s.ref.get();
+            if (e == null || e.isRemoved() || e.level().isClientSide() || e.getHealth() <= 0) continue;
+            if (CACHE.containsKey(s.key) || NON_SLOT_CLASSES.contains(s.key)) continue;
+            locate(e);
+            n++;
+        }
     }
 
     // ==================== 逻辑血量读写（按 kind 分派） ====================
@@ -1339,24 +1453,11 @@ public final class EntityHealthLocator {
     // ==================== JSON 缓存 ====================
 
     public static void load() {
+        // 会话级缓存：不信任跨进程缓存的槽（实体数据更新后旧槽会导致本次进程修改错误）。
+        // 启动即删除旧缓存文件，CACHE 从空开始；save() 仍写本次进程的槽作调试产物，下次启动再删。
         try {
             Path p = FMLPaths.CONFIGDIR.get().resolve(FILE_NAME);
-            if (!Files.exists(p)) return;
-            JsonObject root = JsonParser.parseString(Files.readString(p)).getAsJsonObject();
-            JsonObject slots = root.getAsJsonObject("slots");
-            if (slots == null) return;
-            for (String key : slots.keySet()) {
-                JsonObject o = slots.getAsJsonObject(key);
-                String kind = o.has("kind") ? o.get("kind").getAsString() : "field";
-                String meta = o.has("meta") ? o.get("meta").getAsString() : "";
-                CACHE.put(key, new HealthSlot(
-                    o.get("class").getAsString(),
-                    o.get("field").getAsString(),
-                    o.get("type").getAsString(),
-                    o.has("inverse") && o.get("inverse").getAsBoolean(),
-                    kind,
-                    meta));
-            }
+            Files.deleteIfExists(p);
         } catch (Exception ignored) {}
     }
 

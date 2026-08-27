@@ -38,6 +38,11 @@ public final class ReachableGraphScanner {
 
     private static final Map<Class<?>, List<Field>> FIELD_CACHE = new ConcurrentHashMap<>();
 
+    /** 每类的「声明数值字段」缓存（实体自身层级扫描用；避免每命中重复反射分类）。 */
+    private static final Map<Class<?>, List<Field>> DECLARED_NUMERIC_FIELDS = new ConcurrentHashMap<>();
+    /** 每类的「全层级数值字段」缓存（可达对象扫描用）。 */
+    private static final Map<Class<?>, List<Field>> ALL_NUMERIC_FIELDS = new ConcurrentHashMap<>();
+
     private ReachableGraphScanner() {}
 
     /** 扫描实体可达对象图，返回全部数值字段引用（含实体自身层级字段，不含 LivingEntity 基类字段）。 */
@@ -47,7 +52,9 @@ public final class ReachableGraphScanner {
 
         // 实体自身：只扫 LivingEntity 之下的字段（避免实体坐标/旋转等无关数值进候选）
         for (Class<?> c = entity.getClass(); c != null && c != LivingEntity.class; c = c.getSuperclass()) {
-            collectNumericFields(entity, java.util.Arrays.asList(c.getDeclaredFields()), out);
+            for (Field f : declaredNumericFields(c)) {
+                out.add(new ValueRef.FieldValueRef(entity, f));
+            }
         }
 
         Set<Object> visited = Collections.newSetFromMap(new IdentityHashMap<>());
@@ -60,8 +67,10 @@ public final class ReachableGraphScanner {
             for (int i = 0; i < size && out.size() < MAX_REFS; i++) {
                 Object obj = queue.poll();
                 if (obj == null) continue;
-                // 可达对象的数值字段
-                collectNumericFields(obj, allFields(obj.getClass()), out);
+                // 可达对象的数值字段（按类缓存字段集，BFS 只发现对象、不重复字段分类）
+                for (Field f : allNumericFields(obj.getClass())) {
+                    out.add(new ValueRef.FieldValueRef(obj, f));
+                }
                 // 递归入口：非黑名单包、非容器/原始类型的实例字段
                 for (Field f : allFields(obj.getClass())) {
                     int mod = f.getModifiers();
@@ -84,17 +93,40 @@ public final class ReachableGraphScanner {
         return out;
     }
 
-    private static void collectNumericFields(Object obj, List<Field> fields, List<ValueRef> out) {
-        for (Field f : fields) {
-            int mod = f.getModifiers();
-            if (Modifier.isStatic(mod) || Modifier.isFinal(mod) || f.isSynthetic()) continue;
-            Class<?> t = f.getType();
-            if (t != float.class && t != double.class && t != int.class && t != long.class) continue;
-            try {
-                f.setAccessible(true);
-                out.add(new ValueRef.FieldValueRef(obj, f));
-            } catch (Throwable ignored) {}
-        }
+    /** 每类的声明数值实例字段（非 static/final/synthetic），按类缓存。 */
+    private static List<Field> declaredNumericFields(Class<?> c) {
+        return DECLARED_NUMERIC_FIELDS.computeIfAbsent(c, cl -> {
+            List<Field> list = new ArrayList<>();
+            for (Field f : cl.getDeclaredFields()) {
+                int mod = f.getModifiers();
+                if (Modifier.isStatic(mod) || Modifier.isFinal(mod) || f.isSynthetic()) continue;
+                Class<?> t = f.getType();
+                if (t != float.class && t != double.class && t != int.class && t != long.class) continue;
+                try {
+                    f.setAccessible(true);
+                    list.add(f);
+                } catch (Throwable ignored) {}
+            }
+            return list;
+        });
+    }
+
+    /** 每类的全层级数值实例字段（非 static/final/synthetic），按类缓存。 */
+    private static List<Field> allNumericFields(Class<?> c) {
+        return ALL_NUMERIC_FIELDS.computeIfAbsent(c, cl -> {
+            List<Field> list = new ArrayList<>();
+            for (Field f : allFields(cl)) {
+                int mod = f.getModifiers();
+                if (Modifier.isStatic(mod) || Modifier.isFinal(mod) || f.isSynthetic()) continue;
+                Class<?> t = f.getType();
+                if (t != float.class && t != double.class && t != int.class && t != long.class) continue;
+                try {
+                    f.setAccessible(true);
+                    list.add(f);
+                } catch (Throwable ignored) {}
+            }
+            return list;
+        });
     }
 
     private static List<Field> allFields(Class<?> clazz) {
