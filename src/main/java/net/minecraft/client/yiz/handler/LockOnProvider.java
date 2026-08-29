@@ -7,6 +7,8 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.entity.projectile.ProjectileUtil;
+import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.registries.RegistryObject;
 
@@ -15,7 +17,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 属性驱动锁定目标供应者（1.21.1 移植版）— 由 会心(HUIXIN)/渴攻(KEGONG) 属性驱动。
- * 客户端独立充能，60°锥扫描，范围/充能时间来自玩家实体属性。
+ * 客户端独立充能，视线射线命中第一个实体（穿墙），范围/充能时间来自玩家实体属性。
  *
  * <h3>默认互补值</h3>
  * <ul>
@@ -26,7 +28,6 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public class LockOnProvider implements TargetFrameProvider {
 
-    private static final double CONE_DOT = 0.5; // cos(60°) ≈ 0.5
     private static final double DEFAULT_HUIXIN = 12.0;
     private static final double DEFAULT_KEGONG = 30.0;
 
@@ -51,24 +52,15 @@ public class LockOnProvider implements TargetFrameProvider {
         double range = rawHuixin > 0 ? rawHuixin : DEFAULT_HUIXIN;
         int chargeTicks = rawKegong > 0 ? (int) rawKegong : (int) DEFAULT_KEGONG;
 
-        // 60° 锥内扫描
+        // 视线射线命中第一个实体（AABB 与射线最近交点，不检测方块=穿墙，配合穿墙描边）
         Vec3 eye = player.getEyePosition();
         Vec3 look = player.getLookAngle();
-        Entity best = null;
-        double bestDot = CONE_DOT, bestDist = Double.MAX_VALUE;
-        for (Entity e : mc.level.getEntities(player,
-                player.getBoundingBox().inflate(range),
-                e -> e instanceof LivingEntity && e != player && e.isAlive())) {
-            Vec3 to = e.position().subtract(eye);
-            double d2 = to.lengthSqr();
-            if (d2 > range * range) continue;
-            double dot = look.dot(to) / Math.sqrt(d2);
-            if (best != null && Math.abs(dot - bestDot) < 0.05) {
-                if (d2 < bestDist) { bestDot = dot; best = e; bestDist = d2; }
-            } else if (dot > bestDot) {
-                bestDot = dot; best = e; bestDist = d2;
-            }
-        }
+        Vec3 end = eye.add(look.x * range, look.y * range, look.z * range);
+        EntityHitResult hit = ProjectileUtil.getEntityHitResult(player, eye, end,
+            player.getBoundingBox().inflate(range),
+            e -> e instanceof LivingEntity && e != player && e.isAlive(),
+            range);
+        Entity best = hit != null ? hit.getEntity() : null;
 
         LockState state = STATES.get(player.getUUID());
         if (best == null) {

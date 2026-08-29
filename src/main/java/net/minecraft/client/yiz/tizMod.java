@@ -27,10 +27,25 @@ public class tizMod {
     public static final Logger LOGGER = LogUtils.getLogger();
 
     public tizMod() {
+        // 兼容性加固（1.20.1 按类池 defineId）：强制初始化 vanilla 实体类，让 Entity/LivingEntity 的
+        // DataParameter id 池在任何第三方提前 defineId 前完成——否则若某模组在 Entity.<clinit> 前
+        // defineId（抢占 id 0，如 Integer 通道），vanilla DATA_SHARED_FLAGS_ID(Byte) 被挤走 →
+        // 服务端实体构造 Duplicate id 0 + 客户端/服务端 DataParameter 同步错位
+        // （field 0 Byte vs Integer 崩溃，EndingLibrary/第三方提前 defineId 的兼容性坑）。
+        try {
+            Class.forName("net.minecraft.world.entity.Entity");
+            Class.forName("net.minecraft.world.entity.LivingEntity");
+            Class.forName("net.minecraft.world.entity.Mob");
+            Class.forName("net.minecraft.world.entity.player.Player");
+            Class.forName("net.minecraft.world.entity.boss.wither.WitherBoss");
+        } catch (Throwable ignored) {}
+
         var modEventBus = net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext.get().getModEventBus();
 
         // 注册自定义属性（辖界者等自研实体挂载）
         YizAttributes.ATTRIBUTES.register(modEventBus);
+        // 流血前端展示效果（纯展示 Buff）
+        net.minecraft.client.yiz.effect.BleedEffects.EFFECTS.register(modEventBus);
         // 属性编辑台工作方块（Block/Item/CreativeTab/BlockEntity/Menu）
         net.minecraft.client.yiz.editor.AttributeEditorRegistries.register(modEventBus);
 
@@ -89,6 +104,10 @@ public class tizMod {
             e.add(player, YizAttributes.DAMAGE_SPELL_COEFF.get());
             e.add(player, YizAttributes.HEAL_BASE.get());
             e.add(player, YizAttributes.HEAL_HP_COEFF.get());
+            // 流血系统属性（不挂载则 getAttribute 为 null，聚合/读取均失效）
+            e.add(player, YizAttributes.BLEED_RATIO.get());
+            e.add(player, YizAttributes.BLEED_TIME.get());
+            e.add(player, YizAttributes.BLEED_STACK.get());
 
             // 1.21.1 移植属性挂载（2026-08-26）：组A 预留属性 4 + 组B 玩家向独立 24
             e.add(player, YizAttributes.SHIELD_VALUE.get());
@@ -208,9 +227,19 @@ public class tizMod {
         // 锁定系统（HUIXIN/KEGONG 服务端充能状态机）
         net.minecraftforge.common.MinecraftForge.EVENT_BUS.register(
             net.minecraft.client.yiz.handler.LockOnHandler.class);
+        // 流血 + 蓄力满增强（BLEED_RATIO/TIME/STACK + 必暴击/流血30%）
+        net.minecraftforge.common.MinecraftForge.EVENT_BUS.register(
+            net.minecraft.client.yiz.handler.BleedHandler.class);
     }
 
     private void commonSetup(final FMLCommonSetupEvent event) {
+        // 预触发 HealthChannels 通道 defineId：此时所有 vanilla 类已加载（LivingEntity 池已初始化），
+        // 通道 id 从继承池 max+1 分配（不与 vanilla id 0 冲突），且早于任何实体构造。
+        // ⚠️ 必须在此（而非 mixin 类静态字段/类加载期）触发——否则若在 vanilla LivingEntity.<clinit>
+        // 完成前 defineId，LivingEntity 池从 0 开始 → 与 DATA_SHARED_FLAGS_ID(id 0) 冲突 → Duplicate id 0 崩溃。
+        net.minecraft.client.yiz.tool.health.HealthChannels.getDeltaHealth();
+        net.minecraft.client.yiz.tool.health.HealthChannels.getSecureObf();
+        net.minecraft.client.yiz.tool.health.HealthChannels.getSecureObfKey();
         LOGGER.info("YizMod QZK 1.20.1 前置库初始化完成");
         // 感电视觉 S2C 网络通道（1.20.1 SimpleChannel）
         net.minecraft.client.yiz.network.NetworkHandler.register();
@@ -302,13 +331,6 @@ public class tizMod {
             net.minecraft.client.yiz.tool.health.AttributeEffectTicker.tick(sp);
             net.minecraft.client.yiz.tool.health.ManaCostDrain.tick(sp);
         }
-    }
-
-    /** 服务端每 tick：驱动实体血量定位后台预扫描队列（静默匹配，摊薄首击扫描延迟）。 */
-    @SubscribeEvent
-    public void onServerTick(net.minecraftforge.event.TickEvent.ServerTickEvent event) {
-        if (event.phase != net.minecraftforge.event.TickEvent.Phase.END) return;
-        net.minecraft.client.yiz.tool.health.EntityHealthLocator.tickPreScan();
     }
 
     /** 多段跳落地充能（LivingFallEvent）。 */

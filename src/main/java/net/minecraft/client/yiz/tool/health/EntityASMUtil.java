@@ -116,11 +116,9 @@ public final class EntityASMUtil {
     public static void setHealthDelta(LivingEntity entity, float value) {
         if (value > 0) return;
         if (entity.level().isClientSide()) return;
-        // 绕开 SynchedEntityData.set：直写 delta 通道（set 会触发第三方 SynchedEntityDataMixin
-        // 的 flag 操作把 Byte 写成 Boolean → 渲染 Byte→Boolean ClassCastException 崩溃）
-        try {
-            DirectHealthFallback.setFloatChannelValue(entity, HealthChannels.getDeltaHealth(), value, true);
-        } catch (Throwable ignored) {}
+        if (entity instanceof HealthDataBridge bridge) {
+            bridge.yizmodqzk$setHealthDelta(value);
+        }
     }
 
     /**
@@ -143,17 +141,17 @@ public final class EntityASMUtil {
         if (newDelta > 0) {
             newDelta = 0;
         }
-        try {
-            DirectHealthFallback.setFloatChannelValue(entity, HealthChannels.getDeltaHealth(), newDelta, true);
-        } catch (Throwable ignored) {}
+        if (entity instanceof HealthDataBridge bridge) {
+            bridge.yizmodqzk$setHealthDelta(newDelta);
+        }
 
-        // 2. 通用打击：直接修改该实体上所有 Float DataParameter 通道（直写绕开 set，防第三方 mixin Byte→Boolean）
+        // 2. 通用打击：直接修改该实体上所有 Float DataParameter 通道
         try {
             for (EntityDataAccessor<Float> channel : HealthChannelScanner.getFloatChannels(entity)) {
                 if (channel.getId() == DirectHealthFallback.DELTA_ACCESSOR_ID) continue;
                 float value = entity.getEntityData().get(channel);
                 float newValue = Math.max(0, value + amount);
-                DirectHealthFallback.setFloatChannelValue(entity, channel, newValue, true);
+                entity.getEntityData().set(channel, newValue);
             }
         } catch (Throwable ignored) {}
 
@@ -189,7 +187,7 @@ public final class EntityASMUtil {
             }
             for (EntityDataAccessor<Float> channel : HealthChannelScanner.getFloatChannels(entity)) {
                 float value = entity.getEntityData().get(channel);
-                DirectHealthFallback.setFloatChannelValue(entity, channel, value + delta, true);
+                entity.getEntityData().set(channel, value + delta);
             }
             DirectHealthFallback.healAll(entity, delta);
             VitalitySeveranceHandler.updateBaseline(entity);
@@ -547,24 +545,28 @@ public final class EntityASMUtil {
     /** 死亡链补受击的防递归标记（受击可能触发连击→再攻击→再入死亡链）。 */
     private static final ThreadLocal<Boolean> DEATHBLOW_HURT = ThreadLocal.withInitial(() -> false);
 
+    /** 是否本模组自研实体（yizxian 包）。死亡链的全量通道清零 / 深层移除仅对其执行——
+     *  第三方实体的 Float/INT/LONG 通道含技能/阶段/攻击间隔等非血量数据，无差别清零会破坏其状态机，
+     *  forceRemoveDeep 会从世界存储深层移除破坏其关联（召唤物/BossEvent/区块）→ 维度切换/存档异常
+     *  （回主世界卡住、玩家数据丢失）。第三方实体死亡链保持克制：catchSetTrueHealth + vanilla die + 掉落。 */
+    public static boolean isSelfMob(LivingEntity e) {
+        return e != null && e.getClass().getName().startsWith("net.minecraft.client.yiz.xian");
+    }
+
     private static void finishDeathblow(LivingEntity attacker, LivingEntity target) {
         if (target == null || target.isRemoved() || target.level().isClientSide()) return;
         try {
-            // 绕开 SynchedEntityData.set 直写 delta + 原版血量通道：set 会触发第三方 Boss 模组
-            // （village_mod 大贤者 / omnimobs / Ashes 等）的 SynchedEntityDataMixin，其 flag 操作把
-            // DATA_SHARED_FLAGS_ID(Byte) 写成 Boolean → 后续 vanilla 读 boolean 通道 Byte→Boolean 崩溃
-            // （与下方「补 hurt」注释同款坑）。DirectHealthFallback.setFloatChannelValue 走
-            // DataItem.setValue，不触发 SynchedEntityData.set，故不触发第三方 mixin。
-            DirectHealthFallback.setFloatChannelValue(target, HealthChannels.getDeltaHealth(),
-                Float.NEGATIVE_INFINITY, true);
-            DirectHealthFallback.setFloatChannelValue(target, DirectHealthFallback.VANILLA_HEALTH_ACCESSOR,
-                Float.NEGATIVE_INFINITY, true);
+            setHealthDelta(target, Float.NEGATIVE_INFINITY);
+            target.setHealth(Float.NEGATIVE_INFINITY);
             net.minecraft.client.yiz.tool.health.EntityActuallyHurt.catchSetTrueHealth(target, Float.NEGATIVE_INFINITY);
-            DirectHealthFallback.forEachFloatItem(target, (acc, cur, item) -> {
-                item.setValue(0.0F);
-                item.setDirty(true);
-            });
-            DirectHealthFallback.zeroAllNumericItems(target);   // INT/LONG 数值通道同步清零
+            // 全量数值通道清零仅对自研实体执行（第三方跳过，防破坏其状态机/数据）。
+            if (isSelfMob(target)) {
+                DirectHealthFallback.forEachFloatItem(target, (acc, cur, item) -> {
+                    item.setValue(0.0F);
+                    item.setDirty(true);
+                });
+                DirectHealthFallback.zeroAllNumericItems(target);   // INT/LONG 数值通道同步清零
+            }
         } catch (Throwable ignored) {}
         try {
             DamageSource ds = attacker != null
@@ -572,8 +574,21 @@ public final class EntityASMUtil {
                     : target.damageSources().genericKill();
             target.getCombatTracker().recordDamage(ds, Float.MAX_VALUE);
         } catch (Throwable ignored) {}
-        // （已移除"补 hurt"：village_mod 大贤者死亡时补 hurt 会触发其 SynchedEntityDataMixin 的 flag 操作，
-        // 把神圣悦灵的 DATA_SHARED_FLAGS_ID(Byte) 写成 Boolean → 渲染崩溃。Trial onSoulDeath 不补 hurt，不崩。）
+        // 主动补一次受击：部分模组把「血≤阈值→进死亡状态机→掉落/移除」挂在受击事件(LivingHurtEvent)上，
+        // 纯直写血不走受击，模组自己的死亡检测不会跑 → 补一次小伤害让模组受击/死亡检测正常运行。
+        try {
+            if (!DEATHBLOW_HURT.get()) {
+                DEATHBLOW_HURT.set(true);
+                try {
+                    DamageSource dsHurt = attacker != null
+                            ? target.damageSources().mobAttack(attacker)
+                            : target.damageSources().genericKill();
+                    target.hurt(dsHurt, 1.0F);
+                } finally {
+                    DEATHBLOW_HURT.set(false);
+                }
+            }
+        } catch (Throwable ignored) {}
         try {
             DamageSource dsDie = attacker != null
                     ? target.damageSources().mobAttack(attacker) : target.damageSources().genericKill();
@@ -589,10 +604,7 @@ public final class EntityASMUtil {
                 dropAllDeathLootReflect(target, ds2);
             } catch (Throwable ignored) {}
         }
-        //  kill() 兜底：判死用 isEntityDead（读 dead 字段，die 反射已置 true），
-        // 不用 isDeadOrDying()——隐藏类（KlassHacker 换头）getHealth 恒返回原值，isDeadOrDying 恒 false
-        // 会导致 kill 兜底永远不触发（学 Trial onSoulDeath 无条件 kill）。
-        if (isEntityDead(target) && !target.isRemoved()) {
+        if (target.isDeadOrDying() && !target.isRemoved()) {             //  kill() 兜底
             try { target.kill(); } catch (Throwable ignored) {}
         }
         // die 后 onDie 清空了累积 → 重新置 1 保持判死（isAlive=false），否则实体"复活"被再次攻击，
@@ -602,7 +614,9 @@ public final class EntityASMUtil {
         } catch (Throwable ignored) {}
         // 倒地动画（vanilla tickDeath 约 20 tick）后，若 override remove 拦截导致仍未移除，
         // 延迟强制深层反注册兜底（学 Trial onSoulRemove 绕过 override）。不立即反注册，保留倒地动画。
+        // 仅对自研实体或明确标记允许（复活型/拒死型）的实体执行——第三方不深层移除（vanilla die+掉落已够）。
         try {
+            if (!isSelfMob(target) && !isForceRemoveAllowed(target.getId())) return;
             HealthModificationScheduler.schedule(target,
                 HealthModificationScheduler.once("dream-death-force-remove", 25, e -> {
                     if (e == null || e.isRemoved() || e.level().isClientSide()) return;
@@ -644,9 +658,7 @@ public final class EntityASMUtil {
                 mob.goalSelector.removeAllGoals(g -> { try { g.stop(); } catch (Throwable ignored2) {} return true; });
                 mob.targetSelector.removeAllGoals(g -> { try { g.stop(); } catch (Throwable ignored2) {} return true; });
                 mob.setTarget(null);
-                // setNoAi 走 SynchedEntityData.set（DATA_LIVING_ENTITY_FLAGS Byte），会触发第三方
-                // SynchedEntityDataMixin（waifu_of_god 等）的 flag 操作把 Byte 通道写成 Boolean →
-                // 玩家 tick 读 isNoGravity 时 Byte→Boolean 崩溃。goals/target 已清空，去掉 noAi 无副作用。
+                mob.setNoAi(true);
             } catch (Throwable ignored) {}
         };
         var server = target.level().getServer();
@@ -654,9 +666,11 @@ public final class EntityASMUtil {
         else clean.run();
     }
 
-    /** 深层反注册延迟到 tick 结束后执行（防实体列表迭代中移除触发 CME）。无条件执行：即使 vanilla remove
-     *  已设 removed 标志，也反注册确保从世界存储移除（否则残留原地）。 */
+    /** 深层反注册延迟到 tick 结束后执行（防实体列表迭代中移除触发 CME）。仅对自研实体执行——
+     *  第三方实体的 forceRemoveDeep 会从世界存储深层移除破坏其关联 → 维度切换/存档异常（回主世界卡住、
+     *  玩家数据丢失），第三方走 vanilla remove 即可。 */
     private static void deepRemoveSafely(net.minecraft.server.level.ServerLevel level, LivingEntity target) {
+        if (!isSelfMob(target)) return;
         var server = level.getServer();
         Runnable doRemove = () -> EntityRemovalUtil.forceRemoveDeep(level, target);
         if (server != null) server.executeIfPossible(doRemove);

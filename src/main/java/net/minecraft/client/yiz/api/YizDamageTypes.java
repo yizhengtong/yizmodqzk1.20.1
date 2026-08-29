@@ -26,4 +26,12 @@ public final class YizDamageTypes {
      */
     public static final ResourceKey<DamageType> SPELL = ResourceKey.create(
         Registries.DAMAGE_TYPE, new ResourceLocation("yizmodqzk", "spell"));
+
+    /**
+     * 流血类型伤害（yizmodqzk:bleed）。
+     * 结算走 {@code LivingEntity.actuallyHurt} → 跳过 hurt 全部减免（无敌帧/抗性药水/护甲/魔咒/暴击等），
+     * 且不在任何物理 {@code DamageTypeTags} 中。数据包定义：{@code data/yizmodqzk/damage_type/bleed.json}。
+     */
+    public static final ResourceKey<DamageType> BLEED = ResourceKey.create(
+        Registries.DAMAGE_TYPE, new ResourceLocation("yizmodqzk", "bleed"));
 }

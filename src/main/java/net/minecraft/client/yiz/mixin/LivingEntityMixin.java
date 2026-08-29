@@ -45,15 +45,18 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
 
     // ==================== DataParameter 定义 ====================
     // delta 通道：定义在 tool/health/HealthChannels.getDeltaHealth()（独立 holder，vanilla 字段引用由
-    // 本模组 reobf 正确映射）。本 @Unique 字段用 = HealthChannels.getDeltaHealth() 初始化——
-    // 让该初始化代码在 LivingEntity.<clinit>（Bootstrap 期）触发 HealthChannels 提前 defineId，
-    // 保证 ID 早于 Player 等实体 accessor 分配（避免懒加载进世界时 ID 冲突）。
-    //  不能在这里直接 SynchedEntityData.defineId(...EntityDataSerializers.FLOAT)：vanilla 字段引用
-    // 合并进目标类 <clinit> 生产环境未重映射 → Bootstrap 期 NoSuchFieldError。
+    // 本模组 reobf 正确映射）。
+    //  ⚠️ 不能写成静态字段 = HealthChannels.getDeltaHealth()：@Unique 静态字段初始化会合并进目标类
+    // LivingEntity.<clinit>，在 mixin 应用期（类加载早期）触发 HealthChannels defineId——若此时
+    // vanilla LivingEntity 类尚未完成 <clinit>（LivingEntity 池未初始化），HealthChannels 通道会从
+    // id 0 开始分配，与 vanilla Entity 的 DATA_SHARED_FLAGS_ID(id 0) 冲突 → 实体构造 Duplicate id 0 崩溃。
+    // 改为运行时方法：defineSynchedData（实体构造，vanilla 类已加载）才首次触发，id 从继承池 max+1 分配。
+    // 首次触发后 Holder 缓存，后续零开销。
 
     @Unique
-    private static final EntityDataAccessor<Float> yizmodqzk$HEALTH_DELTA =
-        net.minecraft.client.yiz.tool.health.HealthChannels.getDeltaHealth();
+    private static EntityDataAccessor<Float> yizmodqzk$healthDelta() {
+        return net.minecraft.client.yiz.tool.health.HealthChannels.getDeltaHealth();
+    }
 
     /** SPELL 伤害类型——临时卸下的抗性效果（hurt 后恢复） */
     @Unique
@@ -71,12 +74,12 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
 
     @Override
     public float yizmodqzk$getHealthDelta() {
-        return ((LivingEntity) (Object) this).getEntityData().get(yizmodqzk$HEALTH_DELTA);
+        return ((LivingEntity) (Object) this).getEntityData().get(yizmodqzk$healthDelta());
     }
 
     @Override
     public void yizmodqzk$setHealthDelta(float delta) {
-        ((LivingEntity) (Object) this).getEntityData().set(yizmodqzk$HEALTH_DELTA, delta);
+        ((LivingEntity) (Object) this).getEntityData().set(yizmodqzk$healthDelta(), delta);
     }
 
     // ==================== ControlDataBridge 接口实现 ====================
@@ -103,7 +106,7 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
     private void yizmodqzk$onDefineSynchedData(CallbackInfo ci) {
         // 1.20.1：defineSynchedData() 无参，用 this.entityData.define
         LivingEntity self = (LivingEntity) (Object) this;
-        self.getEntityData().define(yizmodqzk$HEALTH_DELTA, 0F);
+        self.getEntityData().define(yizmodqzk$healthDelta(), 0F);
     }
 
     // ==================== getHealth / isAlive / isDeadOrDying 改写 ====================
@@ -135,7 +138,7 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
             return;
         }
 
-        float delta = self.getEntityData().get(yizmodqzk$HEALTH_DELTA);
+        float delta = self.getEntityData().get(yizmodqzk$healthDelta());
         if (delta != 0) {
             float original = cir.getReturnValueF();
             cir.setReturnValue(Math.min(original, self.getMaxHealth() + delta));
@@ -153,7 +156,7 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
     @Inject(method = "isAlive", at = @At("RETURN"), cancellable = true)
     private void yizmodqzk$modifyIsAlive(CallbackInfoReturnable<Boolean> cir) {
         LivingEntity self = (LivingEntity) (Object) this;
-        float delta = self.getEntityData().get(yizmodqzk$HEALTH_DELTA);
+        float delta = self.getEntityData().get(yizmodqzk$healthDelta());
         if (delta != 0) {
             cir.setReturnValue(self.getHealth() > 0);
         }
@@ -170,7 +173,7 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
     @Inject(method = "isDeadOrDying", at = @At("RETURN"), cancellable = true)
     private void yizmodqzk$modifyIsDeadOrDying(CallbackInfoReturnable<Boolean> cir) {
         LivingEntity self = (LivingEntity) (Object) this;
-        float delta = self.getEntityData().get(yizmodqzk$HEALTH_DELTA);
+        float delta = self.getEntityData().get(yizmodqzk$healthDelta());
         if (delta != 0) {
             cir.setReturnValue(self.getHealth() <= 0);
         }
@@ -199,11 +202,6 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
             VitalitySeveranceHandler.enforceFieldTick(entity);
             net.minecraft.client.yiz.tool.health.HealthWriteGuard.enforce(entity);
         }
-        // 后台预扫描队列喂入（每 20 tick 摊薄）：新实体类静默入队，由服务端每 tick 逐个扫描缓存，
-        // 玩家带涨跌多空/灭在多空属性攻击时可直接命中缓存（原版实体走固定槽快速路径）。
-        if (entity.tickCount % 20 == 0) {
-            net.minecraft.client.yiz.tool.health.EntityHealthLocator.offerPreScan(entity);
-        }
     }
 
     @Inject(method = "die", at = @At("HEAD"), cancellable = true)
@@ -215,9 +213,7 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
             return;
         }
 
-        // 直写绕开 SynchedEntityData.set（防第三方 SynchedEntityDataMixin Byte→Boolean 崩溃）
-        net.minecraft.client.yiz.tool.health.DirectHealthFallback.setFloatChannelValue(entity,
-            net.minecraft.client.yiz.tool.health.HealthChannels.getDeltaHealth(), 0F, true);
+        entity.getEntityData().set(yizmodqzk$healthDelta(), 0F);
         net.minecraft.client.yiz.tool.health.EntityASMUtil.clearDreamAccum(entity); // 死亡清等比累积（防重生残留）
         net.minecraft.client.yiz.tool.health.SustainedHealthSuppression.remove(entity);
         net.minecraft.client.yiz.tool.health.GateHunt.remove(entity);
@@ -234,7 +230,7 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
     @Inject(method = "addAdditionalSaveData", at = @At("TAIL"))
     private void yizmodqzk$addAdditionalSaveData(CompoundTag tag, CallbackInfo ci) {
         LivingEntity self = (LivingEntity) (Object) this;
-        float delta = self.getEntityData().get(yizmodqzk$HEALTH_DELTA);
+        float delta = self.getEntityData().get(yizmodqzk$healthDelta());
         if (delta != 0) {
             tag.putFloat("yizmodqzk:health_delta", delta);
         }
@@ -245,7 +241,7 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
         if (tag.contains("yizmodqzk:health_delta", Tag.TAG_FLOAT)) {
             LivingEntity self = (LivingEntity) (Object) this;
             float delta = tag.getFloat("yizmodqzk:health_delta");
-            self.getEntityData().set(yizmodqzk$HEALTH_DELTA, Math.min(0, delta));
+            self.getEntityData().set(yizmodqzk$healthDelta(), Math.min(0, delta));
         }
     }
 
@@ -304,8 +300,15 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
                     boolean meleeHit = source.getDirectEntity() instanceof net.minecraft.world.entity.LivingEntity
                             && source.getDirectEntity() == source.getEntity();
                     var precInst = pl.getAttribute(net.minecraft.client.yiz.attribute.YizAttributes.PRECISION.get());
-                    boolean canRollCrit = !vanillaCrit && (meleeHit || (precInst != null && precInst.getValue() > 0));
-                    if (canRollCrit) {
+                    boolean chargeCrit = net.minecraft.client.yiz.handler.LockOnHandler.consumeChargeCrit(pl);
+                    boolean canRollCrit = !vanillaCrit && !chargeCrit
+                            && (meleeHit || (precInst != null && precInst.getValue() > 0));
+                    if (chargeCrit) {
+                        // 会心/渴攻蓄力满攻击：必定暴击（倍率 1.5 + CRIT_DAMAGE/100）
+                        double critDmg = pl.getAttributeValue(net.minecraft.client.yiz.attribute.YizAttributes.CRIT_DAMAGE.get());
+                        amount *= (1.5f + (float)(critDmg / 100.0));
+                        spawnCritParticles(self);
+                    } else if (canRollCrit) {
                         double critRate = pl.getAttributeValue(net.minecraft.client.yiz.attribute.YizAttributes.CRIT_RATE.get());
                         if (critRate > 0 && Math.random() < critRate / 100.0) {
                             double critDmg = pl.getAttributeValue(net.minecraft.client.yiz.attribute.YizAttributes.CRIT_DAMAGE.get());

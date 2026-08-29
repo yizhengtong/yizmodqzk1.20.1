@@ -29,12 +29,16 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 @Mixin(ServerPlayerGameMode.class)
 public abstract class ServerDestroyBlockMixin {
 
-    @Shadow protected ServerPlayer player;
-    @Shadow protected ServerLevel level;
+    // 生产 SRG 环境下 @Shadow 字段映射不命中会崩溃，改用 MixinAccess 按类型反射（见 MixinAccess 注释）。
 
     @Inject(method = "destroyBlock(Lnet/minecraft/core/BlockPos;)Z",
             at = @At("HEAD"), cancellable = true)
     private void yizmodqzk$removeFluid(BlockPos pos, CallbackInfoReturnable<Boolean> cir) {
+        ServerLevel level = net.minecraft.client.yiz.util.MixinAccess.field(this,
+            ServerPlayerGameMode.class, ServerLevel.class, 0);
+        ServerPlayer player = net.minecraft.client.yiz.util.MixinAccess.field(this,
+            ServerPlayerGameMode.class, ServerPlayer.class, 0);
+        if (level == null || player == null) return;
         BlockState state = level.getBlockState(pos);
         if (!(state.getBlock() instanceof LiquidBlock)) return;
         if (!holdsMiningTool(player)) return; // 非镐/斧/铲不可破坏流体

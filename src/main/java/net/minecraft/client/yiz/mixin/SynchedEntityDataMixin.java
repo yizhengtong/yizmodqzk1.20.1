@@ -3,11 +3,13 @@ package net.minecraft.client.yiz.mixin;
 import net.minecraft.client.yiz.tool.health.HealthChannels;
 import net.minecraft.client.yiz.tool.health.SecureHealthClosure;
 import net.minecraft.network.syncher.EntityDataAccessor;
+import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
  * SynchedEntityData 数据层拦截（1.20.1，set 层拦截思路）。
@@ -43,5 +45,50 @@ public abstract class SynchedEntityDataMixin {
         if ((obf || key) && !SecureHealthClosure.isObfWriteAllowed()) {
             ci.cancel();
         }
+    }
+
+    /**
+     * 数值通道读守卫（兜底防崩，泛化）：1.20.1 按类分配 DataParameter id + 多模组按 id 直写，
+     * 任意来源可能把 INT/LONG/FLOAT 通道的 DataItem 值写成 Byte 等错误类型 → vanilla
+     * {@code get()} 的 {@code Serializer.copy()} 抛 Byte→Integer 等 ClassCastException（AIR_SUPPLY、
+     * 第三方模组 EVASION_TIME 等都中招）。此处任何数值序列化器读取时检测，值类型与序列化器
+     * 不匹配即修复为类型默认值，避免整个游戏崩溃。用 {@link MixinAccess} 反射读 itemsById
+     * （不依赖 @Shadow/@Accessor 的 SRG 字段名映射，生产安全）。
+     */
+    @Inject(method = "get(Lnet/minecraft/network/syncher/EntityDataAccessor;)Ljava/lang/Object;",
+            at = @At("HEAD"))
+    private <T> void yizmodqzk$guardNumericGet(EntityDataAccessor<T> key, CallbackInfoReturnable<T> cir) {
+        var ser = key.getSerializer();
+        // 只处理基础类型序列化器：值类型与序列化器不匹配会抛 ClassCastException（生产实测
+        // INT/LONG/FLOAT 被写坏成 Byte，BYTE(FLAGS) 被写坏成 Float 都崩）。
+        if (ser != EntityDataSerializers.INT && ser != EntityDataSerializers.LONG
+                && ser != EntityDataSerializers.FLOAT && ser != EntityDataSerializers.BYTE
+                && ser != EntityDataSerializers.BOOLEAN && ser != EntityDataSerializers.STRING) return;
+        try {
+            it.unimi.dsi.fastutil.ints.Int2ObjectMap<SynchedEntityData.DataItem<?>> map =
+                net.minecraft.client.yiz.util.MixinAccess.field(this, SynchedEntityData.class,
+                    it.unimi.dsi.fastutil.ints.Int2ObjectMap.class, 0);
+            if (map == null) return;
+            SynchedEntityData.DataItem<?> item = map.get(key.getId());
+            if (item == null) return;
+            Object v = item.getValue();
+            boolean typeOk = v != null
+                    && (ser == EntityDataSerializers.INT && v instanceof Integer
+                        || ser == EntityDataSerializers.LONG && v instanceof Long
+                        || ser == EntityDataSerializers.FLOAT && v instanceof Float
+                        || ser == EntityDataSerializers.BYTE && v instanceof Byte
+                        || ser == EntityDataSerializers.BOOLEAN && v instanceof Boolean
+                        || ser == EntityDataSerializers.STRING && v instanceof String);
+            if (typeOk) return;
+            // 值类型与序列化器不匹配（被第三方按 id 写坏）→ 修复为类型默认值
+            Object def = ser == EntityDataSerializers.INT ? (Object) 0
+                    : ser == EntityDataSerializers.LONG ? (Object) 0L
+                    : ser == EntityDataSerializers.FLOAT ? (Object) 0.0F
+                    : ser == EntityDataSerializers.BYTE ? (Object) (byte) 0
+                    : ser == EntityDataSerializers.BOOLEAN ? (Object) false
+                    : (Object) "";
+            ((SynchedEntityData.DataItem) item).setValue(def);
+            item.setDirty(true);
+        } catch (Throwable ignored) {}
     }
 }

@@ -2,12 +2,12 @@ package net.minecraft.client.yiz.tool.health;
 
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import net.minecraft.client.yiz.tool.health.codec.BlackBoxInverseSolver;
 import net.minecraft.client.yiz.tool.health.codec.EncodedValueCodec;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.entity.player.Player;
 import net.minecraftforge.fml.loading.FMLPaths;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
@@ -15,18 +15,15 @@ import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
 
 import java.io.InputStream;
-import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedDeque;
 
 /**
  * 实体真实血量定位器（1.20.1 P0 扩展版）—「全能扫描 / 偏移匹配 / 字节码探测 / 数值通道 / 混淆串 / 编码反解」。
@@ -91,28 +88,6 @@ public final class EntityHealthLocator {
 
     private static final ThreadLocal<Boolean> SCANNING = ThreadLocal.withInitial(() -> false);
 
-    /** 原版血量样式（getHealth/setHealth 未在该类层级 override → 健康走原版 DATA_HEALTH_ID）按稳定类名缓存。 */
-    private static final Map<String, Boolean> VANILLA_HEALTH_STYLE = new ConcurrentHashMap<>();
-
-    /** 后台预扫描队列（静默匹配）：实体 tick 入队，服务端每 tick 逐个静默扫描。 */
-    private static final Deque<WeakRefSample> PRE_SCAN_QUEUE = new ConcurrentLinkedDeque<>();
-    /** 已入队/处理中的稳定类名（去重）。 */
-    private static final Set<String> PRE_SCAN_QUEUED = ConcurrentHashMap.newKeySet();
-    /** 每 tick 最多预扫描实体数（摊薄，避免单 tick 卡顿）。 */
-    private static final int PRE_SCAN_PER_TICK = 2;
-    /** 预扫描队列长度上限（超限丢队尾最旧，防无限增长）。 */
-    private static final int PRE_SCAN_QUEUE_CAP = 256;
-
-    /** 预扫描样本：稳定类名 + 弱引用实体实例（实体消失后样本失效，类可再入队）。 */
-    private static final class WeakRefSample {
-        final String key;
-        final WeakReference<LivingEntity> ref;
-        WeakRefSample(String key, LivingEntity entity) {
-            this.key = key;
-            this.ref = new WeakReference<>(entity);
-        }
-    }
-
     private EntityHealthLocator() {}
 
     // ==================== 公共 API ====================
@@ -134,10 +109,6 @@ public final class EntityHealthLocator {
         String key = stableClassName(entity.getClass());
         HealthSlot cached = CACHE.get(key);
         if (cached != null) return cached;
-        // 原版固定位置快速路径：getHealth/setHealth 未 override 的实体健康走原版 DATA_HEALTH_ID，
-        // 直接命中固定槽，跳过全链路扫描。误判由写后验证失败 → invalidateSlot → 全量重扫自愈兜底。
-        HealthSlot vanilla = vanillaFastSlot(key, entity);
-        if (vanilla != null) return vanilla;
         if (NON_SLOT_CLASSES.contains(key)) {
             // 负缓存失效：血量在中间范围（非满血、非濒死）时，之前的「无槽」可能是满血/临界值误判，
             // 允许重试一次（每类只重试一次，防频繁重扫）
@@ -215,49 +186,6 @@ public final class EntityHealthLocator {
         return slash > 0 ? name.substring(0, slash) : name;
     }
 
-    /**
-     * 原版固定位置快速路径：实体类 getHealth/setHealth 未 override（健康走原版 DATA_HEALTH_ID）
-     * → 直接返回原版血量通道固定槽并缓存，不扫描。生产 SRG 名安全（槽 fieldName 用 {@code #id:}）。
-     * 判定按稳定类名缓存（getDeclaredMethods 每类只跑一次）。
-     */
-    private static HealthSlot vanillaFastSlot(String key, LivingEntity entity) {
-        EntityDataAccessor<Float> vh = DirectHealthFallback.VANILLA_HEALTH_ACCESSOR;
-        if (vh == null) return null;
-        if (!isVanillaHealthStyle(entity.getClass())) return null;
-        HealthSlot slot = new HealthSlot(key, "#id:" + vh.getId(), "Float", false, "accessor", "");
-        CACHE.put(key, slot);
-        save();
-        if (SLOT_LOG_DONE.add(key)) {
-            LOGGER.info("[EHL] 原版固定槽 {}: kind=accessor field=#id:{} (getHealth/setHealth 未 override)",
-                key, vh.getId());
-        }
-        return slot;
-    }
-
-    /** 实体类是否「原版血量样式」（getHealth/setHealth 未在类层级 override）。按稳定类名缓存。 */
-    private static boolean isVanillaHealthStyle(Class<?> clazz) {
-        String key = stableClassName(clazz);
-        Boolean cached = VANILLA_HEALTH_STYLE.get(key);
-        if (cached != null) return cached;
-        boolean vanilla = computeVanillaHealthStyle(clazz);
-        VANILLA_HEALTH_STYLE.put(key, vanilla);
-        return vanilla;
-    }
-
-    private static boolean computeVanillaHealthStyle(Class<?> clazz) {
-        try {
-            for (Class<?> c = clazz; c != null && c != LivingEntity.class; c = c.getSuperclass()) {
-                for (java.lang.reflect.Method m : c.getDeclaredMethods()) {
-                    String n = m.getName();
-                    if (("getHealth".equals(n) || "m_21223_".equals(n)) && m.getReturnType() == float.class) return false;
-                    if (("setHealth".equals(n) || "m_21153_".equals(n)) && m.getParameterCount() == 1
-                            && m.getParameterTypes()[0] == float.class) return false;
-                }
-            }
-        } catch (Throwable ignored) {}
-        return true;
-    }
-
     /** 清除某实体的槽缓存（正缓存 + 负缓存），下次 locate 重新探测。 */
     private static void invalidateSlot(LivingEntity entity) {
         if (entity == null) return;
@@ -309,48 +237,6 @@ public final class EntityHealthLocator {
         return true;
     }
 
-    // ==================== 后台预扫描队列（静默匹配） ====================
-
-    /**
-     * 预扫描喂入口：服务端实体 tick 时调用。未缓存/未负缓存/未入队的新类才入队，
-     * 样本为实体弱引用（消失后失效可再入队）。成本 = 稳定类名 + 几次 Map/Set 查，可忽略。
-     */
-    public static void offerPreScan(LivingEntity entity) {
-        if (entity == null || entity.level().isClientSide()) return;
-        if (entity instanceof Player) return;
-        try {
-            if (SecureHealthClosure.isRegistered(entity)) return; // 本模组受保护实体不走定位器
-        } catch (Throwable ignored) {}
-        String key = stableClassName(entity.getClass());
-        if (CACHE.containsKey(key) || NON_SLOT_CLASSES.contains(key)) return;
-        if (!PRE_SCAN_QUEUED.add(key)) return; // 已在队/处理中
-        if (PRE_SCAN_QUEUE.size() >= PRE_SCAN_QUEUE_CAP) {
-            WeakRefSample stale = PRE_SCAN_QUEUE.pollLast(); // 丢队尾最旧，防无限增长
-            if (stale != null) PRE_SCAN_QUEUED.remove(stale.key);
-        }
-        PRE_SCAN_QUEUE.addFirst(new WeakRefSample(key, entity));
-    }
-
-    /**
-     * 预扫描处理器：服务端每 tick 调用（ServerTickEvent END）。静默逐个扫描队列实体
-     * （每 tick 上限 {@link #PRE_SCAN_PER_TICK} 个，摊薄避免单 tick 卡顿），使常见实体类型
-     * 在玩家攻击前就被定位缓存；主动触发效果（dream 伤害）仍同步优先扫当前目标。
-     */
-    public static void tickPreScan() {
-        if (PRE_SCAN_QUEUE.isEmpty() || SCANNING.get()) return;
-        int n = 0;
-        while (n < PRE_SCAN_PER_TICK && !PRE_SCAN_QUEUE.isEmpty()) {
-            WeakRefSample s = PRE_SCAN_QUEUE.pollFirst();
-            if (s == null) break;
-            PRE_SCAN_QUEUED.remove(s.key);
-            LivingEntity e = s.ref.get();
-            if (e == null || e.isRemoved() || e.level().isClientSide() || e.getHealth() <= 0) continue;
-            if (CACHE.containsKey(s.key) || NON_SLOT_CLASSES.contains(s.key)) continue;
-            locate(e);
-            n++;
-        }
-    }
-
     // ==================== 逻辑血量读写（按 kind 分派） ====================
 
     private static Double readLocated(LivingEntity entity, HealthSlot slot) {
@@ -369,7 +255,7 @@ public final class EntityHealthLocator {
                     if (acc == null) return null;
                     String[] cur = {null};
                     DirectHealthFallback.forEachStringItem(entity, (a, v, item) -> {
-                        if (a.getId() == acc.getId()) cur[0] = v;
+                        if (a == acc) cur[0] = v;
                     });
                     if (cur[0] == null) return null;
                     double[] parsed = parseNumberFromString(cur[0]);
@@ -405,9 +291,9 @@ public final class EntityHealthLocator {
                 case "sscipher": {
                     EncodedValueCodec.Solution sol = effectiveSscipherSolution(slot, entity);
                     if (sol == null) return null;
-                    String value = sscipherString(slot, entity, sol);
+                    String value = sscipherValue(entity);
                     if (value == null) return null;
-                    int[] tok = sscipherToken(slot, entity, sol, value);
+                    int[] tok = extractTokenAfterHash(value, entity.getUUID().hashCode());
                     if (tok == null) return null;
                     double d = sol.decode(Float.intBitsToFloat(tok[0]));
                     return Double.isFinite(d) ? d : null;
@@ -446,7 +332,7 @@ public final class EntityHealthLocator {
                     if (acc == null) return false;
                     String[] cur = {null};
                     DirectHealthFallback.forEachStringItem(entity, (a, v, item) -> {
-                        if (a.getId() == acc.getId()) cur[0] = v;
+                        if (a == acc) cur[0] = v;
                     });
                     if (cur[0] == null) return false;
                     double[] parsed = parseNumberFromString(cur[0]);
@@ -489,36 +375,31 @@ public final class EntityHealthLocator {
                 case "sscipher": {
                     EncodedValueCodec.Solution sol = effectiveSscipherSolution(slot, entity);
                     if (sol == null) return false;
-                    // 多重兼容定位：优先缓存 accessor id + token 区间，失效回退等式匹配（getHealth 可能是障眼值）
-                    String value = sscipherString(slot, entity, sol);
+                    // 按 hash 值模式重新定位 accessor，不依赖缓存的 accessor id（每只隐藏类实体的
+                    // SS_HEALTH id 可能不同，缓存 id 会在「新召唤的实体」上失效 → 没效果）
+                    EntityDataAccessor<?> acc = findSscipherAccessor(entity);
+                    if (acc == null) return false;
+                    String value = stringValueById(entity, acc.getId());
                     if (value == null) return false;
-                    int[] tok = sscipherToken(slot, entity, sol, value);
+                    // 每次按当前串 + hash 重新定位加密值位置（不依赖检测时缓存的 tokStart/tokEnd，
+                    // 防止目标自己重写串、位数变化后区间错位 → 「有时改得到实际位置有时改不到」）
+                    int[] tok = extractTokenAfterHash(value, entity.getUUID().hashCode());
                     if (tok == null) return false;
                     double encoded = sol.encode(logical);
                     if (!Double.isFinite(encoded)) return false;
                     int encInt = Float.floatToRawIntBits((float) encoded);
-                    // tok 返回 [值, start, end]，rebuildToken 需要 [start, end]
+                    // extractTokenAfterHash 返回 [值, start, end]，rebuildToken 需要 [start, end]
                     String rebuilt = rebuildToken(value, new int[]{tok[1], tok[2]}, Integer.toString(encInt));
-                    int accId = accessorIdFromSlot(slot);
-                    boolean ok;
-                    if (accId >= 0) {
-                        ok = setStringById(entity, accId, rebuilt);
-                    } else {
-                        float h = entity.getHealth();
-                        EntityDataAccessor<?> acc = Float.isFinite(h)
-                                ? findSscipherAccessor(entity, sol, Float.floatToRawIntBits(h)) : null;
-                        ok = acc != null && setStringById(entity, acc.getId(), rebuilt);
-                    }
+                    boolean ok = setStringById(entity, acc.getId(), rebuilt);
                     if (SS_WRITE_DIAG2.incrementAndGet() <= 8) {
-                        int diagId = accId >= 0 ? accId : -1;
-                        String after = diagId >= 0 ? stringValueById(entity, diagId) : null;
+                        String after = stringValueById(entity, acc.getId());
                         Double rb = null;
                         if (after != null) {
-                            int[] tok2 = locateSscipherTokenByRange(slot, after);
+                            int[] tok2 = extractTokenAfterHash(after, entity.getUUID().hashCode());
                             if (tok2 != null) rb = sol.decode(Float.intBitsToFloat(tok2[0]));
                         }
                         net.minecraft.client.yiz.tizMod.LOGGER.warn("[EHL-SSW2] accId={} 目标={} 写前串={} 编码int={} 重建串={} 写后串={} 回读血={} ok={}",
-                            diagId, logical, value, encInt, rebuilt, after, rb, ok);
+                            acc.getId(), logical, value, encInt, rebuilt, after, rb, ok);
                     }
                     return ok;
                 }
@@ -591,41 +472,45 @@ public final class EntityHealthLocator {
                 }
             });
             if (found[0] != null) return found[0];
-            // 字符串通道（前缀/后缀数值编码 / 密钥异或+旋转可逆混淆 / AES 加密串差值血量）
+            // 字符串通道（前缀/后缀数值编码 / 密钥异或+旋转可逆混淆）
             // 注意：不共享数值通道的 probed 预算（加密藏血实体可能数值通道很多、先耗尽预算，
             // 导致字符串检测被跳过 → 同一类实体「有的测得到有的测不到」）。
             DirectHealthFallback.forEachStringItem(entity, (acc, value, item) -> {
                 if (found[0] != null) return;
-                // 通用可逆混淆检测：扫描串内每个有符号整数 token，用「实体身份特征派生的候选密钥集」
-                // 反解 XOR_ROT，再用写探针权威确认（不依赖前缀/类名/字段名，也不假设密钥 = UUID hash）。
-                java.util.List<BlackBoxInverseSolver.KeyCandidate> candidates =
-                    BlackBoxInverseSolver.deriveKeyCandidates(entity);
+                // 通用可逆混淆检测：扫描串内每个有符号整数 token，用实体 UUID 哈希作候选密钥
+                // 做「密钥异或 + 位旋转」反解（黑箱推断，不依赖前缀/类名/字段名）。
+                int hash = entity.getUUID().hashCode();
                 java.util.List<int[]> tokens = scanIntTokens(value);
                 if (SS_STR_SCAN_DIAG.incrementAndGet() <= 5) {
-                    net.minecraft.client.yiz.tizMod.LOGGER.warn("[EHL-STRSCAN] {} value={} tokens={} maxHp={}",
-                        stableClassName(entity.getClass()), value, tokens.size(), maxHp);
+                    net.minecraft.client.yiz.tizMod.LOGGER.warn("[EHL-STRSCAN] {} value={} hash={} tokens={} maxHp={}",
+                        stableClassName(entity.getClass()), value, hash, tokens.size(), maxHp);
                 }
-                // 多重 plaintext 参考：getHealth 可能是障眼值（藏血实体），同时试 maxHealth（满血时
-                // token 解码 = maxHealth），写探针是最终权威确认，误配会被 verifySscipherFollows 打回
-                int[] rawRefs = { Float.floatToRawIntBits(entity.getHealth()),
-                                  Float.floatToRawIntBits(maxHp) };
                 for (int[] tok : tokens) {
-                    for (int raw : rawRefs) {
-                        java.util.List<EncodedValueCodec.Solution> sols =
-                            BlackBoxInverseSolver.solveKeyedRotation(tok[0], raw, candidates);
-                        for (EncodedValueCodec.Solution sol : sols) {
-                            // 写探针权威确认（防满血坍缩/假阳性）
-                            if (!verifySscipherFollows(entity, acc, value, sol, tok)) continue;
-                            if (SS_CIPHER_DIAG.add(stableClassName(entity.getClass()))) {
-                                net.minecraft.client.yiz.tizMod.LOGGER.warn("[EHL-CIPHER] {} value={} 命中token={} {}",
-                                    stableClassName(entity.getClass()), value, tok[0], sol.toMeta());
-                            }
-                            String fieldName = findAccessorFieldName(entity, acc);
-                            if (fieldName == null) fieldName = "#id:" + acc.getId();
-                            String meta = sol.toMeta() + ";tokStart=" + tok[1] + ";tokEnd=" + tok[2];
-                            found[0] = new HealthSlot(stableClassName(entity.getClass()), fieldName, "string", false, "sscipher", meta);
-                            return;
-                        }
+                    EncodedValueCodec.Solution sol =
+                        net.minecraft.client.yiz.tool.health.codec.BlackBoxInverseSolver.inferKeyedRotation(entity, tok[0], hash);
+                    if (sol == null) continue;
+                    if (SS_CIPHER_DIAG.add(stableClassName(entity.getClass()))) {
+                        net.minecraft.client.yiz.tizMod.LOGGER.warn("[EHL-CIPHER] {} value={} 命中token={} {}",
+                            stableClassName(entity.getClass()), value, tok[0], sol.toMeta());
+                    }
+                    String fieldName = findAccessorFieldName(entity, acc);
+                    if (fieldName == null) fieldName = "#id:" + acc.getId();
+                    String meta = sol.toMeta() + ";tokStart=" + tok[1] + ";tokEnd=" + tok[2];
+                    found[0] = new HealthSlot(stableClassName(entity.getClass()), fieldName, "string", false, "sscipher", meta);
+                    return;
+                }
+                // 无分隔符拼接（加密值为正数时哈希与加密值连成一个超长数字，scanIntTokens 会溢出跳过）：
+                // 用已知的哈希十进制串在 value 中定位，取其后的有符号整数作加密值。
+                int[] htok = extractTokenAfterHash(value, hash);
+                if (htok != null) {
+                    EncodedValueCodec.Solution sol =
+                        net.minecraft.client.yiz.tool.health.codec.BlackBoxInverseSolver.inferKeyedRotation(entity, htok[0], hash);
+                    if (sol != null) {
+                        String fieldName = findAccessorFieldName(entity, acc);
+                        if (fieldName == null) fieldName = "#id:" + acc.getId();
+                        String meta = sol.toMeta() + ";tokStart=" + htok[1] + ";tokEnd=" + htok[2];
+                        found[0] = new HealthSlot(stableClassName(entity.getClass()), fieldName, "string", false, "sscipher", meta);
+                        return;
                     }
                 }
                 double[] parsed = parseNumberFromString(value);
@@ -930,31 +815,6 @@ public final class EntityHealthLocator {
         }
     }
 
-    /**
-     * sscipher 写探针权威确认：把 encode(h+d) 的位型写成整数串写回 token 区间，读 getHealth 是否
-     * 跟随（随后还原）。这是 XOR_ROT 检测的唯一权威过滤器——「编码往返验证」是数学冗余，
-     * 候选集软预筛在满血实体上会坍缩，都不可靠。
-     */
-    private static boolean verifySscipherFollows(LivingEntity entity, EntityDataAccessor<?> acc,
-                                                 String original, EncodedValueCodec.Solution sol, int[] tok) {
-        try {
-            float before = entity.getHealth();
-            if (!Float.isFinite(before) || before <= 0) return false;
-            double d = Math.max(1.0, Math.abs(before) * 1e-3);
-            d = Math.min(d, 1e6);
-            double encoded = sol.encode(before + d);
-            if (!Double.isFinite(encoded)) return false;
-            int encInt = Float.floatToRawIntBits((float) encoded);
-            String rebuilt = rebuildToken(original, new int[]{tok[1], tok[2]}, Integer.toString(encInt));
-            boolean wrote = DirectHealthFallback.setStringChannelValue(entity, acc, rebuilt, false);
-            float after = entity.getHealth();
-            DirectHealthFallback.setStringChannelValue(entity, acc, original, false); // 还原
-            return wrote && Math.abs((after - before) - d) < Math.max(0.6, d * 0.1);
-        } catch (Throwable t) {
-            return false;
-        }
-    }
-
     /** 原有 Float 通道行为验证：直写通道 cur−1，读 getHealth 是否跟随减少，随后还原。 */
     private static boolean verifyChannelFollowsGetHealth(LivingEntity entity, EntityDataAccessor<Float> acc) {
         try {
@@ -1064,76 +924,32 @@ public final class EntityHealthLocator {
         return -1;
     }
 
-    /** 按缓存解的密钥源（keySrc1/keySrc2）从当前实体重推 XOR_ROT 密钥，只复用旋转量。
-     *  常量源（keySrc 为 null）直接用缓存值；实体相关源逐实体 resolve() 重推。 */
+    /** 用当前实体的 UUID 哈希重新推导 XOR_ROT 密钥（只复用缓存的旋转量；密钥每实体不同，不能缓存）。 */
     private static EncodedValueCodec.Solution effectiveSscipherSolution(HealthSlot slot, LivingEntity entity) {
         EncodedValueCodec.Solution cached = EncodedValueCodec.Solution.fromMeta(slot.meta());
         if (cached == null) return null;
-        EncodedValueCodec.KeySource s1 = cached.keySrc1();
-        EncodedValueCodec.KeySource s2 = cached.keySrc2();
-        if (s1 == null || s2 == null) return cached;  // 常量密钥，直接用缓存值
-        int k1 = s1.resolve(entity);
-        int k2 = s2.resolve(entity);
-        return EncodedValueCodec.Solution.xorRot(k1, k2, cached.rotation());
+        int hash = entity.getUUID().hashCode();
+        return EncodedValueCodec.Solution.xorRot(hash, -hash, cached.rotation());
     }
 
-    /** 运行时按「重推解 + 等式匹配」定位加密藏血槽的 accessor（不认前缀/类名/字段名/hash 文本）。 */
-    private static EntityDataAccessor<?> findSscipherAccessor(LivingEntity entity,
-                                                               EncodedValueCodec.Solution sol, int rawInt) {
+    /** 按「串内含 UUID 哈希 + 后跟有符号整数」通用特征找加密藏血槽的访问器（不认前缀/类名/字段名/id）。 */
+    private static EntityDataAccessor<?> findSscipherAccessor(LivingEntity entity) {
+        int hash = entity.getUUID().hashCode();
         final EntityDataAccessor<?>[] found = {null};
         DirectHealthFallback.forEachStringItem(entity, (acc, value, item) -> {
-            if (found[0] == null && locateSscipherToken(value, sol, rawInt) != null) found[0] = acc;
+            if (found[0] == null && extractTokenAfterHash(value, hash) != null) found[0] = acc;
         });
         return found[0];
     }
 
-    /** 读取加密藏血槽的当前字符串值（按等式匹配定位，不依赖缓存的 accessor id / hash 文本）。 */
-    private static String sscipherValue(LivingEntity entity, EncodedValueCodec.Solution sol, int rawInt) {
+    /** 读取加密藏血槽的当前字符串值（按「串内含哈希 + 有符号整数」定位，不依赖缓存的 accessor id）。 */
+    private static String sscipherValue(LivingEntity entity) {
+        int hash = entity.getUUID().hashCode();
         final String[] val = {null};
         DirectHealthFallback.forEachStringItem(entity, (acc, value, item) -> {
-            if (val[0] == null && locateSscipherToken(value, sol, rawInt) != null) val[0] = value;
+            if (val[0] == null && extractTokenAfterHash(value, hash) != null) val[0] = value;
         });
         return val[0];
-    }
-
-    /** 等式匹配定位加密值 token：scanIntTokens 后找「解密后 == rawInt」的 token，返回 [值, 起点, 终点]。 */
-    private static int[] locateSscipherToken(String value, EncodedValueCodec.Solution sol, int rawInt) {
-        if (value == null || sol == null) return null;
-        java.util.List<int[]> tokens = scanIntTokens(value);
-        for (int[] tok : tokens) {
-            int dec = Integer.rotateRight(tok[0] ^ sol.key2(), sol.rotation()) ^ sol.key();
-            if (dec == rawInt) return tok;
-        }
-        return null;
-    }
-
-    /** 按缓存的 tokStart/tokEnd 定位 token（不依赖 getHealth/等式匹配，最稳；跨实体血量变化也有效）。 */
-    private static int[] locateSscipherTokenByRange(HealthSlot slot, String value) {
-        int[] range = tokenRangeFromMeta(slot.meta());
-        if (range == null) return null;
-        Integer v = parseIntToken(value, range);
-        return v == null ? null : new int[]{v, range[0], range[1]};
-    }
-
-    /** 读 sscipher 槽当前字符串：优先缓存 accessor id（#id:N），失效回退按 getHealth 等式匹配。 */
-    private static String sscipherString(HealthSlot slot, LivingEntity entity, EncodedValueCodec.Solution sol) {
-        int id = accessorIdFromSlot(slot);
-        if (id >= 0) {
-            String v = stringValueById(entity, id);
-            if (v != null) return v;
-        }
-        float h = entity.getHealth();
-        if (!Float.isFinite(h)) return null;
-        return sscipherValue(entity, sol, Float.floatToRawIntBits(h));
-    }
-
-    /** 定位 sscipher 槽当前加密 token：优先缓存 tokStart/tokEnd，失效回退等式匹配。 */
-    private static int[] sscipherToken(HealthSlot slot, LivingEntity entity, EncodedValueCodec.Solution sol, String value) {
-        int[] byRange = locateSscipherTokenByRange(slot, value);
-        if (byRange != null) return byRange;
-        float h = entity.getHealth();
-        if (!Float.isFinite(h)) return null;
-        return locateSscipherToken(value, sol, Float.floatToRawIntBits(h));
     }
 
     /** 按访问器 id 读字符串通道值（遍历实际 DataItem，不依赖反射/类名）。 */
@@ -1182,51 +998,47 @@ public final class EntityHealthLocator {
         }
     }
 
-    // extractTokenAfterHash 已删除：原「UUID hash 十进制文本 + 后跟整数」的格式定位是 super-steve 特定，
-    // 被 scanIntTokens 的后缀枚举 + locateSscipherToken 的等式匹配（不依赖 hash 文本）取代。
+    /** 用已知哈希十进制串在 value 中定位，取其后的有符号整数（处理无分隔符拼接的情况）。 */
+    private static int[] extractTokenAfterHash(String value, int hash) {
+        if (value == null) return null;
+        String hashStr = Integer.toString(hash);
+        int idx = value.indexOf(hashStr);
+        if (idx < 0) return null;
+        int start = idx + hashStr.length();
+        if (start >= value.length()) return null;
+        int end = start;
+        char c0 = value.charAt(start);
+        if (c0 == '-' || c0 == '+') end++;
+        while (end < value.length() && Character.isDigit(value.charAt(end))) end++;
+        if (end <= start || (end == start + 1 && (c0 == '-' || c0 == '+'))) return null;
+        try {
+            int enc = Integer.parseInt(value.substring(start, end));
+            return new int[]{enc, start, end};
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
 
-    /**
-     * 扫描字符串内所有有符号十进制整数 token，返回 {值, 起点, 终点} 列表。
-     *
-     * <p>对「超长连续数字串」（parseInt 溢出，如无分隔符拼接的 hash+正数加密值）枚举其纯数字
-     * 后缀（尾部 ≤10 位，能放进 int）——不再假设前缀是 UUID hash 文本。带符号的独立加密值由
-     * 原逻辑（{@code '-'}/{@code '+'} 开启新 run）正确切出，无需后缀枚举。</p>
-     */
+    /** 扫描字符串内所有有符号十进制整数 token，返回 {值, 起点, 终点} 列表。 */
     private static java.util.List<int[]> scanIntTokens(String s) {
         java.util.List<int[]> out = new java.util.ArrayList<>();
         if (s == null || s.isEmpty()) return out;
         int n = s.length();
         int i = 0;
         while (i < n) {
-            char c = s.charAt(i);
-            boolean sign = (c == '-' || c == '+');
-            if (!Character.isDigit(c) && !sign) { i++; continue; }
-            if (sign && (i + 1 >= n || !Character.isDigit(s.charAt(i + 1)))) { i++; continue; }
-            int runStart = i;
-            int digitStart = sign ? i + 1 : i;
-            int end = digitStart;
-            while (end < n && Character.isDigit(s.charAt(end))) end++;
-            // 1) 整个 run 直接 parse（含符号）
-            if (tryAddIntToken(out, s, runStart, end)) { i = end; continue; }
-            // 2) 溢出 → 枚举纯数字后缀（尾部 ≤10 位）
-            int from = Math.max(digitStart, end - 10);
-            for (int p = from; p < end; p++) {
-                tryAddIntToken(out, s, p, end);
+            if (Character.isDigit(s.charAt(i)) || ((s.charAt(i) == '-' || s.charAt(i) == '+')
+                    && i + 1 < n && Character.isDigit(s.charAt(i + 1)))) {
+                int start = i;
+                i++;
+                while (i < n && Character.isDigit(s.charAt(i))) i++;
+                try {
+                    out.add(new int[]{Integer.parseInt(s.substring(start, i)), start, i});
+                } catch (NumberFormatException ignored) {}
+            } else {
+                i++;
             }
-            i = end;
         }
         return out;
-    }
-
-    /** 尝试把 s[start, end) parse 成 int 并加入 token 列表；成功返回 true，溢出/失败返回 false。 */
-    private static boolean tryAddIntToken(java.util.List<int[]> out, String s, int start, int end) {
-        try {
-            int v = Integer.parseInt(s.substring(start, end));
-            out.add(new int[]{v, start, end});
-            return true;
-        } catch (NumberFormatException e) {
-            return false;
-        }
     }
 
     /** 用新整数字面量替换串内 [start, end) 区间。 */
@@ -1453,11 +1265,24 @@ public final class EntityHealthLocator {
     // ==================== JSON 缓存 ====================
 
     public static void load() {
-        // 会话级缓存：不信任跨进程缓存的槽（实体数据更新后旧槽会导致本次进程修改错误）。
-        // 启动即删除旧缓存文件，CACHE 从空开始；save() 仍写本次进程的槽作调试产物，下次启动再删。
         try {
             Path p = FMLPaths.CONFIGDIR.get().resolve(FILE_NAME);
-            Files.deleteIfExists(p);
+            if (!Files.exists(p)) return;
+            JsonObject root = JsonParser.parseString(Files.readString(p)).getAsJsonObject();
+            JsonObject slots = root.getAsJsonObject("slots");
+            if (slots == null) return;
+            for (String key : slots.keySet()) {
+                JsonObject o = slots.getAsJsonObject(key);
+                String kind = o.has("kind") ? o.get("kind").getAsString() : "field";
+                String meta = o.has("meta") ? o.get("meta").getAsString() : "";
+                CACHE.put(key, new HealthSlot(
+                    o.get("class").getAsString(),
+                    o.get("field").getAsString(),
+                    o.get("type").getAsString(),
+                    o.has("inverse") && o.get("inverse").getAsBoolean(),
+                    kind,
+                    meta));
+            }
         } catch (Exception ignored) {}
     }
 

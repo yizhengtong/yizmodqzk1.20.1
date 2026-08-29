@@ -42,6 +42,32 @@ public final class DirectHealthFallback {
     /** 原版血量通道 DATA_HEALTH_ID（反射获取，失败为 null）。 */
     public static final EntityDataAccessor<Float> VANILLA_HEALTH_ACCESSOR = initVanillaHealthAccessor();
 
+    private static volatile EntityDataAccessor<Integer> airSupplyAccessor;
+
+    /** vanilla AIR_SUPPLY 通道（Entity 池 id=1，INT）——明确非血量。任何数值遍历/兜底一律跳过，
+     *  防误改其他模组数据 / 参与 coerce 传播写坏类型。反射按「INT 序列化器 + id==1」定位，
+     *  不依赖字段名（生产 SRG 字段名 f_XXXX_ 与 official 不同）。 */
+    public static EntityDataAccessor<Integer> airSupplyAccessor() {
+        if (airSupplyAccessor == null) {
+            try {
+                for (Field f : net.minecraft.world.entity.Entity.class.getDeclaredFields()) {
+                    if (java.lang.reflect.Modifier.isStatic(f.getModifiers())
+                            && EntityDataAccessor.class.isAssignableFrom(f.getType())) {
+                        f.setAccessible(true);
+                        Object v = f.get(null);
+                        if (v instanceof EntityDataAccessor<?> acc
+                                && acc.getSerializer() == EntityDataSerializers.INT
+                                && acc.getId() == 1) {
+                            airSupplyAccessor = (EntityDataAccessor<Integer>) acc;
+                            break;
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {}
+        }
+        return airSupplyAccessor;
+    }
+
     private static EntityDataAccessor<Float> initVanillaHealthAccessor() {
         // 双名匹配（official + SRG）：生产环境字段名是 f_20961_（reobf 不改反射字符串）
         for (String name : new String[]{"DATA_HEALTH_ID", "f_20961_"}) {
@@ -179,7 +205,7 @@ public final class DirectHealthFallback {
         if (!AVAILABLE || accessor == null || amount >= 0) return false;
         boolean[] found = {false};
         forEachFloatItem(entity, (acc, value, item) -> {
-            if (acc.getId() == accessor.getId()) {
+            if (acc == accessor) {
                 float newValue = Math.max(0, value + amount);
                 item.setValue(newValue);
                 item.setDirty(true);
@@ -204,7 +230,7 @@ public final class DirectHealthFallback {
         if (!AVAILABLE || accessor == null) return false;
         boolean[] found = {false};
         forEachFloatItem(entity, (acc, cur, item) -> {
-            if (acc.getId() == accessor.getId()) {
+            if (acc == accessor) {
                 item.setValue(value);
                 if (markDirty) item.setDirty(true);
                 found[0] = true;
@@ -235,6 +261,9 @@ public final class DirectHealthFallback {
                 if (item == null) continue;
                 EntityDataAccessor<?> accessor = item.getAccessor();
                 if (accessor == null) continue;
+                // 跳过 vanilla 非血量关键通道：AIR_SUPPLY（Entity 池 id=1，INT）明确不是血量，
+                // 任何数值遍历/兜底一律不碰（防止误改其他模组数据 / 参与 coerce 传播写坏类型）。
+                if (accessor == airSupplyAccessor()) continue;
                 var ser = accessor.getSerializer();
                 if (ser != EntityDataSerializers.FLOAT && ser != EntityDataSerializers.INT
                         && ser != EntityDataSerializers.LONG) continue;
@@ -268,7 +297,7 @@ public final class DirectHealthFallback {
         if (!AVAILABLE || accessor == null) return null;
         Number[] out = {null};
         forEachNumericItem(entity, (acc, value, item) -> {
-            if (acc.getId() == accessor.getId()) out[0] = value;
+            if (acc == accessor) out[0] = value;
         });
         return out[0];
     }
@@ -280,7 +309,7 @@ public final class DirectHealthFallback {
         if (!AVAILABLE || accessor == null || value == null) return false;
         boolean[] found = {false};
         forEachNumericItem(entity, (acc, cur, item) -> {
-            if (acc.getId() == accessor.getId()) {
+            if (acc == accessor) {
                 Object coerced = coerceNumber(value, cur);
                 if (writeItemValue(item, coerced)) {
                     if (markDirty) item.setDirty(true);
@@ -318,6 +347,8 @@ public final class DirectHealthFallback {
                 if (item == null) continue;
                 EntityDataAccessor<?> accessor = item.getAccessor();
                 if (accessor == null) continue;
+                // 跳过 vanilla 非血量关键通道 AIR_SUPPLY（同 forEachNumericItem）。
+                if (accessor == airSupplyAccessor()) continue;
                 var ser = accessor.getSerializer();
                 if (ser != EntityDataSerializers.INT && ser != EntityDataSerializers.LONG) continue;
                 Object v = item.getValue();
@@ -346,7 +377,7 @@ public final class DirectHealthFallback {
         if (!AVAILABLE || accessor == null || value == null) return false;
         boolean[] found = {false};
         forEachStringItem(entity, (acc, cur, item) -> {
-            if (acc.getId() == accessor.getId()) {
+            if (acc == accessor) {
                 if (writeItemValue(item, value)) {
                     if (markDirty) item.setDirty(true);
                     found[0] = true;
@@ -391,7 +422,7 @@ public final class DirectHealthFallback {
         if (!AVAILABLE || accessor == null) return null;
         Boolean[] out = {null};
         forEachBooleanItem(entity, (acc, value, item) -> {
-            if (acc.getId() == accessor.getId()) out[0] = value;
+            if (acc == accessor) out[0] = value;
         });
         return out[0];
     }
@@ -402,7 +433,7 @@ public final class DirectHealthFallback {
         if (!AVAILABLE || accessor == null) return false;
         boolean[] found = {false};
         forEachBooleanItem(entity, (acc, cur, item) -> {
-            if (acc.getId() == accessor.getId()) {
+            if (acc == accessor) {
                 if (writeItemValue(item, value)) {
                     if (markDirty) item.setDirty(true);
                     found[0] = true;

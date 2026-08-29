@@ -47,8 +47,8 @@ public final class TotalHealthOverride {
         // agent specialGetHealth/isAlive 按 delta 钳制读值；死亡链残留的 delta(-inf)
         // 会让 agent 包装的 getHealth 与存储真值不一致 → 模组每 tick 看门狗（按 getHealth
         // 推断血量）误判「被篡改」→ 把我们的写入拉回/重置。重置后 agent 读值即存储真值。
-        // 注意：不能 clearDreamAccum——大贤者等「隐藏类/AES 定位失败」实体靠 DREAM_ACCUM
-        // 持续累积到阈值触发 dreamDeathblow 死亡链，每次攻击清累积会让 accum 永远到不了 1。
+        // 注意：不能 clearDreamAccum——「隐藏类/AES 定位失败」实体靠 DREAM_ACCUM 持续累积
+        // 到阈值触发 dreamDeathblow 死亡链，每次攻击清累积会让 accum 永远到不了 1 → 无法累加击杀。
         try {
             EntityASMUtil.setHealthDelta(entity, 0F);
         } catch (Throwable ignored) {}
@@ -66,7 +66,7 @@ public final class TotalHealthOverride {
         if (!any) return false;
         // 写后回读验证（每次）：未落地说明改到的是误判字段（如 castCooldown），不是真实血量 →
         // 返回 false 让调用方（applyProportionalDreamDamage）继续走到 DREAM_ACCUM 累积软压，
-        // 否则大贤者这类「定位误判」实体会卡在 TotalOverride 空转、永远到不了死亡链。
+        // 否则「定位误判」实体会卡在 TotalOverride 空转、永远到不了死亡链（无法累加击杀）。
         double readback = judgeCurrentHealth(entity);
         if (Double.isFinite(readback) && Math.abs(readback - target) >= 1.0) {
             if (READBACK_DIAG.add(entity.getClass().getName())) {
@@ -79,8 +79,11 @@ public final class TotalHealthOverride {
         smashGates(entity);
         if (target <= 0) {
             LOGGER.warn("[TotalOverride] {} 触发正常死亡流程（目标=0）", entity.getClass().getName());
-            // 允许 +25 tick 后对「复活型/拒死型」实体强制深层反注册（先走正常流程，最后一击兜底）
-            EntityASMUtil.markForceRemoveAllowed(entity.getId());
+            // 仅自研实体允许 +25 tick 强制深层反注册——第三方实体（含玩家）不深层移除，
+            // 防 forceRemoveDeep 从世界存储深层移除破坏其关联 → 维度切换/存档异常（回主世界卡住/数据丢失）。
+            if (EntityASMUtil.isSelfMob(entity)) {
+                EntityASMUtil.markForceRemoveAllowed(entity.getId());
+            }
             EntityASMUtil.dreamDeathblow(attacker, entity);
             // 死亡链会置 delta=-inf（agent 钳制用）；对复活型实体立即还原，
             // 防看门狗按 agent 包装的 getHealth 误判篡改 → 把复活体重置回满血

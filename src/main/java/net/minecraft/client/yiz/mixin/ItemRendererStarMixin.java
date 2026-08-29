@@ -1,5 +1,6 @@
 package net.minecraft.client.yiz.mixin;
 
+import com.mojang.blaze3d.vertex.BufferBuilder;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.minecraft.client.renderer.MultiBufferSource;
@@ -26,8 +27,12 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(ItemRenderer.class)
 public class ItemRendererStarMixin {
 
-    @Shadow
-    public void renderModelLists(BakedModel m, ItemStack s, int l, int o, PoseStack p, VertexConsumer v) {}
+    /** 生产 SRG 环境下 @Shadow protected 方法映射不命中会崩溃，改用 MixinAccess 按签名反射调用。 */
+    private void yizqzk$renderModelLists(BakedModel m, ItemStack s, int l, int o, PoseStack p, VertexConsumer v) {
+        net.minecraft.client.yiz.util.MixinAccess.invoke(this, ItemRenderer.class,
+            new Class[]{BakedModel.class, ItemStack.class, int.class, int.class, PoseStack.class, VertexConsumer.class},
+            void.class, m, s, l, o, p, v);
+    }
 
     private static final Vector3f[] DIRS = {
         new Vector3f( 1,  1,  1), new Vector3f(-1,  1,  1),
@@ -35,6 +40,13 @@ public class ItemRendererStarMixin {
         new Vector3f(-1, -1,  1), new Vector3f(-1,  1, -1),
         new Vector3f( 1, -1, -1), new Vector3f(-1, -1, -1)
     };
+
+    /** 描边私有 immediate 源：立即 flush 保证「描边先画 → 原版模型后画盖内部」。
+     *  不依赖主缓冲 flush 时机/批次顺序——生产环境第三方模组（梦幻终焉/EndingLibrary 等 mixin
+     *  ItemRenderer/LevelRenderer）可能改变主缓冲 endBatch 行为，导致半透明描边延迟到模型之后
+     *  → 整体覆盖（描边盖模型）或丢失；私有源规避。 */
+    private static final MultiBufferSource.BufferSource OUTLINE_BUFFER =
+        MultiBufferSource.immediate(new BufferBuilder(256));
 
     @Inject(
         method = "render(Lnet/minecraft/world/item/ItemStack;Lnet/minecraft/world/item/ItemDisplayContext;ZLcom/mojang/blaze3d/vertex/PoseStack;Lnet/minecraft/client/renderer/MultiBufferSource;IILnet/minecraft/client/resources/model/BakedModel;)V",
@@ -55,12 +67,13 @@ public class ItemRendererStarMixin {
         BakedModel cam = net.minecraftforge.client.ForgeHooksClient.handleCameraTransforms(ps, model, ctx, lh);
         ps.translate(-0.5F, -0.5F, -0.5F);
 
-        // ── 描边 ──（8 方向偏移 + 不写深度：原版模型后渲染覆盖内部，仅轮廓边缘露出描边色）
+        // ── 描边 ──（8 方向偏移 + 私有 immediate 源立即 flush：描边先画，原版模型后画覆盖内部，
+        // 仅轮廓边缘露出描边色；不依赖主缓冲 flush 时机/批次顺序）
         if (buf instanceof MultiBufferSource.BufferSource bs) bs.endBatch();
         float[] c = outline >= 0 ? getColor(outline) : getColor();
         float off = 0.01f;
         RenderType glowRt = RenderType.entityTranslucentEmissive(new net.minecraft.resources.ResourceLocation("minecraft", "textures/atlas/blocks.png"));
-        VertexConsumer vc = buf.getBuffer(glowRt);
+        VertexConsumer vc = OUTLINE_BUFFER.getBuffer(glowRt);
         for (int d = 0; d < 8; d++) {
             ps.pushPose();
             ps.translate(DIRS[d].x() * off, DIRS[d].y() * off, DIRS[d].z() * off);
@@ -70,7 +83,7 @@ public class ItemRendererStarMixin {
                         vc.putBulkData(ps.last(), q, c[0], c[1], c[2], c[3], light, overlay, true);
             ps.popPose();
         }
-        if (buf instanceof MultiBufferSource.BufferSource bs) bs.endBatch(glowRt);
+        OUTLINE_BUFFER.endBatch(glowRt);
         ps.popPose();
 
         // ── 原版 + Cosmic ──
@@ -79,7 +92,7 @@ public class ItemRendererStarMixin {
         ps.translate(-0.5F, -0.5F, -0.5F);
         for (BakedModel pass : cam2.getRenderPasses(stack, true))
             for (RenderType rt : pass.getRenderTypes(stack, true))
-                renderModelLists(pass, stack, light, overlay, ps, buf.getBuffer(rt));
+                yizqzk$renderModelLists(pass, stack, light, overlay, ps, buf.getBuffer(rt));
         ShaderInstance shader = ShaderManager.getActiveItemShader();
         if (shader != null) {
             if (buf instanceof MultiBufferSource.BufferSource bs) bs.endBatch();
@@ -90,11 +103,11 @@ public class ItemRendererStarMixin {
                 : ctx.firstPerson() ? ShaderManager.getItemDirectRenderType()
                 : ShaderManager.getItemEntityRenderType();
             for (BakedModel pass : cam2.getRenderPasses(stack, true))
-                renderModelLists(pass, stack, light, overlay, ps, buf.getBuffer(st));
+                yizqzk$renderModelLists(pass, stack, light, overlay, ps, buf.getBuffer(st));
             if (stack.hasFoil()) {
                 RenderType foil = gui ? RenderType.glint() : RenderType.entityGlint();
                 for (BakedModel pass : cam2.getRenderPasses(stack, true))
-                    renderModelLists(pass, stack, light, overlay, ps, buf.getBuffer(foil));
+                    yizqzk$renderModelLists(pass, stack, light, overlay, ps, buf.getBuffer(foil));
             }
         }
         ps.popPose();
@@ -116,8 +129,9 @@ public class ItemRendererStarMixin {
         // 恒定亮色（无亮度脉冲，避免描边忽明忽暗）；preset 1 保留彩虹色相流动（始终有颜色）
         if (p == 0) return new float[]{1, 1, 1, 0.9f};
         if (p == 1) return hsv((System.currentTimeMillis() % 5000) / 5000f, 0.9f, 1f);
-        float[][] cols = {{0,0,0,0},{0,0,0,0},{1,0.3f,0.3f},{0.7f,0.3f,1f},{0.3f,0.55f,1f},{0.3f,1f,0.47f}};
-        float[] b = cols[p >= 0 && p <= 5 ? p : 1];
+        // 0-5 现有 preset + 6=金（自走棋星级蛋 3 星用：0白/4蓝/6金）
+        float[][] cols = {{0,0,0,0},{0,0,0,0},{1,0.3f,0.3f},{0.7f,0.3f,1f},{0.3f,0.55f,1f},{0.3f,1f,0.47f},{1,0.84f,0f}};
+        float[] b = cols[p >= 0 && p <= 6 ? p : 1];
         return new float[]{b[0], b[1], b[2], 0.9f};
     }
     private static float[] hsv(float h,float s,float v){

@@ -7,78 +7,83 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.ShaderInstance;
-import net.minecraft.client.renderer.entity.EntityRenderer;
+import net.minecraft.client.yiz.api.OutlineRegistry;
 import net.minecraft.client.yiz.api.TargetFrameManager;
 import net.minecraft.client.yiz.api.TargetFrameProvider;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.player.Player;
 import net.minecraftforge.client.event.RenderLevelStageEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import org.joml.Matrix4f;
 
 /**
- * 锁定目标青色发光描边渲染器（FBO + 后处理版，复刻原版光灵箭 glow）：
- * 1. 把锁定实体穿墙（NO_DEPTH_TEST）渲染成纯白填充到专用 FBO。
- * 2. 全屏后处理：采样 FBO 做「邻域填充密度高斯」边缘检测 + 发光，青色叠加到主缓冲。
- * 描边宽度 = 屏幕固定像素（POST_RADIUS），远近一致；穿墙；不依赖 Fabulous 画质。
+ * 锁定描边调度器（FBO + 后处理，描边已集成到实体 render）：
+ * - BEFORE_ENTITIES：确保 FBO 存在；有描边实体时清空（供实体渲染阶段由 {@link LockOutlineBufferSource} 双写填充）。
+ * - AFTER_ENTITIES：flush 填充缓冲到 FBO → 全屏后处理（NDC quad 采样 FBO 做边缘检测 + 发光）。
+ *
+ * 通用描边：任意实体实现 {@code OutlineEntity} 或经 {@link OutlineRegistry#register} 注册 Provider 即自动描边，
+ * 锁定系统在此注册为动态 Provider（青色，透明度=充能进度）。
  */
 public final class LockOutlineRenderer {
 
-    /** 描边屏幕像素半径（远近一致）。 */
-    private static final int POST_RADIUS = 3;
-    /** 高斯宽度：越大描边越细越硬，越小发光晕越宽。 */
-    private static final float EDGE_SHARPNESS = 6.0F;
+    /** 描边屏幕像素半径（远近一致），全局可配置。 */
+    private static int postRadius = 3;
+    /** 高斯宽度：越大描边越细越硬，越小发光晕越宽，全局可配置。 */
+    private static float edgeSharpness = 6.0F;
 
     private static LockOutlineFramebuffer framebuffer;
 
+    static {
+        // 通用描边接入：锁定系统作为动态 Provider（青色，透明度=充能进度）
+        OutlineRegistry.register(LockOutlineRenderer::lockOutlineColor);
+    }
+
     private LockOutlineRenderer() {}
+
+    /** 设置全局描边屏幕像素半径（供 {@code EntityOutline} 公开 API 调用）。 */
+    public static void setPostRadius(int px) { postRadius = Math.max(1, px); }
+
+    /** 设置全局发光锐度（越大越细越硬，越小发光晕越宽）。 */
+    public static void setEdgeSharpness(float s) { edgeSharpness = Math.max(0.5f, s); }
+
+    /** 锁定系统描边色：当前玩家锁定的目标返回青色 [0,1,1,charge]，否则 null。 */
+    private static float[] lockOutlineColor(Entity entity) {
+        var mc = Minecraft.getInstance();
+        if (mc.player == null) return null;
+        TargetFrameProvider p = TargetFrameManager.getBest(mc.player);
+        if (p == null || p.getTarget(mc.player) != entity) return null;
+        float charge = p.getCharge();
+        if (charge <= 0) return null;
+        return new float[]{0.0f, 1.0f, 1.0f, charge};
+    }
+
+    /** 供 fill RenderType 的 FILL_TARGET 绑定 FBO。 */
+    static LockOutlineFramebuffer framebuffer() { return framebuffer; }
 
     @SubscribeEvent
     public static void onRenderLevelStage(RenderLevelStageEvent event) {
-        if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_ENTITIES) return;
         var mc = Minecraft.getInstance();
         if (mc.player == null || mc.level == null) return;
 
-        TargetFrameProvider provider = TargetFrameManager.getBest(mc.player);
-        if (provider == null) return;
-        Entity target = provider.getTarget(mc.player);
-        if (target == null) return;
-        float charge = provider.getCharge();
-        if (charge <= 0) return;
-
-        ensureFramebuffer(mc);
-        int w = framebuffer.getWidth(), h = framebuffer.getHeight();
-        if (w <= 0 || h <= 0) return;
-
-        var camera = event.getCamera();
-        double cx = camera.getPosition().x, cy = camera.getPosition().y, cz = camera.getPosition().z;
-        float partialTick = event.getPartialTick();
-        int light = 0xF000F0;
-        PoseStack poseStack = event.getPoseStack();
-        MultiBufferSource.BufferSource real = mc.renderBuffers().bufferSource();
-
-        // ── pass 1：穿墙纯白填充到 FBO（用 EntityRenderer.render，跳过 shadow/火焰/hitbox）──
-        RenderType fillRt = LockOutlineRenderType.fill();
-        MultiBufferSource fillSource = (type) -> real.getBuffer(fillRt);
-        framebuffer.bindAndClear();
-        try {
-            poseStack.pushPose();
-            poseStack.translate(target.getX() - cx, target.getY() - cy, target.getZ() - cz);
-            EntityRenderer er = (EntityRenderer) mc.getEntityRenderDispatcher().getRenderer(target);
-            if (er != null) {
-                // 绑定实体主纹理，供 fill shader 采样 alpha 过滤透明镂空区
-                try { RenderSystem.setShaderTexture(0, er.getTextureLocation(target)); }
-                catch (Throwable ignored) {}
-                er.render(target, target.getYRot(), partialTick, poseStack, fillSource, light);
-            }
-            poseStack.popPose();
-            real.endBatch(fillRt);
-        } catch (Throwable t) {
-            t.printStackTrace();
+        var stage = event.getStage(); // Stage 是 final class 非枚举，不能用 switch
+        if (stage == RenderLevelStageEvent.Stage.AFTER_SKY) {
+            // 实体渲染循环之前：确保 FBO 存在（实体渲染阶段 LockOutlineBufferSource 可能双写 fill 需要它）。
+            // 无条件清空 FBO 供填充：星级描边是无条件渲染（不依赖渴攻锁定/充能），不能 gate 在锁定状态上。
+            ensureFramebuffer(mc);
+            framebuffer.bindAndClear();
+            mc.getMainRenderTarget().bindWrite(false); // 清完绑回主缓冲，实体正常渲染不受影响
+        } else if (stage == RenderLevelStageEvent.Stage.AFTER_ENTITIES) {
+            if (framebuffer == null) return;
+            // flush 填充缓冲到 FBO（fill RenderType 的 FILL_TARGET 绑 FBO）；无条件清空缓冲
+            LockOutlineBufferSource.get(mc.renderBuffers().bufferSource()).endFillBatch();
+            framebuffer.unbind();
+            // 本帧渲染过任意描边实体（星级/渴攻 Provider 返回非 null）才做后处理——
+            // 星级描边无条件触发，渴攻描边透明度仍由 Provider 的 charge alpha 控制
+            if (!LockOutlineBufferSource.consumeHasOutline()) return;
+            int w = framebuffer.getWidth(), h = framebuffer.getHeight();
+            if (w <= 0 || h <= 0) return;
+            renderPost(mc, w, h);
         }
-        framebuffer.unbind();
-
-        // ── pass 2：全屏后处理（边缘检测 + 发光）叠加到主缓冲 ──
-        renderPost(mc, w, h, charge);
     }
 
     private static void ensureFramebuffer(Minecraft mc) {
@@ -91,7 +96,7 @@ public final class LockOutlineRenderer {
         }
     }
 
-    private static void renderPost(Minecraft mc, int w, int h, float charge) {
+    private static void renderPost(Minecraft mc, int w, int h) {
         Matrix4f savedProj = new Matrix4f(RenderSystem.getProjectionMatrix());
         VertexSorting savedSorting = RenderSystem.getVertexSorting();
         PoseStack mvStack = RenderSystem.getModelViewStack();
@@ -107,12 +112,10 @@ public final class LockOutlineRenderer {
             RenderSystem.setShaderTexture(0, framebuffer.getColorTextureId());
             ShaderInstance shader = LockOutlineShaders.getLockPost();
             if (shader != null) {
-                if (shader.getUniform("uLockColor") != null)
-                    shader.getUniform("uLockColor").set(0.0f, 1.0f, 1.0f, charge);
                 if (shader.getUniform("uRadius") != null)
-                    shader.getUniform("uRadius").set((float) POST_RADIUS);
+                    shader.getUniform("uRadius").set((float) postRadius);
                 if (shader.getUniform("uSharpness") != null)
-                    shader.getUniform("uSharpness").set(EDGE_SHARPNESS);
+                    shader.getUniform("uSharpness").set(edgeSharpness);
                 if (shader.getUniform("uTexelSize") != null)
                     shader.getUniform("uTexelSize").set(1.0f / w, 1.0f / h);
             }

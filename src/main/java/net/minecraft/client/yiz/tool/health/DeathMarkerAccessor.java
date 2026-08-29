@@ -106,10 +106,12 @@ public final class DeathMarkerAccessor {
     }
 
     private static boolean setBool(LivingEntity entity, EntityDataAccessor<Boolean> acc, boolean value) {
-        // 绕开 SynchedEntityData.set：set 会触发第三方 Boss 模组（village_mod/omnimobs/Ashes 等）
-        // 的 SynchedEntityDataMixin flag 操作，把 Byte 通道写成 Boolean（或反之）→ Byte→Boolean 崩溃。
-        // DirectHealthFallback.setBooleanChannelValue 直写 DataItem.value，不触发 mixin。
-        return DirectHealthFallback.setBooleanChannelValue(entity, acc, value, true);
+        try {
+            entity.getEntityData().set(acc, value);
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
     }
 
     // ==================== 篡改 ====================

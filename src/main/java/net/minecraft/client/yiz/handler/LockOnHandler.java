@@ -4,12 +4,16 @@ import net.minecraft.client.yiz.attribute.YizAttributes;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.entity.projectile.ProjectileUtil;
+import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.event.entity.living.LivingDamageEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 
+import java.util.Collections;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -29,7 +33,6 @@ public final class LockOnHandler {
 
     private static final double DEFAULT_HUIXIN = 12.0;
     private static final double DEFAULT_KEGONG = 30.0;
-    private static final double CONE_DOT = 0.866; // cos(30°) ≈ 0.866
 
     private LockOnHandler() {}
 
@@ -42,6 +45,9 @@ public final class LockOnHandler {
 
     /** 客户端查询：最近锁定进度 [0,1]（-1=未锁定）。供目标框/UI 渲染。 */
     private static final Map<UUID, Float> PROGRESS = new ConcurrentHashMap<>();
+
+    /** 蓄力满攻击必暴击标记（攻击事件设置，暴击 mixin 消费）。 */
+    private static final Set<UUID> CHARGE_CRIT = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
     /** 客户端查询锁定进度 [0,1]（-1 = 无锁定）。 */
     public static float getLockProgress(Player player) {
@@ -119,6 +125,27 @@ public final class LockOnHandler {
     private static final java.util.UUID LOCK_RANGE_ID =
         java.util.UUID.nameUUIDFromBytes("yizmodqzk:lock_range".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
+    /** 蓄力满增强是否对指定目标生效：必须充能满且目标 == 锁定目标（避免锁定 A 蓄力后攻击 B）。 */
+    public static boolean isChargeReadyFor(Player player, LivingEntity target) {
+        LockState s = STATES.get(player.getUUID());
+        if (s == null || !s.targetUuid.equals(target.getUUID())) return false;
+        double rawKegong = readAttr(player, YizAttributes.KEGONG);
+        double rawHuixin = readAttr(player, YizAttributes.HUIXIN);
+        if (rawHuixin <= 0 && rawKegong <= 0) return false;
+        int chargeTicks = rawKegong > 0 ? (int) rawKegong : (int) DEFAULT_KEGONG;
+        return chargeTicks > 0 && s.timer >= chargeTicks;
+    }
+
+    /** 标记本次攻击必暴击（蓄力满攻击，攻击事件调用）。 */
+    public static void markChargeCrit(Player player) {
+        CHARGE_CRIT.add(player.getUUID());
+    }
+
+    /** 消费必暴击标记（暴击 mixin 读取，只生效一次）。 */
+    public static boolean consumeChargeCrit(Player player) {
+        return CHARGE_CRIT.remove(player.getUUID());
+    }
+
     /** 完全重置：清状态 + 进度 + 移除距离修饰符（攻击/死亡/登出时调用）。 */
     private static void reset(Player player) {
         UUID puid = player.getUUID();
@@ -154,26 +181,16 @@ public final class LockOnHandler {
         PROGRESS.remove(puid);
     }
 
-    /** 60°锥内找最近注视方向的实体，范围由 range 参数限定。 */
+    /** 视线射线命中的第一个实体（穿墙，与客户端 LockOnProvider 一致），范围由 range 限定。 */
     private static LivingEntity findTarget(Player player, double range) {
         Vec3 eye = player.getEyePosition();
         var look = player.getLookAngle();
-        LivingEntity best = null;
-        double bestDot = CONE_DOT, bestDist = Double.MAX_VALUE;
-        for (var entity : player.level().getEntitiesOfClass(LivingEntity.class,
-                player.getBoundingBox().inflate(range))) {
-            if (entity == player || !entity.isAlive()) continue;
-            Vec3 to = entity.position().subtract(eye);
-            double d2 = to.lengthSqr();
-            if (d2 > range * range) continue;
-            double dot = look.dot(to) / Math.sqrt(d2);
-            if (best != null && Math.abs(dot - bestDot) < 0.05) {
-                if (d2 < bestDist) { bestDot = dot; best = entity; bestDist = d2; }
-            } else if (dot > bestDot) {
-                bestDot = dot; best = entity; bestDist = d2;
-            }
-        }
-        return best;
+        Vec3 end = eye.add(look.x * range, look.y * range, look.z * range);
+        EntityHitResult hit = ProjectileUtil.getEntityHitResult(player, eye, end,
+            player.getBoundingBox().inflate(range),
+            e -> e instanceof LivingEntity && e != player && e.isAlive(),
+            range);
+        return hit != null && hit.getEntity() instanceof LivingEntity ? (LivingEntity) hit.getEntity() : null;
     }
 
     private static double readAttr(Player player,

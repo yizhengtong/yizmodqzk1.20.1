@@ -200,9 +200,7 @@ public final class DynamicHealthAccessor {
             float newAway = Math.min(away + amount, normal);  // 扣血 = 增加 away，clamp 到上限
             DirectHealthFallback.setFloatChannelValue(entity, slot.away(), newAway, true);
             if (newAway >= normal && slot.death() != null) {
-                // 直写绕开 SynchedEntityData.set：set 会触发第三方 Boss 模组的 SynchedEntityDataMixin
-                // flag 操作（Byte/Boolean 写错类型）→ Byte→Boolean 崩溃（与 finishDeathblow/DeathMarkerAccessor 同款坑）。
-                DirectHealthFallback.setBooleanChannelValue(entity, slot.death(), true, true);
+                entity.getEntityData().set(slot.death(), true);  // 血量耗尽 → 死亡标记
             }
             return true;
         } catch (Throwable t) {

@@ -508,6 +508,18 @@ public final class YizAttributes {
     public static final RegistryObject<Attribute> KEGONG =
         ATTRIBUTES.register("kegong",
             () -> new RangedAttribute("attribute.yizmodqzk.kegong", 0.0, 0.0, Double.MAX_VALUE).setSyncable(true));
+    /** 流血比例(%) — 目标受伤时按实际扣血量比例反弹额外伤害。默认 0（属性驱动）。 */
+    public static final RegistryObject<Attribute> BLEED_RATIO =
+        ATTRIBUTES.register("bleed_ratio",
+            () -> new RangedAttribute("attribute.yizmodqzk.bleed_ratio", 0.0, 0.0, 100.0).setSyncable(true));
+    /** 流血时间(秒) — 每层持续时间。默认 6。 */
+    public static final RegistryObject<Attribute> BLEED_TIME =
+        ATTRIBUTES.register("bleed_time",
+            () -> new RangedAttribute("attribute.yizmodqzk.bleed_time", 6.0, 0.0, Double.MAX_VALUE).setSyncable(true));
+    /** 流血叠加数(次) — 最大层数。默认 2。 */
+    public static final RegistryObject<Attribute> BLEED_STACK =
+        ATTRIBUTES.register("bleed_stack",
+            () -> new RangedAttribute("attribute.yizmodqzk.bleed_stack", 2.0, 0.0, 100.0).setSyncable(true));
     /** 多段跳次数 — 值域 ≥0。MultiJumpTracker.maxJumps 读取。 */
     public static final RegistryObject<Attribute> JUMP_COUNT =
         ATTRIBUTES.register("jump_count",

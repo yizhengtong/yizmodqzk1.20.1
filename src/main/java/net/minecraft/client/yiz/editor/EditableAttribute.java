@@ -68,6 +68,9 @@ public record EditableAttribute(
         yiz("splash_falloff",       "溅射衰减",     false, "%"),
         yiz("huixin",               "会心",         false, "格"),
         yiz("kegong",               "渴攻",         false, "tick"),
+        yiz("bleed_ratio",          "流血比例",     false, "%"),
+        yiz("bleed_time",           "流血时间",     false, "秒"),
+        yiz("bleed_stack",          "流血叠加",     false, "次"),
         yiz("cooldown_reduction",   "攻击速度加成", false, "%"),
         yiz("auto_attack",          "自动攻击",     false, ""),
 

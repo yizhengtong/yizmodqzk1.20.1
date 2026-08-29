@@ -6,6 +6,9 @@
   "refmap": "yizmodqzk.refmap.json",
   "mixins": [
     "LivingEntityMixin",
+    "LivingEntityBleedMixin",
+    "LivingEntityActuallyHurtAccessor",
+    "MobEffectInstanceDurationAccessor",
     "AttributeInstanceMixin",
     "SynchedEntityDataMixin",
     "YizEntityTickTrackerMixin",
@@ -22,14 +25,16 @@
     "ServerDestroyBlockMixin",
     "AttackInterceptorMixin",
     "NoCollisionMixin",
-    "ProjectileHitMixin"
+    "ProjectileHitMixin",
+    "AttributesMaxHealthUnlimitedMixin"
   ],
   "client": [
     "LiquidBlockShapeMixin",
     "ItemRendererStarMixin",
     "LivingEntityRendererSurfaceLightningMixin",
     "ClientMultiJumpMixin",
-    "ItemNbtTooltipMixin"
+    "ItemNbtTooltipMixin",
+    "EntityRenderDispatcherOutlineMixin"
   ],
   "injectors": {
     "defaultRequire": 1
