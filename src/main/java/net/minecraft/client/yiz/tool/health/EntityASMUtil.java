@@ -64,8 +64,8 @@ public final class EntityASMUtil {
         } catch (Throwable ignored) {
             return false;
         }
-        // 每实例免移除开关：实例未开启 remove_immunity → 不拦截字段直写移除（基础形态可正常移除）
-        if (!net.minecraft.client.yiz.tool.effect.InstanceEffectState.isRemoveProtected(living)) return false;
+        // 每实例免清除开关：实例未开启 clear_immunity → 不拦截字段直写移除（拉回只回填、不拦清除本身）
+        if (!net.minecraft.client.yiz.tool.effect.InstanceEffectState.isClearImmune(living)) return false;
         return value != null;
     }
 
@@ -78,8 +78,8 @@ public final class EntityASMUtil {
         } catch (Throwable ignored) {
             return false;
         }
-        // 每实例免移除开关：实例未开启 remove_immunity → 不拦截字段直写移除
-        if (!net.minecraft.client.yiz.tool.effect.InstanceEffectState.isRemoveProtected(living)) return false;
+        // 每实例免清除开关：实例未开启 clear_immunity → 不拦截字段直写移除
+        if (!net.minecraft.client.yiz.tool.effect.InstanceEffectState.isClearImmune(living)) return false;
         return !value;
     }
 

@@ -219,6 +219,12 @@ public class tizMod {
         // 每实例效果开关指令（/yiz eff，隔离模型测试）
         net.minecraft.client.yiz.tool.YizEffectCommand.register();
 
+        // 万能物品配置（itemcfg）：加载扫描缓存/配置/适配层 + 注册指令
+        net.minecraft.client.yiz.itemcfg.ItemFeatureDiscoverer.load();
+        net.minecraft.client.yiz.itemcfg.ConfigRegistry.load();
+        net.minecraft.client.yiz.itemcfg.AdapterRegistry.loadAll();
+        net.minecraft.client.yiz.itemcfg.YizItemConfigCommand.register();
+
         modEventBus.addListener(this::commonSetup);
         net.minecraftforge.common.MinecraftForge.EVENT_BUS.register(this);
         // 挖掘属性事件（BreakSpeed/HarvestCheck，1.21.1 由 PlayerMiningMixin 注入，1.20.1 改用事件）
@@ -230,6 +236,13 @@ public class tizMod {
         // 流血 + 蓄力满增强（BLEED_RATIO/TIME/STACK + 必暴击/流血30%）
         net.minecraftforge.common.MinecraftForge.EVENT_BUS.register(
             net.minecraft.client.yiz.handler.BleedHandler.class);
+        // Curios 饰品拦截（装备/持续效果/属性；未装 Curios 时跳过注册）
+        if (net.minecraftforge.fml.ModList.get().isLoaded("curios")) {
+            net.minecraftforge.common.MinecraftForge.EVENT_BUS.register(
+                net.minecraft.client.yiz.handler.CuriosEquipHandler.class);
+            net.minecraftforge.common.MinecraftForge.EVENT_BUS.register(
+                net.minecraft.client.yiz.handler.CuriosAttributeHandler.class);
+        }
     }
 
     private void commonSetup(final FMLCommonSetupEvent event) {
@@ -256,6 +269,12 @@ public class tizMod {
     @SubscribeEvent
     public void onServerStarting(ServerStartingEvent event) {
         LOGGER.debug("YizMod QZK 服务端启动");
+        // 全量扫描物品功能（服务端权威，写 items.json 缓存）
+        net.minecraft.client.yiz.itemcfg.ItemFeatureDiscoverer.scanAll();
+        // 万能物品配置：VTable donors 初始化 + 全局废除（abolish.json）应用
+        net.minecraft.client.yiz.core.VTableReplace.initDonors();
+        net.minecraft.client.yiz.core.AbolitionStateManager.load();
+        net.minecraft.client.yiz.itemcfg.ItemConfigAbolition.load();
     }
 
     /** 被动攻击分发：遍历被动/装备槽 IPassiveItem，调用 onAttack。由 LivingEntityMixin.onHurtReturn 调用。 */
@@ -330,6 +349,8 @@ public class tizMod {
             net.minecraft.client.yiz.tool.health.ManaTracker.tickRegen(sp);
             net.minecraft.client.yiz.tool.health.AttributeEffectTicker.tick(sp);
             net.minecraft.client.yiz.tool.health.ManaCostDrain.tick(sp);
+            // 万能物品配置：per-player 语义功能激活缓存重算
+            net.minecraft.client.yiz.itemcfg.ItemConfigGates.onServerTick(sp);
         }
     }
 

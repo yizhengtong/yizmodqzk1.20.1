@@ -167,4 +167,75 @@ public final class AgentBridge {
     public static List<String> getKeyWatchPrefixes() {
         return KeyDumpBridge.getWatchPrefixes();
     }
+
+    // ==================== 自保护还原（YizRestoreTransformer 控制）====================
+
+    /** 受保护类 internal 名集合（'/' 分隔；className internal 形式）。 */
+    private static final java.util.Set<String> selfRestoreNames =
+        java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private static volatile boolean selfRestoreRegistered = false;
+    private static final AtomicInteger SELF_LOG = new AtomicInteger();
+    private static volatile long lastSelfRestoreWatchdogMs = 0L;
+
+    /**
+     * 注册自我保护还原：对 internalNames 指定的本模组类，注册 canRetransform transformer，
+     * 每次 transform pass 把类还原回 jar 原始字节（盖掉外部 coremod/agent 注入，如 fantasy 对
+     * YizxianMob.getHealth/isAlive/isDeadOrDying 的 ASM 改写）。可多次调用累积类名。
+     * 返回是否 agent 可用（instrumentation 已拿到）；agent 未就绪返回 false（调用方稍后重试）。
+     * 注册成功后立即拉回已加载的受保护类。
+     */
+    public static boolean registerSelfRestore(Collection<String> internalNames) {
+        if (internalNames == null || internalNames.isEmpty()) return false;
+        selfRestoreNames.addAll(internalNames);
+        Instrumentation inst = instrumentation;
+        if (inst == null) return false;
+        synchronized (AgentBridge.class) {
+            if (!selfRestoreRegistered) {
+                try {
+                    inst.addTransformer(new YizRestoreTransformer(selfRestoreNames), true);
+                    selfRestoreRegistered = true;
+                    LOGGER.info("[AgentBridge] 自保护还原 transformer 已注册 (canRetransform)");
+                } catch (Throwable t) {
+                    LOGGER.error("[AgentBridge] 自保护还原 transformer 注册失败", t);
+                    return false;
+                }
+            }
+        }
+        int done = retransformSelfRestoreLoaded();
+        if (SELF_LOG.incrementAndGet() <= 10) {
+            LOGGER.info("[AgentBridge] 自保护还原: 保护 {} 类, 已拉回已加载 {} 个", selfRestoreNames.size(), done);
+        }
+        return true;
+    }
+
+    /** 自保护还原 watchdog：周期重拉回已加载受保护类（防外部用 redefineClasses 绕过 transformer 链）。
+     *  建议每 ~2-5s 调一次；内部自带节流。 */
+    public static int selfRestoreWatchdog() {
+        if (!selfRestoreRegistered) return 0;
+        Instrumentation inst = instrumentation;
+        if (inst == null) return 0;
+        long now = System.currentTimeMillis();
+        if (now - lastSelfRestoreWatchdogMs < 2000L) return 0;
+        lastSelfRestoreWatchdogMs = now;
+        return retransformSelfRestoreLoaded();
+    }
+
+    /** 对已加载的受保护类批量 retransform（触发 transform → YizRestoreTransformer 返回 jar 字节还原）。 */
+    private static int retransformSelfRestoreLoaded() {
+        Instrumentation inst = instrumentation;
+        if (inst == null || selfRestoreNames.isEmpty()) return 0;
+        List<Class<?>> targets = new ArrayList<>();
+        try {
+            for (Class<?> c : inst.getAllLoadedClasses()) {
+                String n = c.getName().replace('.', '/');
+                if (selfRestoreNames.contains(n)) targets.add(c);
+            }
+        } catch (Throwable t) {
+            return 0;
+        }
+        if (targets.isEmpty()) return 0;
+        return retransformLenient(targets);
+    }
+
+    public static boolean isSelfRestoreRegistered() { return selfRestoreRegistered; }
 }

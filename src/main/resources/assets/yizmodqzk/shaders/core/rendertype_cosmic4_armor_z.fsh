@@ -1,7 +1,7 @@
 #version 150
-// 'Warp Speed' by David Hoskins 2013 — armor variant
-
 uniform sampler2D Sampler0;
+
+
 uniform vec4 ColorModulator;
 uniform float iTime;
 
@@ -11,32 +11,56 @@ in vec3 fPos;
 
 out vec4 fragColor;
 
+vec3 palette(float t) {
+    float ct = cos(6.28318 * t);
+    return vec3(0.5) + vec3(0.5) * cos(6.28318 * (t + vec3(0.0, 0.33, 0.67)));
+}
+
+float Hash21(vec2 p) {
+    p = fract(p * vec2(123.34, 456.821));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
+}
+
 void main() {
     vec4 mask = texture(Sampler0, texCoord0);
-    // discard removed — @Redirect mode needs every fragment to pass
-    float time = (iTime + 29.0) * 60.0;
-    float s = 0.0, v = 0.0;
-    vec2 uv = fPos.xy * 4.0;
-    float t = time * 0.005;
-    uv.x += sin(t) * 0.3;
-    float si = sin(t * 1.5);
-    float co = cos(t);
-    uv *= mat2(co, si, -si, co);
+    if (mask.a < 0.05) { discard; }
+    
+    
 
-    vec3 col = vec3(0.0);
-    vec3 init = vec3(0.25, 0.25 + sin(time * 0.001) * 0.1, time * 0.0008);
+    vec2 uv = fPos.xy * 0.8;
+    float t = iTime * 0.5;
+    vec3 col = vec3(0.05, 0.02, 0.1);
 
-    for (int r = 0; r < 100; r++) {
-        vec3 p = init + s * vec3(uv, 0.143);
-        p.z = mod(p.z, 2.0);
-        for (int i = 0; i < 10; i++) p = abs(p * 2.04) / dot(p, p) - 0.75;
-        v += length(p * p) * smoothstep(0.0, 0.5, 0.9 - s) * 0.002;
-        col += vec3(v * 0.8, 1.1 - s * 0.5, 0.7 + v * 0.5) * v * 0.013;
-        s += 0.01;
+    for (int layer = 0; layer < 7; layer++) {
+        float lf = float(layer) / 7.0;
+        float depth = fract(lf + t * 0.02);
+        float scale = mix(12.0, 1.0, depth);
+        vec2 luv = uv * scale + float(layer) * 432.1;
+
+        vec2 gv = fract(luv) - 0.5;
+        vec2 id = floor(luv);
+
+        for (int y = -1; y <= 1; y++)
+        for (int x = -1; x <= 1; x++) {
+            vec2 offset = vec2(float(x), float(y));
+            float n = Hash21(id + offset);
+            float starSize = fract(n * 149.1) * 0.5 + 0.3;
+            vec2 starPos = vec2(n, fract(n * 34.0)) - 0.5;
+            float d = length(gv - offset - starPos * 0.6);
+            if (d < starSize * 0.15) {
+                float bright = (1.0 - d / (starSize * 0.15))
+                    * (sin(t * 3.0 + n * 100.0) * 0.4 + 0.6)
+                    * depth * (1.0 - lf * 0.5);
+                vec3 starCol = palette(n + t * 0.05) * 1.5;
+                col += starCol * bright * 0.8;
+                if (d < starSize * 0.04) {
+                    col += starCol * bright * 1.5;
+                }
+            }
+        }
     }
 
-    vec3 shade = vertexColor.rgb * 0.2 + vec3(0.8);
-    col.rgb *= shade;
     col = clamp(col, 0.0, 1.0);
-    fragColor = vec4(col, 0.5) * ColorModulator;  // fixed alpha — @Redirect mode
+    fragColor = vec4(col, mask.a) * ColorModulator;
 }

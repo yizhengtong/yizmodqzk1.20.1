@@ -27,7 +27,8 @@ import java.util.UUID;
 public final class YizEffectCommand {
 
     private static final String[] KNOWN_EFFECTS = {
-        net.minecraft.client.yiz.tool.effect.InstanceEffectState.REMOVE_IMMUNITY,
+        net.minecraft.client.yiz.tool.effect.InstanceEffectState.CLEAR_IMMUNITY,
+        net.minecraft.client.yiz.tool.effect.InstanceEffectState.PULLBACK,
         net.minecraft.client.yiz.tool.effect.InstanceEffectState.TELEPORT_IMMUNITY,
         net.minecraft.client.yiz.tool.effect.InstanceEffectState.POTION_IMMUNITY,
         net.minecraft.client.yiz.tool.effect.InstanceEffectState.KNOCKBACK_IMMUNITY,

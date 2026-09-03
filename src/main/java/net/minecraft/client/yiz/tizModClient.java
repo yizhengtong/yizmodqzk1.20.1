@@ -28,6 +28,9 @@ public final class tizModClient {
                 net.minecraft.client.yiz.editor.AttributeEditorRegistries.ATTRIBUTE_EDITOR_MENU.get(),
                 net.minecraft.client.yiz.editor.AttributeEditorScreen::new));
 
+        // 万能物品配置：Shift+U 按键响应
+        net.minecraft.client.yiz.itemcfg.client.ItemConfigKeyHandler.init();
+
         // 注册着色器预设 (1=星芒, 2=图标贴图, 3=曲速穿越)
         ShaderManager.registerPreset("1", new ShaderManager.ShaderDescriptor(
                 tizMod.MODID, "rendertype_cosmic2", "rendertype_cosmic2_armor", true
@@ -52,5 +55,13 @@ public final class tizModClient {
         ShaderManager.registerPreset("z0", new ShaderManager.ShaderDescriptor(
                 tizMod.MODID, "rendertype_cosmic2", "rendertype_cosmic2_armor", true
         ));
+    }
+
+    /** 注册万能物品配置按键（U 键，Shift+U 触发）。 */
+    @SubscribeEvent
+    public static void onRegisterKeyMappings(
+            net.minecraftforge.client.event.RegisterKeyMappingsEvent event) {
+        tizMod.LOGGER.info("ItemConfig RegisterKeyMappingsEvent 触发");
+        net.minecraft.client.yiz.itemcfg.client.ItemConfigKeyHandler.registerKeyMapping(event);
     }
 }

@@ -35,6 +35,11 @@ public final class SecureHealthClosure {
         return entity != null && !entity.level().isClientSide() && hasObf(entity);
     }
 
+    /** bearer 实体的真值容器（前置库经 {@link LifeValueBearer} 接口取下游藏匿单元，不反向依赖下游类）；非 bearer 返回 null。 */
+    static ValueLife valueLifeOf(LivingEntity entity) {
+        return entity instanceof LifeValueBearer b ? b.yizValueLife() : null;
+    }
+
     /** 是否混淆血量存储（含客户端显示用）：实体自身挂载了 SECURE_OBF 混淆串 DataItem。
      *   不再用 SECURE_PULSE 属性判定：生产环境发现 SECURE_PULSE 可被外部清零 → hasObf=false →
      *  getHealth 回退 getMaxHealth（被外部 agent 注入压负，血量显示/伤害闸门失效）。
@@ -147,8 +152,27 @@ public final class SecureHealthClosure {
      *  merge/replace/replaceAll/remove/clear）调用栈鉴权——合法写（setHealth/register/remove 家族调用）
      *  放行；外部反射/IMPL_LOOKUP 直写（含 putIfAbsent/compute 等绕过）被拒。 */
     static final class ProtectedHealthMap extends java.util.concurrent.ConcurrentHashMap<java.util.UUID, Float> {
+        /** 诊断：大幅清零（old>50 → ≤0）调用栈（限频前 10 次），定位谁把权威表秒杀到 0。 */
+        private static final java.util.concurrent.atomic.AtomicInteger KILL_TO_ZERO_LOG =
+            new java.util.concurrent.atomic.AtomicInteger();
+        private static void logKillToZero(java.util.UUID key, Float old, Float value) {
+            if (KILL_TO_ZERO_LOG.incrementAndGet() > 10) return;
+            try {
+                StringBuilder sb = new StringBuilder();
+                StackTraceElement[] st = Thread.currentThread().getStackTrace();
+                for (int i = 3; i < Math.min(st.length, 18); i++) sb.append("\n    ").append(st[i]);
+                net.minecraft.client.yiz.tizMod.LOGGER.warn(
+                    "[SecureHealthClosure] 表值秒杀到0 {} -> {} (uuid={} 线程={}):{}",
+                    old, value, key, Thread.currentThread().getName(), sb);
+            } catch (Throwable ignored) {}
+        }
+
         @Override
         public Float put(java.util.UUID key, Float value) {
+            Float old = get(key);
+            if (old != null && old > 50.0f && value != null && value <= 0.0f) {
+                logKillToZero(key, old, value);
+            }
             if (!isTrustedTableWrite()) { logTableReject("put", key, value); return get(key); }
             return super.put(key, value);
         }
@@ -309,9 +333,27 @@ public final class SecureHealthClosure {
                 return entity.getMaxHealth();
             }
         }
-        // 服务端：读权威表（外部注入 直写串不影响逻辑血量）
+        // 服务端：逻辑血量权威 = NativeHealthVault（堆外 native 内存，fantasy 全堆扫描/对象遍历
+        // 物理到不了；表/容器/串只是镜像，外部 Unsafe 清零镜像不影响本层）。native 无槽/校验失败
+        // 才回退镜像（表→容器→串）。
+        float nativeV = NativeHealthVault.get(entity.getUUID());
+        if (!Float.isNaN(nativeV)) {
+            // 镜像层若被外部清零（表/容器与 native 不一致）→ 每 tick enforceFromNative 恢复；此处只管读
+            return nativeV;
+        }
+        // 镜像回退：表（写鉴权）→ 容器（早期）→ 混淆串
         Float v = AUTHORITY_TABLE.get(entity.getUUID());
-        if (v != null) return v;
+        if (v != null) {
+            if (v <= 0.0f) logReadZero(entity, "表", v);
+            return v;
+        }
+        // 表未注册兜底：容器（bearer 实体生命周期早期）→ 混淆串
+        ValueLife vl = valueLifeOf(entity);
+        if (vl != null && vl.isSet()) {
+            float cv = vl.get();
+            if (cv <= 0.0f) logReadZero(entity, "容器", cv);
+            return cv;
+        }
         // 表未初始化兜底：读串
         try {
             String enc = entity.getEntityData().get(HealthChannels.getSecureObf());
@@ -329,11 +371,130 @@ public final class SecureHealthClosure {
         }
     }
 
-    /** 注册实体到权威表（服务端；registerSecureHealth 首次调用）。 */
+    /** 注册实体到权威表（服务端；registerSecureHealth 首次调用）。native 权威 + 镜像双落。 */
     public static void registerAuthority(LivingEntity entity, float initialHp) {
         if (entity == null || entity.level().isClientSide()) return;
         if (initialHp < 0) initialHp = 0;
-        AUTHORITY_TABLE.put(entity.getUUID(), initialHp);
+        nativePut(entity, initialHp);
+    }
+
+    /** 同步真值到 bearer 实体容器（服务端写入口共用）。容器是读侧主源，表是校验基准；
+     *  写时双落保证一致。put 调用栈鉴权——外部直调此路径会被拒。 */
+    private static final java.util.concurrent.atomic.AtomicInteger VL_KILL_TO_ZERO_LOG =
+        new java.util.concurrent.atomic.AtomicInteger();
+    private static void writeValueLife(LivingEntity entity, float value) {
+        try {
+            ValueLife vl = valueLifeOf(entity);
+            if (vl == null) return;
+            float old = vl.get();
+            if (!Float.isNaN(old) && old > 50.0f && value <= 0.0f && VL_KILL_TO_ZERO_LOG.incrementAndGet() <= 10) {
+                StringBuilder sb = new StringBuilder();
+                StackTraceElement[] st = Thread.currentThread().getStackTrace();
+                for (int i = 3; i < Math.min(st.length, 18); i++) sb.append("\n    ").append(st[i]);
+                net.minecraft.client.yiz.tizMod.LOGGER.warn(
+                    "[SecureHealthClosure] 容器秒杀到0 {} -> {} (uuid={} 线程={}):{}",
+                    old, value, entity.getUUID(), Thread.currentThread().getName(), sb);
+            }
+            vl.put(value);
+        } catch (Throwable ignored) {}
+    }
+
+    /** 统一真值写入口：写 native（权威）+ 双落镜像（表/容器）。由 setHealth/registerAuthority 等调用。
+     *  native 分配失败/无槽时仍写镜像（降级：镜像层至少还有写鉴权/混淆串保护，fantasy 需逐个改）。 */
+    private static void nativePut(LivingEntity entity, float value) {
+        try {
+            java.util.UUID uuid = entity.getUUID();
+            // native 权威优先
+            boolean nok = NativeHealthVault.put(uuid, value);
+            AUTHORITY_TABLE.put(uuid, value);
+            writeValueLife(entity, value);
+            if (!nok) {
+                // native 不可用（未 init/分配失败）——此时镜像层是唯一存储，至少镜像还有写鉴权
+                net.minecraft.client.yiz.tizMod.LOGGER.warn("[NativeHealthVault] native 写入失败，降级镜像 (uuid={})", uuid);
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    /**
+     * 每 tick 用 native 真值拉正 Java 镜像层（表/容器/串）——fantasy Unsafe 清零镜像后，下一 tick
+     * 从这里恢复。enforceSecureHealthState 调。native 无槽（未注册）则尝试从镜像层同步回 native。
+     */
+    public static void enforceFromNative(LivingEntity entity) {
+        if (entity == null || entity.level().isClientSide()) return;
+        try {
+            java.util.UUID uuid = entity.getUUID();
+            float nv = NativeHealthVault.get(uuid);
+            if (!Float.isNaN(nv)) {
+                // native 有值：拉正镜像层
+                Float tv = AUTHORITY_TABLE.get(uuid);
+                if (tv == null || Math.abs(tv - nv) > 0.001f) {
+                    AUTHORITY_TABLE.put(uuid, nv);
+                }
+                ValueLife vl = valueLifeOf(entity);
+                if (vl != null && (Float.isNaN(vl.get()) || Math.abs(vl.get() - nv) > 0.001f)) {
+                    vl.put(nv);
+                }
+                // 混淆串回写
+                try {
+                    int key = entity.getEntityData().get(HealthChannels.getSecureObfKey());
+                    beginObfWrite();
+                    try {
+                        entity.getEntityData().set(HealthChannels.getSecureObf(), FloatObf.enc(nv, key));
+                    } finally {
+                        endObfWrite();
+                    }
+                } catch (Throwable ignored) {}
+                return;
+            }
+            // native 无槽：从镜像层同步回 native（实体注册早期 / 存档恢复后首 tick）
+            Float tv = AUTHORITY_TABLE.get(uuid);
+            if (tv != null) {
+                NativeHealthVault.put(uuid, tv);
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    /**
+     * 每 tick 用权威表拉正 bearer 容器（enforceSecureHealthState 调，先于 enforceAuthority）。
+     * 容器读优先，但容器内容可能被外部反射直改（float 字段）——以难攻破的表为基准校正，
+     * 使「只改容器」无法持久改血；同时覆盖 DataItem 混淆串，客户端显示同步。
+     */
+    public static void enforceContainerFromTable(LivingEntity entity) {
+        if (entity == null || entity.level().isClientSide()) return;
+        try {
+            ValueLife vl = valueLifeOf(entity);
+            if (vl == null) return;
+            Float v = AUTHORITY_TABLE.get(entity.getUUID());
+            if (v == null) return;
+            float cur = vl.get();
+            if (Float.isNaN(cur) || Math.abs(cur - v) > 0.01f) {
+                if (!Float.isNaN(cur) && CONTAINER_DRIFT_LOG.incrementAndGet() <= 20) {
+                    net.minecraft.client.yiz.tizMod.LOGGER.warn(
+                        "[SecureHealthClosure] 容器 {} vs 权威表 {}（uuid={} 外部直改容器，enforce拉回）",
+                        cur, v, entity.getUUID());
+                }
+                vl.put(v);
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    /** 诊断：容器被外部直改痕迹（限频前 20 次）。 */
+    private static final java.util.concurrent.atomic.AtomicInteger CONTAINER_DRIFT_LOG =
+        new java.util.concurrent.atomic.AtomicInteger();
+
+    /** 诊断：服务端读到 ≤0（来源：容器/表/串），限频前 10 次——定位逻辑血量被判 0 的来源。 */
+    private static final java.util.concurrent.atomic.AtomicInteger READ_ZERO_LOG =
+        new java.util.concurrent.atomic.AtomicInteger();
+    private static void logReadZero(LivingEntity entity, String source, float v) {
+        if (READ_ZERO_LOG.incrementAndGet() > 10) return;
+        try {
+            StringBuilder sb = new StringBuilder();
+            StackTraceElement[] st = Thread.currentThread().getStackTrace();
+            for (int i = 3; i < Math.min(st.length, 14); i++) sb.append("\n    ").append(st[i]);
+            net.minecraft.client.yiz.tizMod.LOGGER.warn(
+                "[SecureHealthClosure] 服务端读{}={} (uuid={} 线程={}):{}",
+                source, v, entity.getUUID(), Thread.currentThread().getName(), sb);
+        } catch (Throwable ignored) {}
     }
 
     /** 诊断：外部注入 直写串痕迹（表值 vs 串值不一致），限频前 20 次。 */
@@ -362,9 +523,11 @@ public final class SecureHealthClosure {
         } catch (Throwable ignored) {}
     }
 
-    /** 清理权威表（实体死亡/移除时）。 */
+    /** 清理权威表 + native 槽（实体死亡/移除时）。 */
     public static void removeAuthority(LivingEntity entity) {
-        if (entity != null) AUTHORITY_TABLE.remove(entity.getUUID());
+        if (entity == null) return;
+        AUTHORITY_TABLE.remove(entity.getUUID());
+        NativeHealthVault.remove(entity.getUUID());
     }
 
     /** 受保护实体 dec 失败诊断（限频前 5 次）：打印 hasObfStorage/key/串/异常/调用栈，定位 old≠current。 */
@@ -439,7 +602,7 @@ public final class SecureHealthClosure {
                     hasObfStorage(entity), k, e.length() > 12 ? e.substring(0, 12) : e, sb);
             }
         } catch (Throwable ignored) {}
-        AUTHORITY_TABLE.put(entity.getUUID(), value);   // 服务端权威表（逻辑血量唯一来源，外部注入 直写串不影响）
+        nativePut(entity, value);   // native 权威 + 表/容器镜像双落
         logSetCall(entity, value);   // 诊断：写表调用方（定位 外部注入 是否直调 setHealth）
         try {
             int key = entity.getEntityData().get(HealthChannels.getSecureObfKey());
@@ -469,7 +632,7 @@ public final class SecureHealthClosure {
         if (!requireTrusted("setHealthUnbounded")) return;
         if (Float.isNaN(value)) value = 0;
         removeIntegrity(entity.getUUID());                          // 清完整性记录（防回滚）
-        AUTHORITY_TABLE.put(entity.getUUID(), value);               // 服务端权威表（无 clamp）
+        nativePut(entity, value);                                   // native 权威 + 表/容器镜像双落（无 clamp）
         try {
             int key = entity.getEntityData().get(HealthChannels.getSecureObfKey());
             beginObfWrite();

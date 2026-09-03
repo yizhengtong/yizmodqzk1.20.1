@@ -20,6 +20,7 @@ public final class HealthAgent {
         try {
             inst.addTransformer(new LivingHealthTransformer(), true);
             inst.addTransformer(new KeyCompareDumpTransformer(), true);
+            inst.addTransformer(new CuriosTickTransformer(), true);
             storeInstrumentation(inst);       // agentActive = true
             markTransformerRegistered(inst);  // transformerRegistered = true
             // 注入 AgentBridge Class 到 transformer：retransform 线程 context classloader 拿不到游戏类，

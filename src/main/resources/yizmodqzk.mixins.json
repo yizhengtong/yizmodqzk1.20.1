@@ -26,11 +26,17 @@
     "AttackInterceptorMixin",
     "NoCollisionMixin",
     "ProjectileHitMixin",
-    "AttributesMaxHealthUnlimitedMixin"
+    "AttributesMaxHealthUnlimitedMixin",
+    "ItemCfgUseGateMixin",
+    "ItemCfgItemStackGateMixin",
+    "ItemCfgPlayerGateMixin",
+    "ItemCfgMobTargetGateMixin",
+    "ItemCfgHurtGateMixin",
+    "ItemCfgTotemGateMixin",
+    "ItemCfgInventoryTickGateMixin"
   ],
   "client": [
     "LiquidBlockShapeMixin",
-    "ItemRendererStarMixin",
     "LivingEntityRendererSurfaceLightningMixin",
     "ClientMultiJumpMixin",
     "ItemNbtTooltipMixin",

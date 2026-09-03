@@ -153,6 +153,9 @@ dependencies {
     // ASM 字节码分析（EntityHealthLocator.getHealth 字节码探测用）
     implementation "org.ow2.asm:asm:9.8"
 
+    // Curios API（饰品槽位检测；生产环境需装 curios mod，libs/curios-forge-5.14.1+1.20.1.jar）
+    compileOnly fg.deobf(files("libs/curios-forge-5.14.1+1.20.1.jar"))
+
     // Example mod dependency with JEI - using fg.deobf() ensures the dependency is remapped to your development mappings
     // The JEI API is declared for compile time use, while the full JEI artifact is used at runtime
     // compileOnly fg.deobf("mezz.jei:jei-${mc_version}-common-api:${jei_version}")

@@ -42,5 +42,24 @@ public final class NetworkHandler {
             net.minecraft.client.yiz.editor.C2SAttributeEditorPayload::decode,
             net.minecraft.client.yiz.editor.C2SAttributeEditorPayload::handle
         );
+        // ── 万能物品配置（itemcfg） ──
+        CHANNEL.registerMessage(packetId++,
+            net.minecraft.client.yiz.itemcfg.network.C2SItemConfigQueryPayload.class,
+            net.minecraft.client.yiz.itemcfg.network.C2SItemConfigQueryPayload::encode,
+            net.minecraft.client.yiz.itemcfg.network.C2SItemConfigQueryPayload::decode,
+            net.minecraft.client.yiz.itemcfg.network.C2SItemConfigQueryPayload::handle
+        );
+        CHANNEL.registerMessage(packetId++,
+            net.minecraft.client.yiz.itemcfg.network.S2CItemConfigStatePayload.class,
+            net.minecraft.client.yiz.itemcfg.network.S2CItemConfigStatePayload::encode,
+            net.minecraft.client.yiz.itemcfg.network.S2CItemConfigStatePayload::decode,
+            net.minecraft.client.yiz.itemcfg.network.S2CItemConfigStatePayload::handle
+        );
+        CHANNEL.registerMessage(packetId++,
+            net.minecraft.client.yiz.itemcfg.network.C2SItemConfigTogglePayload.class,
+            net.minecraft.client.yiz.itemcfg.network.C2SItemConfigTogglePayload::encode,
+            net.minecraft.client.yiz.itemcfg.network.C2SItemConfigTogglePayload::decode,
+            net.minecraft.client.yiz.itemcfg.network.C2SItemConfigTogglePayload::handle
+        );
     }
 }

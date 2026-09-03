@@ -13,7 +13,7 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * 每实例每玩家效果隔离注册表（自走棋棋子效果模型基础）。
  *
- * <p>实体效果（免移除/免传送/免药水/免物理/免骑乘）不再是基类硬编码/全局静态开关，
+ * <p>实体效果（免清除/拉回/免传送/免药水/免物理/免骑乘）不再是基类硬编码/全局静态开关，
  * 而是<b>每实体实例</b>一份状态：归属玩家 + 显式开启/关闭覆盖。判定顺序：</p>
  * <ol>
  *   <li>实例显式覆盖（enabled/disabled Set）优先；</li>
@@ -27,8 +27,10 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class InstanceEffectState {
 
-    /** 免移除（整体放弃不死：OFF 时守卫线程/拉回/持久化复活全放行）。 */
-    public static final String REMOVE_IMMUNITY = "remove_immunity";
+    /** 免清除（拦外力把实体从世界清除/移除/结构摘除 + 拒自然清除；存在性保护，正交于拉回）。 */
+    public static final String CLEAR_IMMUNITY = "clear_immunity";
+    /** 拉回（实体被清除后自愈回填 + 快照持久化复活；正交于免清除）。 */
+    public static final String PULLBACK = "pullback";
     /** 免传送（坐标变更门禁 + 字段级位置恢复）。 */
     public static final String TELEPORT_IMMUNITY = "teleport_immunity";
     /** 免药水（负面状态免疫 + 每 tick 清状态）。 */
@@ -85,9 +87,19 @@ public final class InstanceEffectState {
         return base != null && base.contains(effect);
     }
 
-    /** 免移除快捷判定（mixin / agent / 基类统一入口）。 */
-    public static boolean isRemoveProtected(LivingEntity entity) {
-        return isEffectEnabled(entity, REMOVE_IMMUNITY);
+    /** 免清除快捷判定（拦清除/移除/结构摘除：mixin / agent / 基类统一入口）。 */
+    public static boolean isClearImmune(LivingEntity entity) {
+        return isEffectEnabled(entity, CLEAR_IMMUNITY);
+    }
+
+    /** 拉回快捷判定（被清除后自愈回填 + 快照复活：守卫线程 / 结构自愈 / 持久化统一入口）。 */
+    public static boolean isPullback(LivingEntity entity) {
+        return isEffectEnabled(entity, PULLBACK);
+    }
+
+    /** 存在性保护总判定 = 免清除或拉回任一开启（身份守卫/停机豁免等两属前置共用）。 */
+    public static boolean isPresenceProtected(LivingEntity entity) {
+        return isClearImmune(entity) || isPullback(entity);
     }
 
     // ==================== 归属 ====================
@@ -141,9 +153,14 @@ public final class InstanceEffectState {
         if (uuid != null) STATES.remove(uuid);
     }
 
-    /** 免移除关闭判定：非受保护实例（mixin/基类用「不拦截」语义）。 */
-    public static boolean isNotRemoveProtected(LivingEntity entity) {
-        return !isRemoveProtected(entity);
+    /** 免清除关闭判定：非免清除实例（mixin/基类用「不拦截清除」语义）。 */
+    public static boolean isNotClearImmune(LivingEntity entity) {
+        return !isClearImmune(entity);
+    }
+
+    /** 拉回关闭判定：非拉回实例。 */
+    public static boolean isNotPullback(LivingEntity entity) {
+        return !isPullback(entity);
     }
 
     private static boolean canModify(Entry e, UUID operatorUuid) {
@@ -187,6 +204,21 @@ public final class InstanceEffectState {
         if (state.contains("owner")) e.owner = state.getUUID("owner");
         if (state.contains("enabled")) readList(state.getList("enabled", Tag.TAG_STRING), e.enabled);
         if (state.contains("disabled")) readList(state.getList("disabled", Tag.TAG_STRING), e.disabled);
+        migrateLegacyRemoveImmunity(e);
+    }
+
+    /** 一次性迁移：老档 enabled/disabled 含 legacy {@code remove_immunity}（旧单开关总控免移除）
+     *  → 展开为 {@link #CLEAR_IMMUNITY} + {@link #PULLBACK}（运行期只认新双 key）。 */
+    private static void migrateLegacyRemoveImmunity(Entry e) {
+        String legacy = "remove_immunity";
+        if (e.enabled.remove(legacy)) {
+            e.enabled.add(CLEAR_IMMUNITY);
+            e.enabled.add(PULLBACK);
+        }
+        if (e.disabled.remove(legacy)) {
+            e.disabled.add(CLEAR_IMMUNITY);
+            e.disabled.add(PULLBACK);
+        }
     }
 
     private static ListTag writeList(Set<String> set) {
