@@ -71,13 +71,14 @@ public final class TotalHealthOverride {
         if (Double.isFinite(readback) && Math.abs(readback - target) >= 1.0) {
             // 第三方反作弊/权威存储型实体（生产实测 omnimobs）：它每 tick 用自己的真血回写所有血量字段，
             // 外部直写普通通道会被立刻覆盖（写 0 → 回读仍是 200）。不跟它抢写，直接调它自己的写入口
-            // （如 EntityUtil.forceSetHealth），让权威值本身被改掉，再回读确认。
+            // （如 EntityUtil.forceSetHealth），让权威值本身被改掉。
+            // ⚠️ 调用成功后**不能立即回读判成败**：它改的是权威值，getHealth 的显示通道要等它自己 tick 同步
+            //    （实测调用后 3ms 回读仍是旧值 750/200，据此判失败会白跑回退链路并反复清槽重扫）。
+            //    这里直接接受本次操作，交由尾部 GateHunt 的 2 tick 写回验证确认（没落地它会启动门控猎杀）。
             if (ForeignHealthAuthority.write(entity, target)) {
-                double rb2 = judgeCurrentHealth(entity);
-                if (!Double.isFinite(rb2) || Math.abs(rb2 - target) < 1.0) {
-                    readback = Double.isFinite(rb2) ? rb2 : target;
-                    LOGGER.info("[TotalOverride] {} 走第三方写入口落地：目标={}", entity.getClass().getName(), target);
-                }
+                LOGGER.info("[TotalOverride] {} 已通过第三方权威写入口设为 {}（显示值待其自身 tick 同步，交由写回验证确认）",
+                    entity.getClass().getName(), target);
+                readback = target;
             }
         }
         if (Double.isFinite(readback) && Math.abs(readback - target) >= 1.0) {
