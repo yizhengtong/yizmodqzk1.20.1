@@ -73,6 +73,15 @@ public final class TotalHealthOverride {
                 LOGGER.info("[TotalOverride] {} 写后回读={} 目标={} 未落地(误判槽) → 回退累积软压",
                     entity.getClass().getName(), readback, target);
             }
+            // 缓存槽位自愈：连续两次写不进去 → 判定该类的缓存槽已失效（模组更新/字段改名/隐藏类换壳），
+            // 清掉缓存让下次定位重新扫描，避免"持久化旧槽 → 永久失败"。
+            int fails = READBACK_FAILS.merge(entity.getClass().getName(), 1, Integer::sum);
+            if (fails >= 2) {
+                READBACK_FAILS.remove(entity.getClass().getName());
+                net.minecraft.client.yiz.tool.health.EntityHealthLocator.invalidate(entity);
+                LOGGER.warn("[TotalOverride] {} 连续 {} 次写不进去 → 已清除该类血量槽缓存，下次重新扫描定位",
+                    entity.getClass().getName(), fails);
+            }
             return false;
         }
 
@@ -303,4 +312,6 @@ public final class TotalHealthOverride {
     private static final org.slf4j.Logger LOGGER = net.minecraft.client.yiz.tizMod.LOGGER;
     private static final java.util.Set<String> WRITE_LOG = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private static final java.util.Set<String> READBACK_DIAG = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** 类名 → 连续"写后回读没落地"次数；达到阈值即清除该类血量槽缓存并触发重新扫描（自愈）。 */
+    private static final java.util.Map<String, Integer> READBACK_FAILS = new java.util.concurrent.ConcurrentHashMap<>();
 }

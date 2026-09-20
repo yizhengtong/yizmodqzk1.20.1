@@ -200,24 +200,8 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
     @Inject(method = "tick", at = @At("TAIL"))
     private void yizmodqzk$onTick(CallbackInfo ci) {
         LivingEntity entity = (LivingEntity) (Object) this;
-        if (entity.level().isClientSide()) return;
-
-        net.minecraft.client.yiz.handler.AttackInvulnerabilityTracker.onTick(entity, entity.level().getGameTime());
-        net.minecraft.client.yiz.core.StatusEffectDispatcher.tickControlTimers(entity);
-
-        HealthModificationScheduler.tick(entity);
-        ConductionDamageLimiter.tick(entity);
-        SecureHealthClosure.tick(entity);
-        // 实体属性回血（LIFE_REGEN_RATE/PCT 每 tick；玩家已在 tizMod.onPlayerTick 处理，避免双 tick）
-        if (!(entity instanceof net.minecraft.world.entity.player.Player)) {
-            net.minecraft.client.yiz.tool.health.AttributeEffectTicker.tick(entity);
-        }
-
-        if (entity.tickCount % 10 == 0) {
-            VitalitySeveranceHandler.enforceTick(entity);
-            VitalitySeveranceHandler.enforceFieldTick(entity);
-            net.minecraft.client.yiz.tool.health.HealthWriteGuard.enforce(entity);
-        }
+        // 每 tick 维护清单已抽到 EntityTickMaintenance（击飞飞行期目标 tick 被停，由 LaunchController 用同一份补跑）
+        net.minecraft.client.yiz.core.EntityTickMaintenance.tick(entity, false);
     }
 
     @Inject(method = "die", at = @At("HEAD"), cancellable = true)

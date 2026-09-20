@@ -86,6 +86,8 @@ public final class LaunchController {
         double distance;
         int totalTicks;
         int elapsed;
+        /** 连击刷新次数（不含首次施加）：用于"每 2 次攻击补一次铁砧音效"。 */
+        int refreshCount;
         /** 最近一次命中（施加或刷新）的游戏刻：用于判断"连击会话"是否还活着。 */
         long lastHitGameTime;
         /**
@@ -222,6 +224,11 @@ public final class LaunchController {
         if (refresh) {
             // 连击刷新：以当前位置为新起点重排一个周期，顶点高度不变 → 可无限连续控制且不会越打越高
             existing.refresh(source, tp, dirX, dirZ, height, distance, total);
+            existing.refreshCount++;
+            // 连续击飞时"每 2 次攻击"补一次铁砧音效（首次施加已经响过一次；每击都响太吵）
+            if (existing.refreshCount % 2 == 1) {
+                playAnvilSound(level, target);
+            }
             // 必须同时给客户端补一个开始包：否则客户端计时器仍从最初那次起算，
             // 24+60 兜底到点就会把姿态掰正，而目标还在空中被连击。
             // （客户端对"已有状态"的刷新会保留当前角度并直接进入保持态，不会回落重播）
@@ -380,6 +387,18 @@ public final class LaunchController {
         // 直接驱动位置（走 move 以保留碰撞/贴地判定），并每 tick 同步运动给客户端
         entity.move(MoverType.SELF, target.subtract(entity.position()));
         entity.fallDistance = 0.0F;
+        // 无敌帧在实体自身 tick 里递减，tick 停了就永远停在被命中后的 20 → 后续命中伤害全被吃掉
+        // （表现为"只击飞不掉血"）。飞行期间由我们清零，命中照常结算。
+        entity.invulnerableTime = 0;
+        // 补做必须继续跑的每 tick 维护（实体自身 tick 已停）：
+        // ① 通用清单（延迟任务调度/传导限伤/写基线/禁疗/回血…）——不跑会出现"只有第 1 次攻击造成伤害"；
+        // ② 下游桥接（混淆血量对外显示同步等）。
+        EntityTickMaintenance.tick(entity, true);
+        if (entity instanceof net.minecraft.client.yiz.bridge.LaunchTickBridge bridge) {
+            try {
+                bridge.yizmodqzk$onLaunchTick();
+            } catch (Throwable ignored) {}
+        }
         faceToward(launch, entity);
         markMotion(entity);
 
@@ -424,12 +443,16 @@ public final class LaunchController {
     // ══════════════════════════════════════════════════════════════
 
     private static void playLaunchFx(ServerLevel level, LivingEntity target, int totalTicks) {
-        // 只要音效（粒子按需求移除）
-        level.playSound(null, target.getX(), target.getY(), target.getZ(),
-            SoundEvents.ANVIL_PLACE, SoundSource.PLAYERS, 1.0F, 1.0F);
+        playAnvilSound(level, target);
         // 姿态同步：开始包（客户端按包里的时长播"向后倒"时间轴，不依赖实体自身位置/速度）
         sendPosePacket(level, target,
             net.minecraft.client.yiz.network.S2CLaunchFxPayload.KIND_START, totalTicks, target.getY(), true);
+    }
+
+    /** 击飞铁砧放置音效（首次施加 + 连击每 2 次攻击）。 */
+    private static void playAnvilSound(ServerLevel level, LivingEntity target) {
+        level.playSound(null, target.getX(), target.getY(), target.getZ(),
+            SoundEvents.ANVIL_PLACE, SoundSource.PLAYERS, 1.0F, 1.0F);
     }
 
     /** 姿态同步包（开始 / 结束）。结束包由释放方发出——服务端才是唯一知道何时落地的。 */

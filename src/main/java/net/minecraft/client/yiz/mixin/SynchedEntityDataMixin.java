@@ -3,6 +3,7 @@ package net.minecraft.client.yiz.mixin;
 import net.minecraft.client.yiz.tool.health.HealthChannels;
 import net.minecraft.client.yiz.tool.health.SecureHealthClosure;
 import net.minecraft.network.syncher.EntityDataAccessor;
+import net.minecraft.network.syncher.EntityDataSerializer;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
 import org.spongepowered.asm.mixin.Mixin;
@@ -57,38 +58,56 @@ public abstract class SynchedEntityDataMixin {
      */
     @Inject(method = "get(Lnet/minecraft/network/syncher/EntityDataAccessor;)Ljava/lang/Object;",
             at = @At("HEAD"))
-    private <T> void yizmodqzk$guardNumericGet(EntityDataAccessor<T> key, CallbackInfoReturnable<T> cir) {
-        var ser = key.getSerializer();
-        // 只处理基础类型序列化器：值类型与序列化器不匹配会抛 ClassCastException（生产实测
-        // INT/LONG/FLOAT 被写坏成 Byte，BYTE(FLAGS) 被写坏成 Float 都崩）。
-        if (ser != EntityDataSerializers.INT && ser != EntityDataSerializers.LONG
-                && ser != EntityDataSerializers.FLOAT && ser != EntityDataSerializers.BYTE
-                && ser != EntityDataSerializers.BOOLEAN && ser != EntityDataSerializers.STRING) return;
+    private <T> void yizmodqzk$guardTypedGet(EntityDataAccessor<T> key, CallbackInfoReturnable<T> cir) {
         try {
+            var ser = key.getSerializer();
             it.unimi.dsi.fastutil.ints.Int2ObjectMap<SynchedEntityData.DataItem<?>> map =
                 net.minecraft.client.yiz.util.MixinAccess.field(this, SynchedEntityData.class,
                     it.unimi.dsi.fastutil.ints.Int2ObjectMap.class, 0);
             if (map == null) return;
             SynchedEntityData.DataItem<?> item = map.get(key.getId());
             if (item == null) return;
-            Object v = item.getValue();
-            boolean typeOk = v != null
-                    && (ser == EntityDataSerializers.INT && v instanceof Integer
-                        || ser == EntityDataSerializers.LONG && v instanceof Long
-                        || ser == EntityDataSerializers.FLOAT && v instanceof Float
-                        || ser == EntityDataSerializers.BYTE && v instanceof Byte
-                        || ser == EntityDataSerializers.BOOLEAN && v instanceof Boolean
-                        || ser == EntityDataSerializers.STRING && v instanceof String);
-            if (typeOk) return;
-            // 值类型与序列化器不匹配（被第三方按 id 写坏）→ 修复为类型默认值
-            Object def = ser == EntityDataSerializers.INT ? (Object) 0
-                    : ser == EntityDataSerializers.LONG ? (Object) 0L
-                    : ser == EntityDataSerializers.FLOAT ? (Object) 0.0F
-                    : ser == EntityDataSerializers.BYTE ? (Object) (byte) 0
-                    : ser == EntityDataSerializers.BOOLEAN ? (Object) false
-                    : (Object) "";
+            Object def = yizmodqzk$mismatchDefault(ser, item.getValue());
+            if (def == null) return;
+            // 值类型与序列化器不匹配（被第三方按 id 写坏）→ 修复为类型安全默认值
             ((SynchedEntityData.DataItem) item).setValue(def);
             item.setDirty(true);
         } catch (Throwable ignored) {}
+    }
+
+    /**
+     * 返回类型不匹配时应写入的兜底值；返回 {@code null} 表示"无需修复"（类型正常或该序列化器不守卫）。
+     *
+     * <p>为什么必须覆盖对象类型：生产崩溃 06:19 是第三方实体类从 0 开始 defineId、父链未注册，
+     * 于是自己的通道抢占了原版 {@code Entity} 的 id 1/2，读 {@code getCustomName()}
+     * （OPTIONAL_COMPONENT 通道）时拿到 Float 直接 ClassCastException 崩渲染线程。</p>
+     */
+    private static Object yizmodqzk$mismatchDefault(EntityDataSerializer<?> ser, Object v) {
+        // 基础类型
+        if (ser == EntityDataSerializers.INT) return v instanceof Integer ? null : (Object) 0;
+        if (ser == EntityDataSerializers.LONG) return v instanceof Long ? null : (Object) 0L;
+        if (ser == EntityDataSerializers.FLOAT) return v instanceof Float ? null : (Object) 0.0F;
+        if (ser == EntityDataSerializers.BYTE) return v instanceof Byte ? null : (Object) (byte) 0;
+        if (ser == EntityDataSerializers.BOOLEAN) return v instanceof Boolean ? null : (Object) false;
+        if (ser == EntityDataSerializers.STRING) return v instanceof String ? null : (Object) "";
+        // 对象类型（读取端最后一道防线）
+        if (ser == EntityDataSerializers.COMPONENT)
+            return v instanceof net.minecraft.network.chat.Component ? null : net.minecraft.network.chat.Component.empty();
+        if (ser == EntityDataSerializers.OPTIONAL_COMPONENT || ser == EntityDataSerializers.OPTIONAL_BLOCK_STATE
+                || ser == EntityDataSerializers.OPTIONAL_BLOCK_POS || ser == EntityDataSerializers.OPTIONAL_UUID
+                || ser == EntityDataSerializers.OPTIONAL_GLOBAL_POS)
+            return v instanceof java.util.Optional ? null : java.util.Optional.empty();
+        if (ser == EntityDataSerializers.ITEM_STACK)
+            return v instanceof net.minecraft.world.item.ItemStack ? null : net.minecraft.world.item.ItemStack.EMPTY;
+        if (ser == EntityDataSerializers.BLOCK_STATE)
+            return v instanceof net.minecraft.world.level.block.state.BlockState ? null
+                    : net.minecraft.world.level.block.Blocks.AIR.defaultBlockState();
+        if (ser == EntityDataSerializers.BLOCK_POS)
+            return v instanceof net.minecraft.core.BlockPos ? null : net.minecraft.core.BlockPos.ZERO;
+        if (ser == EntityDataSerializers.DIRECTION)
+            return v instanceof net.minecraft.core.Direction ? null : net.minecraft.core.Direction.NORTH;
+        if (ser == EntityDataSerializers.COMPOUND_TAG)
+            return v instanceof net.minecraft.nbt.CompoundTag ? null : new net.minecraft.nbt.CompoundTag();
+        return null;
     }
 }

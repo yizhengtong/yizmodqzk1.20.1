@@ -196,6 +196,16 @@ public final class EntityHealthLocator {
     }
 
     /**
+     * 公开的槽位失效入口：写后回读没落地（改到误判字段）时由 {@code TotalHealthOverride} 调用。
+     *
+     * <p>没有这一步的话，持久化缓存里那条错槽会被一直复用 → 该类实体永远走不到真实血量
+     * （表现为"这个生物改不动血"），也就是必须靠"扫描失效就重新扫描"来自愈。</p>
+     */
+    public static void invalidate(LivingEntity entity) {
+        invalidateSlot(entity);
+    }
+
+    /**
      * 持久扣血（经定位到的真实血量槽）。逻辑语义：读逻辑血量 → 减 amount → 写回。
      *
      * @return true 已持久扣血；false 调用方应回退 Delta。

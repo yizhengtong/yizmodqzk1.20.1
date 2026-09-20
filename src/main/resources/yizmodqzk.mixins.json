@@ -6,6 +6,7 @@
   "refmap": "yizmodqzk.refmap.json",
   "mixins": [
     "LivingEntityMixin",
+    "SynchedEntityDataDefineIdMixin",
     "LivingEntityBleedMixin",
     "LivingEntityActuallyHurtAccessor",
     "MobEffectInstanceDurationAccessor",
