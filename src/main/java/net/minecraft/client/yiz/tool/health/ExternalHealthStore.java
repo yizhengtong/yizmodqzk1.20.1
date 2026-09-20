@@ -88,27 +88,31 @@ public final class ExternalHealthStore {
     /** 落盘缓存分域（发现结果由 {@link HealthDiscoveryCache} 持久化）。 */
     private static final String SECTION = "external_maps";
 
-    /** 已发现的外部藏血 Map 缓存（静态单例，发现后基本不变）。 */
-    private static volatile List<Map<?, ?>> MAP_CACHE = new ArrayList<>();
+    /** 已发现的藏血 Map <b>字段句柄</b>（不缓存实例：会话中 Map 可能被换成新实例，缓存实例会拿到过期 map）。 */
+    private static volatile List<Field> MAP_FIELDS = new ArrayList<>();
     /** 是否已完成一次性初始化（读盘反解 或 全类路径扫描一次）；置位后本轮不再枚举类路径。 */
     private static volatile boolean scanned = false;
     /** 已做过「按实体类就近发现」的类名（每类一次）。 */
     private static final java.util.Set<String> TARGETED = ConcurrentHashMap.newKeySet();
-    /**
-     * 已发现、但当前读不到值的候选字段（声明类还没 {@code <clinit>}、静态 Map 还没赋值等）。
-     *
-     * <p>旧实现靠「已加载类数量变化 → 全类路径重扫」兜住这种「晚出现」的 Map，代价是战斗中每 2 秒
-     * 把整个类路径反射一遍。现在只补读这些字段句柄（Unsafe 读，几纳秒），不枚举任何类路径，
-     * 成本随待补字段数线性且只减不增。</p>
-     */
-    private static final List<Field> PENDING_FIELDS = new java.util.concurrent.CopyOnWriteArrayList<>();
 
-    /** 懒加载 + 至多一次全类路径扫描：优先用落盘发现结果，缺失/全部失效才枚举类路径。 */
+    /**
+     * 懒加载 + 至多一次全类路径扫描：优先用落盘发现结果，缺失/全部失效才枚举类路径。
+     *
+     * <p><b>每次调用现读字段值</b>（旧实现也是 {@code f.get(null)} 现读）：藏血 Map 在会话中被替换成
+     * 新实例时，缓存实例快照会拿到过期对象 → 读不到真血 → 判定退回被外部 delta 抬高的显示值 →
+     * 所有通道按"当前血"匹配全部落空 → 表现为「这类实体改不动」。句柄缓存 + 现读同时保住性能与正确性。</p>
+     */
     private static List<Map<?, ?>> candidateMaps(LivingEntity entity) {
         ensureScanned();
         discoverForClass(entity == null ? null : entity.getClass());
-        refreshPending();
-        return MAP_CACHE;
+        List<Map<?, ?>> out = new ArrayList<>();
+        for (Field f : MAP_FIELDS) {
+            try {
+                Object v = readStatic(f);
+                if (v instanceof Map<?, ?> map) out.add(map);
+            } catch (Throwable ignored) {}
+        }
+        return out;
     }
 
     /**
@@ -122,9 +126,9 @@ public final class ExternalHealthStore {
         synchronized (ExternalHealthStore.class) {
             if (scanned) return;
             if (HealthDiscoveryCache.isScanned(SECTION)) {
-                List<Map<?, ?>> restored = restoreFromCache();
+                List<Field> restored = restoreFromCache();
                 if (!restored.isEmpty()) {
-                    MAP_CACHE = restored;
+                    MAP_FIELDS = restored;
                     scanned = true;
                     LOGGER.info("[HealthDiscovery] external_maps 缓存命中 {} 条，跳过全类路径扫描", restored.size());
                     return;
@@ -138,17 +142,15 @@ public final class ExternalHealthStore {
         }
     }
 
-    /** 从落盘缓存重建内存缓存：只反解字段句柄 + 读值，不枚举任何类。 */
-    private static List<Map<?, ?>> restoreFromCache() {
-        List<Map<?, ?>> out = new ArrayList<>();
+    /** 从落盘缓存重建句柄表：只反解字段句柄，不读值（值每次调用现读）、不枚举任何类。 */
+    private static List<Field> restoreFromCache() {
+        List<Field> out = new ArrayList<>();
         for (String[] pair : HealthDiscoveryCache.get(SECTION)) {
             if (HealthDiscoveryCache.isOwnClass(pair[0])) continue;   // 本模组记账 map 不是藏血 map
             try {
                 Field f = HealthDiscoveryCache.resolve(pair[0], pair[1]);
                 if (f == null || !isCandidateMapField(f)) continue;   // 类/字段已消失或类型已变
-                Object v = readStatic(f);
-                if (v instanceof Map<?, ?> map) out.add(map);
-                else if (v == null) PENDING_FIELDS.add(f);            // 晚点补读
+                out.add(f);
             } catch (Throwable ignored) {}
         }
         return out;
@@ -157,7 +159,7 @@ public final class ExternalHealthStore {
     /** 按具体实体类就近发现（新加载的实体类不必等下一次全局扫描；只扫该类继承链，成本极低）。 */
     private static void discoverForClass(Class<?> entityClass) {
         if (entityClass == null || !TARGETED.add(entityClass.getName())) return;
-        List<Map<?, ?>> found = new ArrayList<>();
+        List<Field> found = new ArrayList<>();
         try {
             for (Class<?> c = entityClass; c != null && c != Object.class; c = c.getSuperclass()) {
                 if (HealthDiscoveryCache.isOwnClass(c.getName())) continue;   // 本模组记账 map 不是藏血 map
@@ -165,51 +167,29 @@ public final class ExternalHealthStore {
                     try {
                         if (!isCandidateMapField(f)) continue;
                         HealthDiscoveryCache.put(SECTION, c.getName(), f.getName());
-                        Object v = readStatic(f);
-                        if (v instanceof Map<?, ?> map) found.add(map);
-                        else if (v == null) PENDING_FIELDS.add(f);
+                        found.add(f);
                     } catch (Throwable ignored) {}
                 }
             }
         } catch (Throwable ignored) {}
-        mergeMaps(found);
+        mergeFields(found);
     }
 
-    /** 补读「已发现但读不到值」的字段（只读字段句柄，不枚举类路径）。 */
-    private static void refreshPending() {
-        if (PENDING_FIELDS.isEmpty()) return;
-        List<Map<?, ?>> found = new ArrayList<>();
-        for (Field f : PENDING_FIELDS) {
-            try {
-                Object v = readStatic(f);
-                if (v instanceof Map<?, ?> map) {
-                    found.add(map);
-                    PENDING_FIELDS.remove(f);
-                } else if (v != null) {
-                    PENDING_FIELDS.remove(f);   // 值已不是 Map：字段语义变了，放弃
-                }
-            } catch (Throwable ignored) {
-                PENDING_FIELDS.remove(f);
-            }
-        }
-        mergeMaps(found);
-    }
-
-    /** 合并新发现的 Map 到缓存（按对象标识去重：第三方 Map 的 equals 可能有开销/副作用）。 */
-    private static synchronized void mergeMaps(List<Map<?, ?>> extra) {
+    /** 合并新发现的字段句柄（按字段标识去重）。 */
+    private static synchronized void mergeFields(List<Field> extra) {
         if (extra.isEmpty()) return;
-        List<Map<?, ?>> merged = new ArrayList<>(MAP_CACHE);
-        for (Map<?, ?> m : extra) {
+        List<Field> merged = new ArrayList<>(MAP_FIELDS);
+        for (Field f : extra) {
             boolean dup = false;
-            for (Map<?, ?> e : merged) {
-                if (e == m) {
+            for (Field e : merged) {
+                if (e == f) {
                     dup = true;
                     break;
                 }
             }
-            if (!dup) merged.add(m);
+            if (!dup) merged.add(f);
         }
-        MAP_CACHE = merged;
+        MAP_FIELDS = merged;
     }
 
     /**
@@ -220,7 +200,7 @@ public final class ExternalHealthStore {
     private static int scanMaps() {
         Class<?>[] all = allLoadedClasses();
         if (all == null || all.length == 0) return -1;
-        List<Map<?, ?>> fresh = new ArrayList<>();
+        List<Field> fresh = new ArrayList<>();
         int hits = 0;
         LOGGER.info("[ExtStore] external_maps 首次全类路径扫描开始（仅此一次，结果落盘）");
         long t0 = System.currentTimeMillis();
@@ -230,19 +210,12 @@ public final class ExternalHealthStore {
                 for (Field f : clazz.getDeclaredFields()) {
                     if (!isCandidateMapField(f)) continue;
                     HealthDiscoveryCache.put(SECTION, f.getDeclaringClass().getName(), f.getName());
-                    try {
-                        Object v = readStatic(f);
-                        if (v instanceof Map<?, ?> map) {
-                            fresh.add(map);
-                            hits++;
-                        } else if (v == null) {
-                            PENDING_FIELDS.add(f);   // 声明类还没 <clinit> 等，晚点补读
-                        }
-                    } catch (Throwable ignored) {}
+                    fresh.add(f);   // 只存句柄：值每次调用现读（防实例被替换成过期对象）
+                    hits++;
                 }
             } catch (Throwable ignored) {}
         }
-        if (!fresh.isEmpty()) MAP_CACHE = fresh;   // 原子交换，避免清空/重填期间读竞态
+        if (!fresh.isEmpty()) MAP_FIELDS = fresh;   // 原子交换，避免清空/重填期间读竞态
         HealthDiscoveryCache.markScanned(SECTION);   // 全局扫描只做这一次，结果落盘
         LOGGER.info("[ExtStore] external_maps 全类路径扫描完成：命中 {} 个藏血 Map（{} 类，耗时 {} ms）",
                 hits, all.length, System.currentTimeMillis() - t0);

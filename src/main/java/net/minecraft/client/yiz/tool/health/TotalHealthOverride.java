@@ -69,6 +69,18 @@ public final class TotalHealthOverride {
         // 否则「定位误判」实体会卡在 TotalOverride 空转、永远到不了死亡链（无法累加击杀）。
         double readback = judgeCurrentHealth(entity);
         if (Double.isFinite(readback) && Math.abs(readback - target) >= 1.0) {
+            // 第三方反作弊/权威存储型实体（生产实测 omnimobs）：它每 tick 用自己的真血回写所有血量字段，
+            // 外部直写普通通道会被立刻覆盖（写 0 → 回读仍是 200）。不跟它抢写，直接调它自己的写入口
+            // （如 EntityUtil.forceSetHealth），让权威值本身被改掉，再回读确认。
+            if (ForeignHealthAuthority.write(entity, target)) {
+                double rb2 = judgeCurrentHealth(entity);
+                if (!Double.isFinite(rb2) || Math.abs(rb2 - target) < 1.0) {
+                    readback = Double.isFinite(rb2) ? rb2 : target;
+                    LOGGER.info("[TotalOverride] {} 走第三方写入口落地：目标={}", entity.getClass().getName(), target);
+                }
+            }
+        }
+        if (Double.isFinite(readback) && Math.abs(readback - target) >= 1.0) {
             if (READBACK_DIAG.add(entity.getClass().getName())) {
                 LOGGER.info("[TotalOverride] {} 写后回读={} 目标={} 未落地(误判槽) → 回退累积软压",
                     entity.getClass().getName(), readback, target);

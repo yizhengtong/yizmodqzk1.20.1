@@ -44,9 +44,10 @@ public final class ExternalRefStore {
     /** 从外部存档/全局对象读真实血量；非此类实体返回 null。 */
     public static Double readHealth(LivingEntity entity) {
         if (entity == null || entity.level().isClientSide()) return null;
-        for (Object store : candidateStores(entity)) {
+        for (Cand c : candidateStores(entity)) {
+            Object store = c.store();
             if (!holdsEntityRef(store, entity)) continue;
-            markMatched(entity, store);
+            if (c.field() != null) markMatched(entity, c.field());
             Field hf = findHealthField(store, entity, entity.getHealth());
             if (hf == null) continue;
             double v = readField(hf, store);
@@ -62,9 +63,10 @@ public final class ExternalRefStore {
     public static boolean writeHealth(LivingEntity entity, double current, double target) {
         if (entity == null || entity.level().isClientSide()) return false;
         boolean any = false;
-        for (Object store : candidateStores(entity)) {
+        for (Cand c : candidateStores(entity)) {
+            Object store = c.store();
             if (!holdsEntityRef(store, entity)) continue;
-            markMatched(entity, store);
+            if (c.field() != null) markMatched(entity, c.field());
             Field hf = findHealthField(store, entity, current);
             if (hf == null) continue;
             if (writeField(store, hf, target)) any = true;
@@ -77,23 +79,18 @@ public final class ExternalRefStore {
     /** 落盘缓存分域（发现结果由 {@link HealthDiscoveryCache} 持久化）。 */
     private static final String SECTION = "external_refs";
 
-    /** 已发现的静态「外部存储对象」缓存（读盘反解 或 唯一一次全扫得到）。 */
-    private static volatile List<Object> STATIC_STORES = new ArrayList<>();
+    /** 已发现的静态「外部存储」<b>字段句柄</b>（不缓存实例：会话中静态单例可能被换成新实例）。 */
+    private static volatile List<Field> STORE_FIELDS = new ArrayList<>();
     /** 是否已完成一次性初始化（读盘反解 或 全类路径扫描一次）；置位后本轮不再枚举类路径。 */
     private static volatile boolean scanned = false;
     /** 已做过「按实体类就近发现」的类名（每类一次）。 */
     private static final java.util.Set<String> TARGETED = ConcurrentHashMap.newKeySet();
-    /**
-     * 已发现、但当时读到 {@code null} 的静态候选字段（静态单例常在存档/世界加载后才赋值）。
-     *
-     * <p>旧实现每次调用都把全部已加载类的静态对象字段读一遍 —— 等于每次读血都全类路径反射一次，
-     * 而且照样看不到「晚赋值」的字段。现在只补读这些字段句柄，不枚举任何类路径，
-     * 成本随待补字段数线性且只减不增。</p>
-     */
-    private static final List<Field> PENDING_FIELDS = new java.util.concurrent.CopyOnWriteArrayList<>();
 
-    private static List<Object> candidateStores(LivingEntity entity) {
-        List<Object> out = new ArrayList<>();
+    /** 候选外部存储：对象 + 来源字段（世界 SavedData 里的动态对象没有字段，{@code field == null}）。 */
+    private record Cand(Object store, Field field) {}
+
+    private static List<Cand> candidateStores(LivingEntity entity) {
+        List<Cand> out = new ArrayList<>();
         // a. 世界 SavedData（getDataStorage 缓存里的全部对象）—— 随世界/存档变化，每次现查（不枚举类路径）
         try {
             if (entity.level() instanceof ServerLevel sl) {
@@ -107,7 +104,7 @@ public final class ExternalRefStore {
                             Object m = f.get(storage);
                             if (m instanceof Map<?, ?> map) {
                                 for (Object v : map.values()) {
-                                    if (v != null) out.add(v);
+                                    if (v != null) out.add(new Cand(v, null));
                                 }
                             }
                         } catch (Throwable ignored) {}
@@ -116,20 +113,22 @@ public final class ExternalRefStore {
             }
         } catch (Throwable ignored) {}
         // b. 静态对象字段（非 Map/集合/字符串/枚举/原始类型）：发现结果落盘，启动后只反解字段句柄；
-        //    新加载的实体类按需「就近发现」，不再每次调用都枚举全类路径
+        //    新加载的实体类按需「就近发现」，不再每次调用都枚举全类路径。
+        //    **值每次现读**：静态单例在会话中被替换成新实例时，缓存实例快照会拿到过期对象 → 读不到真血。
         ensureScanned();
         discoverForClass(entity == null ? null : entity.getClass());
-        refreshPending();
-        // c. **按实体类收敛候选**（性能关键）：静态候选实测有 1.3 万+ 个（全类路径里所有静态单例），
-        //    每次读/写血都逐字段反射一遍 → 单次 40~50ms；一次铁斗士挥击要跑好几轮 ⇒ 秒级卡顿。
-        //    这里改成：只有「首次 / 每 FULL_SWEEP_INTERVAL_MS 一次全量补扫」才遍历全部候选，
-        //    其余调用只扫「该类此前真正命中过的存储」——命中集合稳定后单次成本趋近于 0。
-        return filterStatics(entity, out);
+        for (Field f : filterStaticFields(entity)) {
+            try {
+                Object v = readStaticField(f);
+                if (v != null) out.add(new Cand(v, f));
+            } catch (Throwable ignored) {}
+        }
+        return out;
     }
 
-    /** 每个实体类一份扫描状态：命中过的存储 + 上次全量补扫时间。 */
+    /** 每个实体类一份扫描状态：命中过的字段 + 上次全量补扫时间。 */
     private static final class ScanState {
-        final List<Object> matched = new java.util.concurrent.CopyOnWriteArrayList<>();
+        final List<Field> matched = new java.util.concurrent.CopyOnWriteArrayList<>();
         volatile long lastFullSweepMs = 0L;
     }
 
@@ -137,45 +136,38 @@ public final class ExternalRefStore {
     /** 全量补扫间隔（毫秒）：没命中的候选不永久排除，按此间隔重试一轮，兼顾「晚写入」的存储。 */
     private static final long FULL_SWEEP_INTERVAL_MS = 10_000L;
 
-    /** 动态候选（SavedData 里的对象）永远全查；静态候选按上面策略收敛。 */
-    private static List<Object> filterStatics(LivingEntity entity, List<Object> out) {
+    /**
+     * **按实体类收敛候选**（性能关键）：静态候选实测有 1.3 万+ 个（全类路径里所有静态单例），
+     * 每次读/写血都逐字段反射一遍 → 单次 40~50ms；一次铁斗士挥击要跑好几轮 ⇒ 秒级卡顿。
+     * 这里：只有「首次 / 每 {@link #FULL_SWEEP_INTERVAL_MS} 一次全量补扫」才返回全部候选字段，
+     * 其余调用只返回「该类此前真正命中过的字段」——命中集合稳定后单次成本趋近于 0。
+     */
+    private static List<Field> filterStaticFields(LivingEntity entity) {
         try {
-            // out 里前段是 SavedData 动态对象、后段是 STATIC_STORES；用总数差值切出动态段
-            int dynCount = out.size() - STATIC_STORES.size();
-            if (dynCount < 0) dynCount = 0;
-            List<Object> dyn = new ArrayList<>(out.subList(0, dynCount));
+            List<Field> all = STORE_FIELDS;
             ScanState st = SCAN_STATE.computeIfAbsent(
                     entity == null ? "?" : entity.getClass().getName(), k -> new ScanState());
             long now = System.currentTimeMillis();
-            boolean full = now - st.lastFullSweepMs >= FULL_SWEEP_INTERVAL_MS;
-            if (full) {
+            if (now - st.lastFullSweepMs >= FULL_SWEEP_INTERVAL_MS) {
                 st.lastFullSweepMs = now;
-                dyn.addAll(out.subList(dynCount, out.size()));   // 全量轮：加上全部静态候选
-                return dyn;
+                return all;                       // 全量轮
             }
-            for (Object o : st.matched) {                        // 非全量轮：只加命中过的
-                if (!containsIdentity(dyn, o)) dyn.add(o);
-            }
-            return dyn;
+            return new ArrayList<>(st.matched);    // 非全量轮：只扫命中过的字段
         } catch (Throwable t) {
-            return out;
+            return STORE_FIELDS;
         }
     }
 
-    /** 命中后登记：下次非全量轮只扫这些存储。 */
-    private static void markMatched(LivingEntity entity, Object store) {
+    /** 命中后登记：下次非全量轮只扫这些字段。 */
+    private static void markMatched(LivingEntity entity, Field field) {
         try {
-            if (entity == null || store == null) return;
+            if (entity == null || field == null) return;
             ScanState st = SCAN_STATE.computeIfAbsent(entity.getClass().getName(), k -> new ScanState());
-            if (!containsIdentity(st.matched, store)) st.matched.add(store);
+            for (Field e : st.matched) {
+                if (e == field) return;
+            }
+            st.matched.add(field);
         } catch (Throwable ignored) {}
-    }
-
-    private static boolean containsIdentity(List<Object> list, Object o) {
-        for (Object e : list) {
-            if (e == o) return true;
-        }
-        return false;
     }
 
     /** 懒加载 + 至多一次全类路径扫描：优先用落盘发现结果，缺失/全部失效才枚举类路径。 */
@@ -184,9 +176,9 @@ public final class ExternalRefStore {
         synchronized (ExternalRefStore.class) {
             if (scanned) return;
             if (HealthDiscoveryCache.isScanned(SECTION)) {
-                List<Object> restored = restoreFromCache();
+                List<Field> restored = restoreFromCache();
                 if (!restored.isEmpty()) {
-                    STATIC_STORES = restored;
+                    STORE_FIELDS = restored;
                     scanned = true;
                     LOGGER.info("[HealthDiscovery] external_refs 缓存命中 {} 条，跳过全类路径扫描", restored.size());
                     return;
@@ -200,17 +192,15 @@ public final class ExternalRefStore {
         }
     }
 
-    /** 从落盘缓存重建内存缓存：只反解字段句柄 + 读值，不枚举任何类。 */
-    private static List<Object> restoreFromCache() {
-        List<Object> out = new ArrayList<>();
+    /** 从落盘缓存重建句柄表：只反解字段句柄，不读值（值每次调用现读）、不枚举任何类。 */
+    private static List<Field> restoreFromCache() {
+        List<Field> out = new ArrayList<>();
         for (String[] pair : HealthDiscoveryCache.get(SECTION)) {
             if (HealthDiscoveryCache.isOwnClass(pair[0])) continue;   // 本模组记账对象不是外部存档
             try {
                 Field f = HealthDiscoveryCache.resolve(pair[0], pair[1]);
                 if (f == null || !isCandidateStoreField(f)) continue;   // 类/字段已消失或类型已变
-                Object v = readStaticField(f);
-                if (v != null) out.add(v);
-                else PENDING_FIELDS.add(f);   // 晚点补读
+                out.add(f);
             } catch (Throwable ignored) {}
         }
         return out;
@@ -219,7 +209,7 @@ public final class ExternalRefStore {
     /** 按具体实体类就近发现（新加载的实体类不必等下一次全局扫描；只扫该类继承链，成本极低）。 */
     private static void discoverForClass(Class<?> entityClass) {
         if (entityClass == null || !TARGETED.add(entityClass.getName())) return;
-        List<Object> found = new ArrayList<>();
+        List<Field> found = new ArrayList<>();
         try {
             for (Class<?> c = entityClass; c != null && c != Object.class; c = c.getSuperclass()) {
                 if (HealthDiscoveryCache.isOwnClass(c.getName())) continue;   // 本模组记账对象不是外部存档
@@ -227,60 +217,40 @@ public final class ExternalRefStore {
                     try {
                         if (!isCandidateStoreField(f)) continue;
                         HealthDiscoveryCache.put(SECTION, c.getName(), f.getName());
-                        Object v = readStaticField(f);
-                        if (v != null) found.add(v);
-                        else PENDING_FIELDS.add(f);
+                        found.add(f);
                     } catch (Throwable ignored) {}
                 }
             }
         } catch (Throwable ignored) {}
-        mergeStores(found);
+        mergeFields(found);
     }
 
-    /** 补读「已发现但读不到值」的字段（只读字段句柄，不枚举类路径）。 */
-    private static void refreshPending() {
-        if (PENDING_FIELDS.isEmpty()) return;
-        List<Object> found = new ArrayList<>();
-        for (Field f : PENDING_FIELDS) {
-            try {
-                Object v = readStaticField(f);
-                if (v != null) {
-                    found.add(v);
-                    PENDING_FIELDS.remove(f);
-                }
-            } catch (Throwable ignored) {
-                PENDING_FIELDS.remove(f);
-            }
-        }
-        mergeStores(found);
-    }
-
-    /** 合并新发现的存储对象到缓存（按对象标识去重：第三方对象的 equals 可能有开销/副作用）。 */
-    private static synchronized void mergeStores(List<Object> extra) {
+    /** 合并新发现的字段句柄（按字段标识去重）。 */
+    private static synchronized void mergeFields(List<Field> extra) {
         if (extra.isEmpty()) return;
-        List<Object> merged = new ArrayList<>(STATIC_STORES);
-        for (Object o : extra) {
+        List<Field> merged = new ArrayList<>(STORE_FIELDS);
+        for (Field f : extra) {
             boolean dup = false;
-            for (Object e : merged) {
-                if (e == o) {
+            for (Field e : merged) {
+                if (e == f) {
                     dup = true;
                     break;
                 }
             }
-            if (!dup) merged.add(o);
+            if (!dup) merged.add(f);
         }
-        STATIC_STORES = merged;
+        STORE_FIELDS = merged;
     }
 
     /**
-     * 唯一一次全类路径扫描：枚举已加载类的静态对象字段 → 读值 → 命中即落盘。
+     * 唯一一次全类路径扫描：枚举已加载类的静态对象字段 → 落盘。
      *
      * @return 已加载类数量；{@code <0} 表示类表不可用（没有 agent），调用方不置位 {@code scanned} 以便下次重试
      */
     private static int scanStores() {
         Class<?>[] all = allLoadedClasses();
         if (all == null || all.length == 0) return -1;
-        List<Object> fresh = new ArrayList<>();
+        List<Field> fresh = new ArrayList<>();
         int hits = 0;
         LOGGER.info("[ExtRef] external_refs 首次全类路径扫描开始（仅此一次，结果落盘）");
         long t0 = System.currentTimeMillis();
@@ -290,21 +260,14 @@ public final class ExternalRefStore {
                 for (Field f : clazz.getDeclaredFields()) {
                     if (!isCandidateStoreField(f)) continue;
                     HealthDiscoveryCache.put(SECTION, f.getDeclaringClass().getName(), f.getName());
-                    try {
-                        Object v = readStaticField(f);
-                        if (v != null) {
-                            fresh.add(v);
-                            hits++;
-                        } else {
-                            PENDING_FIELDS.add(f);   // 静态单例还没赋值，晚点补读
-                        }
-                    } catch (Throwable ignored) {}
+                    fresh.add(f);   // 只存句柄：值每次调用现读（防静态单例被替换成过期对象）
+                    hits++;
                 }
             } catch (Throwable ignored) {}
         }
-        STATIC_STORES = fresh;   // 原子交换，避免清空/重填期间读竞态
+        STORE_FIELDS = fresh;   // 原子交换，避免清空/重填期间读竞态
         HealthDiscoveryCache.markScanned(SECTION);   // 全局扫描只做这一次，结果落盘
-        LOGGER.info("[ExtRef] external_refs 全类路径扫描完成：命中 {} 个静态外部存储（{} 类，耗时 {} ms）",
+        LOGGER.info("[ExtRef] external_refs 全类路径扫描完成：命中 {} 个静态外部存储字段（{} 类，耗时 {} ms）",
                 hits, all.length, System.currentTimeMillis() - t0);
         return all.length;
     }
