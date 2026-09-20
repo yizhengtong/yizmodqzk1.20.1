@@ -17,11 +17,22 @@ public final class ManaTracker {
 
     private static final ConcurrentHashMap<UUID, Float> MANA = new ConcurrentHashMap<>();
 
+    /**
+     * 初始蓝量策略：true（默认）= 无记录的实体从 0 起算（棋子/新建实体语义，用户拍板）；
+     * false = 无记录时返回上限（旧玩家语义）。
+     */
+    private static volatile boolean defaultEmpty = true;
+
     private ManaTracker() {}
 
-    /** 获取当前蓝量。不存在时返回上限值。 */
+    public static boolean isDefaultEmpty() { return defaultEmpty; }
+
+    public static void setDefaultEmpty(boolean empty) { defaultEmpty = empty; }
+
+    /** 获取当前蓝量。无记录时：defaultEmpty → 0，否则返回上限。 */
     public static float get(LivingEntity entity) {
-        return MANA.getOrDefault(entity.getUUID(), getMax(entity));
+        Float v = MANA.get(entity.getUUID());
+        return v != null ? v : (defaultEmpty ? 0.0F : getMax(entity));
     }
 
     /** 设置蓝量（不超上限、不低 0）。 */
@@ -30,6 +41,17 @@ public final class ManaTracker {
         float clamped = Math.max(0f, Math.min(value, max));
         if (clamped <= 0) { MANA.remove(entity.getUUID()); return; }
         MANA.put(entity.getUUID(), clamped);
+    }
+
+    /**
+     * 将蓝量置为 0 并保留记录。
+     *
+     * <p>{@link #get} 对无记录的实体默认返回上限（玩家语义 = 满蓝），默认空蓝的棋子实体靠这条 0 记录
+     * 从零开始累积；释放技能后也用它清零——否则 set(0) 会删记录，下一 tick get() 又回到满蓝，
+     * 导致「满蓝」条件每 tick 成立、技能连续释放。</p>
+     */
+    public static void setZero(LivingEntity entity) {
+        MANA.put(entity.getUUID(), 0.0F);
     }
 
     /** 增减蓝量（正=恢复，负=消耗）。返回实际变化量。 */
@@ -59,7 +81,7 @@ public final class ManaTracker {
     public static void tickRegen(LivingEntity entity) {
         float cur = get(entity);
         float max = getMax(entity);
-        if (cur >= max) return;
+        if (max <= 0 || cur >= max) return;
 
         // 固定回蓝
         var regenInst = entity.getAttribute(YizAttributes.MANA_REGEN.get());
