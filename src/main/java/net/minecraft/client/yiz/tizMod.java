@@ -218,6 +218,10 @@ public class tizMod {
         net.minecraft.client.yiz.tool.YizOutlineCommand.register();
         // 每实例效果开关指令（/yiz eff，隔离模型测试）
         net.minecraft.client.yiz.tool.YizEffectCommand.register();
+        // 诊断日志开关指令（/yiz diag，集中开关排查日志）
+        net.minecraft.client.yiz.tool.YizDiagCommand.register();
+        // 生物组件指令（/yiz creature refresh）
+        net.minecraft.client.yiz.tool.YizCreatureCommand.register();
 
         // 万能物品配置（itemcfg）：加载扫描缓存/配置/适配层 + 注册指令
         net.minecraft.client.yiz.itemcfg.ItemFeatureDiscoverer.load();

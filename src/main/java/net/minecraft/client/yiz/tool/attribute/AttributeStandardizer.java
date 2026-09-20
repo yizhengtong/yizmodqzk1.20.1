@@ -141,7 +141,9 @@ public final class AttributeStandardizer {
             } else {
                 EntityAttributeGate.remove(entity, ro, std.idKey());
             }
-            LOGGER.warn("[AttributeStandardizer] 检测到外部篡改，还原属性 {} 至标准值 {} (uuid={})",
+            net.minecraft.client.yiz.tool.YizDiagnostics.log(
+                net.minecraft.client.yiz.tool.YizDiagnostics.ATTRIBUTE_STD, LOGGER,
+                "[AttributeStandardizer] 检测到外部篡改，还原属性 {} 至标准值 {} (uuid={})",
                 std.idKey(), std.baseValue() + std.protValue(), entity.getUUID());
         } catch (Throwable t) {
             LOGGER.warn("[AttributeStandardizer] 还原属性 {} 失败: {}", std.idKey(), t.getMessage());

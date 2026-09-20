@@ -95,7 +95,9 @@ public final class SecureHealthClosure {
         // 单次掉血超过 cap → 外部直写大额 → 回滚（不更新 last，外部注入 无法持续推进）
         if (cur < last - maxCap) {
             if (TAB_JUMP_LOG.incrementAndGet() <= 20) {
-                net.minecraft.client.yiz.tizMod.LOGGER.warn("[SecureHealthClosure] 表值跳变 {} -> {} (uuid={} cap={}) 回滚",
+                net.minecraft.client.yiz.tool.YizDiagnostics.log(
+                    net.minecraft.client.yiz.tool.YizDiagnostics.SECURE_HEALTH, net.minecraft.client.yiz.tizMod.LOGGER,
+                    "[SecureHealthClosure] 表值跳变 {} -> {} (uuid={} cap={}) 回滚",
                     last, cur, id, maxCap);
             }
             beginObfWrite();
@@ -597,7 +599,9 @@ public final class SecureHealthClosure {
                 for (int i = 2; i < Math.min(st.length, 14); i++) sb.append("\n    ").append(st[i]);
                 int k = entity.getEntityData().get(HealthChannels.getSecureObfKey());
                 String e = entity.getEntityData().get(HealthChannels.getSecureObf());
-                net.minecraft.client.yiz.tizMod.LOGGER.warn("[SecureHealthClosure] 大幅扣串[{}] {} -> {} (uuid={} hasObfStorage={} key={} 串={}):{}",
+                net.minecraft.client.yiz.tool.YizDiagnostics.log(
+                    net.minecraft.client.yiz.tool.YizDiagnostics.SECURE_HEALTH, net.minecraft.client.yiz.tizMod.LOGGER,
+                    "[SecureHealthClosure] 大幅扣串[{}] {} -> {} (uuid={} hasObfStorage={} key={} 串={}):{}",
                     Thread.currentThread().getName(), old, value, entity.getUUID(),
                     hasObfStorage(entity), k, e.length() > 12 ? e.substring(0, 12) : e, sb);
             }

@@ -53,6 +53,15 @@ public final class CreatureProfileReloadListener extends SimpleJsonResourceReloa
             }
         }
         LOGGER.info("[Creature] 数据包原型加载完成：{} 条（目录 {}）", loaded, DIRECTORY);
+        // 组件变更后推动存量实体：切到服务端主线程执行，避免在资源加载线程操作实体
+        net.minecraft.server.MinecraftServer server =
+            net.minecraftforge.server.ServerLifecycleHooks.getCurrentServer();
+        if (server != null) {
+            server.execute(() -> {
+                int n = CreatureComponentRefresher.refreshAll(server);
+                if (n > 0) LOGGER.info("[Creature] 原型变更后已刷新存量实体 {} 个", n);
+            });
+        }
     }
 
     private static void bindEntityType(ResourceLocation profileId, ResourceLocation entityTypeId) {

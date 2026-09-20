@@ -163,10 +163,13 @@ public final class CreatureProfileRegistry {
     /**
      * 把原型的属性组件写入实体（实体首个服务端 tick 调用，此时处于受信任调用栈）。
      *
-     * <p>只处理 {@code yizmodqzk} 命名空间的自定义属性 —— 它们走 {@code prot_} 修饰符语义；
-     * vanilla 属性（基础值语义，如最大生命/移速）仍由各实体自身管理，避免叠加语义混乱。</p>
+     * <p>两种写入语义：</p>
+     * <ul>
+     *   <li>{@code yizmodqzk:} 自定义属性 → {@code prot_} 修饰符（保留其他来源的加成）；</li>
+     *   <li>{@code minecraft:} 原版属性 → 直接接管 base 值（不再叠加难度缩放，配置值即最终值）。</li>
+     * </ul>
      *
-     * <p>写入后同步 {@code AttributeStandardizer} 标准值：否则 20 tick 一轮的篡改审计
+     * <p>两种都需同步 {@code AttributeStandardizer} 标准值：否则 20 tick 一轮的篡改审计
      * 会把这些配置值判为外部修改并还原。</p>
      */
     public static void apply(LivingEntity entity) {
@@ -176,16 +179,29 @@ public final class CreatureProfileRegistry {
         if (attrs == null || attrs.isEmpty()) return;
         for (Map.Entry<ResourceLocation, Double> entry : attrs.entrySet()) {
             ResourceLocation attrId = entry.getKey();
-            if (attrId == null || !"yizmodqzk".equals(attrId.getNamespace())) continue;
             Double value = entry.getValue();
-            if (value == null) continue;
+            if (attrId == null || value == null) continue;
             Attribute attr = ForgeRegistries.ATTRIBUTES.getValue(attrId);
             if (attr == null) continue;
-            RegistryObject<Attribute> ro = RegistryObject.create(attrId, ForgeRegistries.ATTRIBUTES);
-            String idKey = attrId.getPath();
-            EntityAttributeGate.set(entity, ro, idKey, value);
-            AttributeStandardizer.registerStandard(entity, attr, idKey, value);
+            String idKey = idKeyFor(attrId);
+            if ("yizmodqzk".equals(attrId.getNamespace())) {
+                RegistryObject<Attribute> ro = RegistryObject.create(attrId, ForgeRegistries.ATTRIBUTES);
+                EntityAttributeGate.set(entity, ro, idKey, value);
+                AttributeStandardizer.registerStandard(entity, attr, idKey, value);
+            } else {
+                var inst = entity.getAttribute(attr);
+                if (inst == null) continue;
+                inst.setBaseValue(value);
+                AttributeStandardizer.registerStandard(entity, attr, idKey, 0);
+            }
         }
+    }
+
+    /** 属性 id 转标准表用的 idKey：原版属性去掉 {@code generic.} 等前缀（generic.max_health → max_health）。 */
+    private static String idKeyFor(ResourceLocation attrId) {
+        String path = attrId.getPath();
+        int dot = path.lastIndexOf('.');
+        return dot >= 0 ? path.substring(dot + 1) : path;
     }
 
     // ==================== 工具 ====================
