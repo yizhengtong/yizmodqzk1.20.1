@@ -209,29 +209,37 @@ public final class AgentBridge {
     }
 
     /** 自保护还原 watchdog：周期重拉回已加载受保护类（防外部用 redefineClasses 绕过 transformer 链）。
-     *  建议每 ~2-5s 调一次；内部自带节流。 */
+     *  建议每 ~2-5s 调一次；内部自带节流（5s，且不再每轮枚举全类表——见下）。 */
     public static int selfRestoreWatchdog() {
         if (!selfRestoreRegistered) return 0;
         Instrumentation inst = instrumentation;
         if (inst == null) return 0;
         long now = System.currentTimeMillis();
-        if (now - lastSelfRestoreWatchdogMs < 2000L) return 0;
+        if (now - lastSelfRestoreWatchdogMs < 5000L) return 0;
         lastSelfRestoreWatchdogMs = now;
         return retransformSelfRestoreLoaded();
     }
+
+    /** 已解析的受保护类（Class 对象身份稳定：解析一次后缓存，避免每轮 getAllLoadedClasses() 的开销）。 */
+    private static volatile List<Class<?>> selfRestoreTargets = null;
 
     /** 对已加载的受保护类批量 retransform（触发 transform → YizRestoreTransformer 返回 jar 字节还原）。 */
     private static int retransformSelfRestoreLoaded() {
         Instrumentation inst = instrumentation;
         if (inst == null || selfRestoreNames.isEmpty()) return 0;
-        List<Class<?>> targets = new ArrayList<>();
-        try {
-            for (Class<?> c : inst.getAllLoadedClasses()) {
-                String n = c.getName().replace('.', '/');
-                if (selfRestoreNames.contains(n)) targets.add(c);
+        List<Class<?>> targets = selfRestoreTargets;
+        if (targets == null || targets.size() < selfRestoreNames.size()) {
+            List<Class<?>> found = new ArrayList<>();
+            try {
+                for (Class<?> c : inst.getAllLoadedClasses()) {
+                    String n = c.getName().replace('.', '/');
+                    if (selfRestoreNames.contains(n)) found.add(c);
+                }
+            } catch (Throwable t) {
+                return 0;
             }
-        } catch (Throwable t) {
-            return 0;
+            targets = found;
+            selfRestoreTargets = found;   // 缓存：后续周期不再枚举全类表（实测每次 30~50ms）
         }
         if (targets.isEmpty()) return 0;
         return retransformLenient(targets);

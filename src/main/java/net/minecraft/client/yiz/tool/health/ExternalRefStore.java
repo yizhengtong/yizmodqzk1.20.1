@@ -46,6 +46,7 @@ public final class ExternalRefStore {
         if (entity == null || entity.level().isClientSide()) return null;
         for (Object store : candidateStores(entity)) {
             if (!holdsEntityRef(store, entity)) continue;
+            markMatched(entity, store);
             Field hf = findHealthField(store, entity, entity.getHealth());
             if (hf == null) continue;
             double v = readField(hf, store);
@@ -63,6 +64,7 @@ public final class ExternalRefStore {
         boolean any = false;
         for (Object store : candidateStores(entity)) {
             if (!holdsEntityRef(store, entity)) continue;
+            markMatched(entity, store);
             Field hf = findHealthField(store, entity, current);
             if (hf == null) continue;
             if (writeField(store, hf, target)) any = true;
@@ -118,8 +120,62 @@ public final class ExternalRefStore {
         ensureScanned();
         discoverForClass(entity == null ? null : entity.getClass());
         refreshPending();
-        out.addAll(STATIC_STORES);
-        return out;
+        // c. **按实体类收敛候选**（性能关键）：静态候选实测有 1.3 万+ 个（全类路径里所有静态单例），
+        //    每次读/写血都逐字段反射一遍 → 单次 40~50ms；一次铁斗士挥击要跑好几轮 ⇒ 秒级卡顿。
+        //    这里改成：只有「首次 / 每 FULL_SWEEP_INTERVAL_MS 一次全量补扫」才遍历全部候选，
+        //    其余调用只扫「该类此前真正命中过的存储」——命中集合稳定后单次成本趋近于 0。
+        return filterStatics(entity, out);
+    }
+
+    /** 每个实体类一份扫描状态：命中过的存储 + 上次全量补扫时间。 */
+    private static final class ScanState {
+        final List<Object> matched = new java.util.concurrent.CopyOnWriteArrayList<>();
+        volatile long lastFullSweepMs = 0L;
+    }
+
+    private static final Map<String, ScanState> SCAN_STATE = new ConcurrentHashMap<>();
+    /** 全量补扫间隔（毫秒）：没命中的候选不永久排除，按此间隔重试一轮，兼顾「晚写入」的存储。 */
+    private static final long FULL_SWEEP_INTERVAL_MS = 10_000L;
+
+    /** 动态候选（SavedData 里的对象）永远全查；静态候选按上面策略收敛。 */
+    private static List<Object> filterStatics(LivingEntity entity, List<Object> out) {
+        try {
+            // out 里前段是 SavedData 动态对象、后段是 STATIC_STORES；用总数差值切出动态段
+            int dynCount = out.size() - STATIC_STORES.size();
+            if (dynCount < 0) dynCount = 0;
+            List<Object> dyn = new ArrayList<>(out.subList(0, dynCount));
+            ScanState st = SCAN_STATE.computeIfAbsent(
+                    entity == null ? "?" : entity.getClass().getName(), k -> new ScanState());
+            long now = System.currentTimeMillis();
+            boolean full = now - st.lastFullSweepMs >= FULL_SWEEP_INTERVAL_MS;
+            if (full) {
+                st.lastFullSweepMs = now;
+                dyn.addAll(out.subList(dynCount, out.size()));   // 全量轮：加上全部静态候选
+                return dyn;
+            }
+            for (Object o : st.matched) {                        // 非全量轮：只加命中过的
+                if (!containsIdentity(dyn, o)) dyn.add(o);
+            }
+            return dyn;
+        } catch (Throwable t) {
+            return out;
+        }
+    }
+
+    /** 命中后登记：下次非全量轮只扫这些存储。 */
+    private static void markMatched(LivingEntity entity, Object store) {
+        try {
+            if (entity == null || store == null) return;
+            ScanState st = SCAN_STATE.computeIfAbsent(entity.getClass().getName(), k -> new ScanState());
+            if (!containsIdentity(st.matched, store)) st.matched.add(store);
+        } catch (Throwable ignored) {}
+    }
+
+    private static boolean containsIdentity(List<Object> list, Object o) {
+        for (Object e : list) {
+            if (e == o) return true;
+        }
+        return false;
     }
 
     /** 懒加载 + 至多一次全类路径扫描：优先用落盘发现结果，缺失/全部失效才枚举类路径。 */
