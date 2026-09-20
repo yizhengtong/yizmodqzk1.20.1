@@ -71,77 +71,192 @@ public final class ExternalHealthStore {
 
     // ==================== 发现（静态 Map 字段） ====================
 
-    /** 已发现的外部藏血 Map 缓存（静态单例，发现后基本不变；有新类加载才重扫）。 */
-    private static volatile List<Map<?, ?>> MAP_CACHE = new ArrayList<>();
-    private static volatile int lastClassCount = -1;
-    private static volatile long lastRescanMs = 0L;
-    private static final long RESCAN_INTERVAL_MS = 2000L;
+    /** 落盘缓存分域（发现结果由 {@link HealthDiscoveryCache} 持久化）。 */
+    private static final String SECTION = "external_maps";
 
+    /** 已发现的外部藏血 Map 缓存（静态单例，发现后基本不变）。 */
+    private static volatile List<Map<?, ?>> MAP_CACHE = new ArrayList<>();
+    /** 是否已完成一次性初始化（读盘反解 或 全类路径扫描一次）；置位后本轮不再枚举类路径。 */
+    private static volatile boolean scanned = false;
+    /** 已做过「按实体类就近发现」的类名（每类一次）。 */
+    private static final java.util.Set<String> TARGETED = ConcurrentHashMap.newKeySet();
+    /**
+     * 已发现、但当前读不到值的候选字段（声明类还没 {@code <clinit>}、静态 Map 还没赋值等）。
+     *
+     * <p>旧实现靠「已加载类数量变化 → 全类路径重扫」兜住这种「晚出现」的 Map，代价是战斗中每 2 秒
+     * 把整个类路径反射一遍。现在只补读这些字段句柄（Unsafe 读，几纳秒），不枚举任何类路径，
+     * 成本随待补字段数线性且只减不增。</p>
+     */
+    private static final List<Field> PENDING_FIELDS = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    /** 懒加载 + 至多一次全类路径扫描：优先用落盘发现结果，缺失/全部失效才枚举类路径。 */
     private static List<Map<?, ?>> candidateMaps(LivingEntity entity) {
-        rescanIfNeeded();
+        ensureScanned();
+        discoverForClass(entity == null ? null : entity.getClass());
+        refreshPending();
         return MAP_CACHE;
     }
 
-    private static void rescanIfNeeded() {
-        long now = System.currentTimeMillis();
-        if (now - lastRescanMs < RESCAN_INTERVAL_MS) return;
-        int count = classCount();
-        if (count < 0 || count == lastClassCount) {
-            lastRescanMs = now;
-            return;
-        }
+    /**
+     * 一次性初始化：{@code isScanned} → 直接反解落盘句柄（零类枚举）；否则做<b>唯一一次</b>全类路径扫描。
+     *
+     * <p>旧实现按「已加载类数量变化」触发全类路径重扫（2 秒节流）→ 战斗中新类不断加载，
+     * 等于每 2 秒把整个类路径反射一遍，首次攻击卡 1~3 秒。现在全局扫描只做一次且结果落盘。</p>
+     */
+    private static void ensureScanned() {
+        if (scanned) return;
         synchronized (ExternalHealthStore.class) {
-            if (count == lastClassCount) return;
-            List<Map<?, ?>> fresh = scanMaps();
-            if (!fresh.isEmpty()) MAP_CACHE = fresh;
-            lastClassCount = count;
-            lastRescanMs = now;
+            if (scanned) return;
+            if (HealthDiscoveryCache.isScanned(SECTION)) {
+                List<Map<?, ?>> restored = restoreFromCache();
+                if (!restored.isEmpty()) {
+                    MAP_CACHE = restored;
+                    scanned = true;
+                    LOGGER.info("[HealthDiscovery] external_maps 缓存命中 {} 条，跳过全类路径扫描", restored.size());
+                    return;
+                }
+                // 缓存一条都用不了（模组更新把类/字段移除、字段已不是 Map 等）→ 视为未扫描，退回一次性全扫
+                LOGGER.info("[HealthDiscovery] external_maps 缓存 {} 条均不可用，回退一次性全类路径扫描",
+                        HealthDiscoveryCache.get(SECTION).size());
+            }
+            int classes = scanMaps();
+            scanned = classes > 0;   // 没有 agent / 类表不可用时不置位，留待下次重试（此时不枚举，成本为零）
         }
     }
 
-    private static List<Map<?, ?>> scanMaps() {
+    /** 从落盘缓存重建内存缓存：只反解字段句柄 + 读值，不枚举任何类。 */
+    private static List<Map<?, ?>> restoreFromCache() {
         List<Map<?, ?>> out = new ArrayList<>();
+        for (String[] pair : HealthDiscoveryCache.get(SECTION)) {
+            try {
+                Field f = HealthDiscoveryCache.resolve(pair[0], pair[1]);
+                if (f == null || !isCandidateMapField(f)) continue;   // 类/字段已消失或类型已变
+                Object v = readStatic(f);
+                if (v instanceof Map<?, ?> map) out.add(map);
+                else if (v == null) PENDING_FIELDS.add(f);            // 晚点补读
+            } catch (Throwable ignored) {}
+        }
+        return out;
+    }
+
+    /** 按具体实体类就近发现（新加载的实体类不必等下一次全局扫描；只扫该类继承链，成本极低）。 */
+    private static void discoverForClass(Class<?> entityClass) {
+        if (entityClass == null || !TARGETED.add(entityClass.getName())) return;
+        List<Map<?, ?>> found = new ArrayList<>();
         try {
-            Class<?>[] all = allLoadedClasses();
-            if (all == null) return out;
-            for (Class<?> clazz : all) {
-                for (Field f : clazz.getDeclaredFields()) {
-                    int m = f.getModifiers();
-                    if (f.isSynthetic() || !Modifier.isStatic(m)) continue;
-                    if (!Map.class.isAssignableFrom(f.getType())) continue;
-                    if (!isEntityKey(f.getGenericType())) continue;
+            for (Class<?> c = entityClass; c != null && c != Object.class; c = c.getSuperclass()) {
+                for (Field f : c.getDeclaredFields()) {
                     try {
-                        f.setAccessible(true);
-                        // 用 Unsafe 读静态字段，避免 Field.get(null) 触发声明类 <clinit>：
-                        // 反射 get 会 ensureClassInitialized，把 Registrate 等第三方库的 <clinit> 引爆
-                        // （其 <clinit> 里 ObfuscationReflectionHelper 找 LootContextParamSets.REGISTRY 失败
-                        // → NoSuchFieldException / NoClassDefFoundError）。Unsafe 读绕过类初始化。
-                        Object v;
-                        sun.misc.Unsafe u = UnsafeAccess.get();
-                        if (u != null) {
-                            Object base = u.staticFieldBase(f);
-                            long offset = u.staticFieldOffset(f);
-                            v = u.getObject(base, offset);
-                        } else {
-                            v = f.get(null);
-                        }
-                        if (v instanceof Map<?, ?> map) out.add(map);
+                        if (!isCandidateMapField(f)) continue;
+                        HealthDiscoveryCache.put(SECTION, c.getName(), f.getName());
+                        Object v = readStatic(f);
+                        if (v instanceof Map<?, ?> map) found.add(map);
+                        else if (v == null) PENDING_FIELDS.add(f);
                     } catch (Throwable ignored) {}
                 }
             }
         } catch (Throwable ignored) {}
-        return out;
+        mergeMaps(found);
     }
 
-    private static int classCount() {
-        try {
-            var inst = AgentBridge.getInstrumentation();
-            if (inst != null) {
-                Class<?>[] all = inst.getAllLoadedClasses();
-                if (all != null) return all.length;
+    /** 补读「已发现但读不到值」的字段（只读字段句柄，不枚举类路径）。 */
+    private static void refreshPending() {
+        if (PENDING_FIELDS.isEmpty()) return;
+        List<Map<?, ?>> found = new ArrayList<>();
+        for (Field f : PENDING_FIELDS) {
+            try {
+                Object v = readStatic(f);
+                if (v instanceof Map<?, ?> map) {
+                    found.add(map);
+                    PENDING_FIELDS.remove(f);
+                } else if (v != null) {
+                    PENDING_FIELDS.remove(f);   // 值已不是 Map：字段语义变了，放弃
+                }
+            } catch (Throwable ignored) {
+                PENDING_FIELDS.remove(f);
             }
-        } catch (Throwable ignored) {}
-        return -1;
+        }
+        mergeMaps(found);
+    }
+
+    /** 合并新发现的 Map 到缓存（按对象标识去重：第三方 Map 的 equals 可能有开销/副作用）。 */
+    private static synchronized void mergeMaps(List<Map<?, ?>> extra) {
+        if (extra.isEmpty()) return;
+        List<Map<?, ?>> merged = new ArrayList<>(MAP_CACHE);
+        for (Map<?, ?> m : extra) {
+            boolean dup = false;
+            for (Map<?, ?> e : merged) {
+                if (e == m) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (!dup) merged.add(m);
+        }
+        MAP_CACHE = merged;
+    }
+
+    /**
+     * 唯一一次全类路径扫描：枚举已加载类的静态 Map 字段（K ∈ 实体身份型）→ 读值 → 命中即落盘。
+     *
+     * @return 已加载类数量；{@code <0} 表示类表不可用（没有 agent），调用方不置位 {@code scanned} 以便下次重试
+     */
+    private static int scanMaps() {
+        Class<?>[] all = allLoadedClasses();
+        if (all == null || all.length == 0) return -1;
+        List<Map<?, ?>> fresh = new ArrayList<>();
+        int hits = 0;
+        LOGGER.info("[ExtStore] external_maps 首次全类路径扫描开始（仅此一次，结果落盘）");
+        long t0 = System.currentTimeMillis();
+        for (Class<?> clazz : all) {
+            try {
+                for (Field f : clazz.getDeclaredFields()) {
+                    if (!isCandidateMapField(f)) continue;
+                    HealthDiscoveryCache.put(SECTION, f.getDeclaringClass().getName(), f.getName());
+                    try {
+                        Object v = readStatic(f);
+                        if (v instanceof Map<?, ?> map) {
+                            fresh.add(map);
+                            hits++;
+                        } else if (v == null) {
+                            PENDING_FIELDS.add(f);   // 声明类还没 <clinit> 等，晚点补读
+                        }
+                    } catch (Throwable ignored) {}
+                }
+            } catch (Throwable ignored) {}
+        }
+        if (!fresh.isEmpty()) MAP_CACHE = fresh;   // 原子交换，避免清空/重填期间读竞态
+        HealthDiscoveryCache.markScanned(SECTION);   // 全局扫描只做这一次，结果落盘
+        LOGGER.info("[ExtStore] external_maps 全类路径扫描完成：命中 {} 个藏血 Map（{} 类，耗时 {} ms）",
+                hits, all.length, System.currentTimeMillis() - t0);
+        return all.length;
+    }
+
+    /** 全类路径扫描与「就近发现」共用的字段判据：静态 + 非合成 + Map 类型 + K 为实体身份型。 */
+    private static boolean isCandidateMapField(Field f) {
+        int m = f.getModifiers();
+        if (f.isSynthetic() || !Modifier.isStatic(m)) return false;
+        if (!Map.class.isAssignableFrom(f.getType())) return false;
+        return isEntityKey(f.getGenericType());
+    }
+
+    /**
+     * 读静态字段值；返回 {@code null} 表示声明类还没初始化、字段仍是默认值。
+     *
+     * <p>用 Unsafe 读静态字段，避免 {@code Field.get(null)} 触发声明类 <clinit>：
+     * 反射 get 会 ensureClassInitialized，把 Registrate 等第三方库的 <clinit> 引爆
+     * （其 <clinit> 里 ObfuscationReflectionHelper 找 LootContextParamSets.REGISTRY 失败
+     * → NoSuchFieldException / NoClassDefFoundError）。Unsafe 读绕过类初始化。</p>
+     */
+    private static Object readStatic(Field f) throws Throwable {
+        f.setAccessible(true);
+        sun.misc.Unsafe u = UnsafeAccess.get();
+        if (u != null) {
+            Object base = u.staticFieldBase(f);
+            long offset = u.staticFieldOffset(f);
+            return u.getObject(base, offset);
+        }
+        return f.get(null);
     }
 
     /** K 是否为「实体身份」型（UUID / 实体id / 实体 / 弱引用）。 */

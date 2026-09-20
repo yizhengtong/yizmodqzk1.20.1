@@ -146,7 +146,13 @@ public final class TotalHealthOverride {
     private static boolean modify(LivingEntity entity, double target, double current) {
         boolean any = false;
         int[] counts = new int[6];   // 主槽/数值通道/字符串通道/藏血Map/图字段/NBT
+        // 首次遇到该类时逐段计时：首击卡顿曾经来自「外部藏血发现」的全类路径扫描，留证据便于回归验证
+        boolean timing = TIMED.add(entity.getClass().getName());
+        long t0 = timing ? System.nanoTime() : 0L;
+        long tPrev = t0;
+        double[] stage = new double[8];
         boolean hasSlot = EntityHealthLocator.locate(entity) != null;
+        if (timing) { long n = System.nanoTime(); stage[0] = (n - tPrev) / 1e6; tPrev = n; }
 
         // 1. 主槽（行为定位的 forward/inverse/codec/通道/声明式槽）
         try {
@@ -158,6 +164,7 @@ public final class TotalHealthOverride {
         } catch (Throwable ignored) {}
 
         // 2. 数值 DataItem 镜像（与当前血量同值 → 同步写；有槽实体排除 vanilla 显示通道）
+        if (timing) { long n = System.nanoTime(); stage[1] = (n - tPrev) / 1e6; tPrev = n; }
         try {
             DirectHealthFallback.forEachNumericItem(entity, (acc, value, item) -> {
                 if (hasSlot && DirectHealthFallback.VANILLA_HEALTH_ACCESSOR != null
@@ -171,6 +178,7 @@ public final class TotalHealthOverride {
         } catch (Throwable ignored) {}
 
         // 3. 前缀串 DataItem 镜像（与当前血量同值 → 同步写）
+        if (timing) { long n = System.nanoTime(); stage[2] = (n - tPrev) / 1e6; tPrev = n; }
         try {
             DirectHealthFallback.forEachStringItem(entity, (acc, value, item) -> {
                 double[] parsed = EntityHealthLocator.parseNumberFromString(value);
@@ -183,6 +191,7 @@ public final class TotalHealthOverride {
         } catch (Throwable ignored) {}
 
         // 4. 静态藏血 Map（K=实体/ID/UUID、V=数值；unreflectSpecial 绕过写方法鉴权）
+        if (timing) { long n = System.nanoTime(); stage[3] = (n - tPrev) / 1e6; tPrev = n; }
         try {
             Double hp = HealthMapRegistry.readHealth(entity);
             if (hp != null) {
@@ -215,6 +224,7 @@ public final class TotalHealthOverride {
         } catch (Throwable ignored) {}
 
         // 5. 可达对象图数值字段镜像（与当前血量同值 → 同步写，含实体自身层级字段）
+        if (timing) { long n = System.nanoTime(); stage[4] = (n - tPrev) / 1e6; tPrev = n; }
         try {
             List<ValueRef> refs = ReachableGraphScanner.scan(entity);
             for (ValueRef ref : refs) {
@@ -228,6 +238,7 @@ public final class TotalHealthOverride {
         } catch (Throwable ignored) {}
 
         // 6. NBT 持久化数值键镜像（与当前血量同值 → 同步写，含模组参考值）
+        if (timing) { long n = System.nanoTime(); stage[5] = (n - tPrev) / 1e6; tPrev = n; }
         try {
             CompoundTag tag = entity.getPersistentData();
             for (String key : tag.getAllKeys()) {
@@ -244,6 +255,7 @@ public final class TotalHealthOverride {
 
         // 7. vanilla 通道：仅无槽实体（普通实体）写逻辑值；有槽实体的 vanilla 通道是
         //    模组自管的「显示通道」（按自身缩放比每 tick 重写），写逻辑值会互相覆盖致血条跳动
+        if (timing) { long n = System.nanoTime(); stage[6] = (n - tPrev) / 1e6; tPrev = n; }
         if (!hasSlot) {
             try {
                 if (DirectHealthFallback.VANILLA_HEALTH_ACCESSOR != null) {
@@ -254,11 +266,24 @@ public final class TotalHealthOverride {
             } catch (Throwable ignored) {}
         }
 
+        if (timing) { long n = System.nanoTime(); stage[7] = (n - tPrev) / 1e6; tPrev = n; }
         if (WRITE_LOG.add(entity.getClass().getName())) {
             LOGGER.info("[TotalOverride] {} 表征扫描: 主槽={} 数值通道={} 字符串={} 藏血Map={} 图字段={} NBT={}",
                 entity.getClass().getName(), counts[0], counts[1], counts[2], counts[3], counts[4], counts[5]);
         }
+        if (timing) {
+            LOGGER.info("[TotalOverride] {} 首击耗时(ms): 定位={} 主槽写={} 数值通道={} 串通道={} 藏血Map/外部={} 对象图={} NBT={} vanilla={} 合计={}",
+                entity.getClass().getSimpleName(),
+                yizmodqzk$ms(stage[0]), yizmodqzk$ms(stage[1]), yizmodqzk$ms(stage[2]), yizmodqzk$ms(stage[3]),
+                yizmodqzk$ms(stage[4]), yizmodqzk$ms(stage[5]), yizmodqzk$ms(stage[6]), yizmodqzk$ms(stage[7]),
+                yizmodqzk$ms((System.nanoTime() - t0) / 1e6));
+        }
         return any;
+    }
+
+    /** 毫秒取一位小数（日志可读）。 */
+    private static String yizmodqzk$ms(double ms) {
+        return String.format(java.util.Locale.ROOT, "%.1f", ms);
     }
 
     // ==================== 门控击穿 ====================
@@ -311,6 +336,8 @@ public final class TotalHealthOverride {
 
     private static final org.slf4j.Logger LOGGER = net.minecraft.client.yiz.tizMod.LOGGER;
     private static final java.util.Set<String> WRITE_LOG = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** 已打过「首击耗时明细」的实体类（每类一次）。 */
+    private static final java.util.Set<String> TIMED = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private static final java.util.Set<String> READBACK_DIAG = java.util.concurrent.ConcurrentHashMap.newKeySet();
     /** 类名 → 连续"写后回读没落地"次数；达到阈值即清除该类血量槽缓存并触发重新扫描（自愈）。 */
     private static final java.util.Map<String, Integer> READBACK_FAILS = new java.util.concurrent.ConcurrentHashMap<>();

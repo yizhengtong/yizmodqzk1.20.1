@@ -1,6 +1,8 @@
 package net.minecraft.client.yiz.tool.health;
 
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import net.minecraft.client.yiz.tool.health.codec.BlackBoxInverseSolver;
@@ -75,6 +77,9 @@ public final class EntityHealthLocator {
     private static final java.util.concurrent.atomic.AtomicInteger SS_STR_SCAN_DIAG = new java.util.concurrent.atomic.AtomicInteger();
     /** 已确认无槽的实体类（负缓存，避免每次攻击重复全量扫描；仅健康实例探测失败才入）。 */
     private static final Set<String> NON_SLOT_CLASSES = ConcurrentHashMap.newKeySet();
+    /** 从磁盘负缓存恢复、且类结构指纹未变的类：本次会话内**不再重试**探测
+     *  （否则每次进存档的首击都要为"无槽"实体重跑 5 阶段全量探测 → 卡 1~3 秒）。 */
+    private static final Set<String> NON_SLOT_TRUSTED = ConcurrentHashMap.newKeySet();
     /** 已重试过的类（负缓存失效重试去重，每类只重试一次）。 */
     private static final Set<String> RETRIED = ConcurrentHashMap.newKeySet();
     /** 累加器配对字段缓存：主字段 → 镜像字段名（空串=无配对）。 */
@@ -111,11 +116,13 @@ public final class EntityHealthLocator {
         if (cached != null) return cached;
         if (NON_SLOT_CLASSES.contains(key)) {
             // 负缓存失效：血量在中间范围（非满血、非濒死）时，之前的「无槽」可能是满血/临界值误判，
-            // 允许重试一次（每类只重试一次，防频繁重扫）
+            // 允许重试一次（每类只重试一次，防频繁重扫）。
+            // 例外：从磁盘恢复且结构指纹未变（NON_SLOT_TRUSTED）的类不重试——那是已验证过的历史结论，
+            // 重试等于每次进存档的首击都白付一次全量探测（1~3 秒卡顿）。
             float hp = entity.getHealth();
             float maxHp = entity.getMaxHealth();
             boolean midRange = hp > 0 && maxHp > 0 && hp < maxHp * 0.95f;
-            if (midRange && RETRIED.add(key)) {
+            if (midRange && !NON_SLOT_TRUSTED.contains(key) && RETRIED.add(key)) {
                 NON_SLOT_CLASSES.remove(key);
             } else {
                 return null;
@@ -148,6 +155,7 @@ public final class EntityHealthLocator {
             if (NO_SLOT_LOG_DONE.add(key)) {
                 LOGGER.warn("[EHL] 定位失败(无槽) {}: 该类走 delta 软压/数值通道兜底", key);
             }
+            save();   // 负结论也要落盘：否则每次进存档的首击都要为同一实体重跑全量探测
         }
         return slot;
     }
@@ -1279,6 +1287,21 @@ public final class EntityHealthLocator {
             Path p = FMLPaths.CONFIGDIR.get().resolve(FILE_NAME);
             if (!Files.exists(p)) return;
             JsonObject root = JsonParser.parseString(Files.readString(p)).getAsJsonObject();
+            // 负缓存（"无槽"结论）：跨会话复用，避免每次进存档的首击重跑 5 阶段全量探测。
+            // 只有「类还在 + 结构指纹一致」才信任，模组更新导致类结构变化时自动作废重探。
+            JsonObject noSlot = root.getAsJsonObject("no_slot");
+            if (noSlot != null) {
+                for (String name : noSlot.keySet()) {
+                    try {
+                        String saved = noSlot.get(name).getAsString();
+                        String now = signatureOf(name);
+                        if (!now.isEmpty() && now.equals(saved)) {
+                            NON_SLOT_CLASSES.add(name);
+                            NON_SLOT_TRUSTED.add(name);
+                        }
+                    } catch (Throwable ignored) {}
+                }
+            }
             JsonObject slots = root.getAsJsonObject("slots");
             if (slots == null) return;
             for (String key : slots.keySet()) {
@@ -1301,7 +1324,16 @@ public final class EntityHealthLocator {
             Path p = FMLPaths.CONFIGDIR.get().resolve(FILE_NAME);
             Files.createDirectories(p.getParent());
             JsonObject root = new JsonObject();
-            root.addProperty("_version", 2);
+            root.addProperty("_version", 3);
+            // 负缓存（"无槽"结论）+ 类结构指纹：指纹一致才在下次启动复用，避免模组更新后沿用过期结论
+            JsonObject noSlot = new JsonObject();
+            for (String k : NON_SLOT_CLASSES) {
+                try {
+                    String sig = signatureOf(k);
+                    if (!sig.isEmpty()) noSlot.addProperty(k, sig);
+                } catch (Throwable ignored) {}
+            }
+            root.add("no_slot", noSlot);
             JsonObject slots = new JsonObject();
             CACHE.forEach((k, s) -> {
                 JsonObject o = new JsonObject();
@@ -1316,5 +1348,30 @@ public final class EntityHealthLocator {
             root.add("slots", slots);
             Files.writeString(p, new GsonBuilder().setPrettyPrinting().create().toJson(root));
         } catch (Exception ignored) {}
+    }
+
+    /**
+     * 实体类的结构指纹（继承链类名 + 声明字段名/类型哈希）。
+     *
+     * <p>用途：判断磁盘上的"无槽"负结论是否还对得上当前的实体类。模组更新后字段结构变了
+     * → 指纹不匹配 → 负缓存作废、下次重新探测（避免拿着过期结论永久走兜底通道）。
+     * 只 {@code Class.forName(name, false, ...)}（不初始化类），拿不到类时返回空串表示"无法校验"。</p>
+     */
+    private static String signatureOf(String className) {
+        try {
+            Class<?> c = Class.forName(className, false, EntityHealthLocator.class.getClassLoader());
+            int h = 1;
+            for (Class<?> k = c; k != null && k != Object.class; k = k.getSuperclass()) {
+                h = 31 * h + k.getName().hashCode();
+                for (Field f : k.getDeclaredFields()) {
+                    if (Modifier.isStatic(f.getModifiers())) continue;
+                    h = 31 * h + f.getName().hashCode();
+                    h = 31 * h + f.getType().getName().hashCode();
+                }
+            }
+            return Integer.toHexString(h);
+        } catch (Throwable t) {
+            return "";
+        }
     }
 }

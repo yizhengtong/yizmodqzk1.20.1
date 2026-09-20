@@ -2,9 +2,8 @@ package net.minecraft.client.yiz.mixin;
 
 import net.minecraft.client.yiz.tool.health.HealthChannels;
 import net.minecraft.client.yiz.tool.health.SecureHealthClosure;
+import net.minecraft.client.yiz.tool.health.SyncedDataSupport;
 import net.minecraft.network.syncher.EntityDataAccessor;
-import net.minecraft.network.syncher.EntityDataSerializer;
-import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -49,65 +48,70 @@ public abstract class SynchedEntityDataMixin {
     }
 
     /**
-     * 数值通道读守卫（兜底防崩，泛化）：1.20.1 按类分配 DataParameter id + 多模组按 id 直写，
-     * 任意来源可能把 INT/LONG/FLOAT 通道的 DataItem 值写成 Byte 等错误类型 → vanilla
-     * {@code get()} 的 {@code Serializer.copy()} 抛 Byte→Integer 等 ClassCastException（AIR_SUPPLY、
-     * 第三方模组 EVASION_TIME 等都中招）。此处任何数值序列化器读取时检测，值类型与序列化器
-     * 不匹配即修复为类型默认值，避免整个游戏崩溃。用 {@link MixinAccess} 反射读 itemsById
-     * （不依赖 @Shadow/@Accessor 的 SRG 字段名映射，生产安全）。
+     * 通道读守卫（兜底防崩，泛化）：1.20.1 的通道 id 是「类池 + 类加载顺序」决定的全局可变状态，
+     * 任意来源都可能把某个 id 的 DataItem 值写成别的类型 → vanilla {@code get()} 里
+     * {@code Serializer.copy()} 抛 Byte→Integer / Float→Optional 等 ClassCastException
+     * （AIR_SUPPLY、CUSTOM_NAME、第三方 EVASION_TIME 都中招）。此处：
+     * <ul>
+     *   <li>值类型与序列化器不匹配 → 就地修成类型安全默认值，并把该默认值直接返回（不再往下走）；</li>
+     *   <li>该 id 根本没有 DataItem（例如冲突消解时丢弃了外来定义）→ 补一个类型安全的条目再返回，
+     *       避免 vanilla 对 null 调 getValue() 抛 NPE。</li>
+     * </ul>
+     * 表字段用 {@link SyncedDataSupport} 缓存过的反射句柄读取（不依赖 @Shadow 的 SRG 名映射）。
      */
     @Inject(method = "get(Lnet/minecraft/network/syncher/EntityDataAccessor;)Ljava/lang/Object;",
-            at = @At("HEAD"))
+            at = @At("HEAD"), cancellable = true)
     private <T> void yizmodqzk$guardTypedGet(EntityDataAccessor<T> key, CallbackInfoReturnable<T> cir) {
         try {
-            var ser = key.getSerializer();
-            it.unimi.dsi.fastutil.ints.Int2ObjectMap<SynchedEntityData.DataItem<?>> map =
-                net.minecraft.client.yiz.util.MixinAccess.field(this, SynchedEntityData.class,
-                    it.unimi.dsi.fastutil.ints.Int2ObjectMap.class, 0);
+            var map = SyncedDataSupport.itemsById((SynchedEntityData) (Object) this);
             if (map == null) return;
             SynchedEntityData.DataItem<?> item = map.get(key.getId());
-            if (item == null) return;
-            Object def = yizmodqzk$mismatchDefault(ser, item.getValue());
+            if (item == null) {
+                Object def = SyncedDataSupport.defaultFor(key.getSerializer(), null);
+                if (def == null) return;
+                SyncedDataSupport.putItem((SynchedEntityData) (Object) this, map, key, def);
+                cir.setReturnValue((T) def);
+                return;
+            }
+            Object def = SyncedDataSupport.defaultFor(key.getSerializer(), item.getValue());
             if (def == null) return;
-            // 值类型与序列化器不匹配（被第三方按 id 写坏）→ 修复为类型安全默认值
+            // 值类型与序列化器不匹配（被第三方按 id 写坏）→ 修复为类型安全默认值并直接返回
             ((SynchedEntityData.DataItem) item).setValue(def);
-            item.setDirty(true);
+            cir.setReturnValue((T) def);
         } catch (Throwable ignored) {}
     }
 
     /**
-     * 返回类型不匹配时应写入的兜底值；返回 {@code null} 表示"无需修复"（类型正常或该序列化器不守卫）。
+     * 通道 id 撞车消解（防「实体构造失败 → 玩家被踢 / 客户端崩」）。
      *
-     * <p>为什么必须覆盖对象类型：生产崩溃 06:19 是第三方实体类从 0 开始 defineId、父链未注册，
-     * 于是自己的通道抢占了原版 {@code Entity} 的 id 1/2，读 {@code getCustomName()}
-     * （OPTIONAL_COMPONENT 通道）时拿到 Float 直接 ClassCastException 崩渲染线程。</p>
+     * <p>生产实测：某第三方 accessor 的 id 为 0（与 {@code Entity.DATA_SHARED_FLAGS_ID} 同槽）且被
+     * define 进实体数据表 → 原版 {@code Entity.<init>} 首次 define 就抛
+     * {@code Duplicate id value for 0!} → 实体构造失败（玩家登录「无效的玩家数据」、
+     * 拾取粒子建假 ItemEntity 时崩客户端）。这里在 vanilla 抛异常之前接管：
+     * 原版通道优先，驱逐外来占用者；否则丢弃这次定义、保留先到的条目。
+     * 正常路径只多一次 map 查询（无冲突立即返回，零副作用）。</p>
      */
-    private static Object yizmodqzk$mismatchDefault(EntityDataSerializer<?> ser, Object v) {
-        // 基础类型
-        if (ser == EntityDataSerializers.INT) return v instanceof Integer ? null : (Object) 0;
-        if (ser == EntityDataSerializers.LONG) return v instanceof Long ? null : (Object) 0L;
-        if (ser == EntityDataSerializers.FLOAT) return v instanceof Float ? null : (Object) 0.0F;
-        if (ser == EntityDataSerializers.BYTE) return v instanceof Byte ? null : (Object) (byte) 0;
-        if (ser == EntityDataSerializers.BOOLEAN) return v instanceof Boolean ? null : (Object) false;
-        if (ser == EntityDataSerializers.STRING) return v instanceof String ? null : (Object) "";
-        // 对象类型（读取端最后一道防线）
-        if (ser == EntityDataSerializers.COMPONENT)
-            return v instanceof net.minecraft.network.chat.Component ? null : net.minecraft.network.chat.Component.empty();
-        if (ser == EntityDataSerializers.OPTIONAL_COMPONENT || ser == EntityDataSerializers.OPTIONAL_BLOCK_STATE
-                || ser == EntityDataSerializers.OPTIONAL_BLOCK_POS || ser == EntityDataSerializers.OPTIONAL_UUID
-                || ser == EntityDataSerializers.OPTIONAL_GLOBAL_POS)
-            return v instanceof java.util.Optional ? null : java.util.Optional.empty();
-        if (ser == EntityDataSerializers.ITEM_STACK)
-            return v instanceof net.minecraft.world.item.ItemStack ? null : net.minecraft.world.item.ItemStack.EMPTY;
-        if (ser == EntityDataSerializers.BLOCK_STATE)
-            return v instanceof net.minecraft.world.level.block.state.BlockState ? null
-                    : net.minecraft.world.level.block.Blocks.AIR.defaultBlockState();
-        if (ser == EntityDataSerializers.BLOCK_POS)
-            return v instanceof net.minecraft.core.BlockPos ? null : net.minecraft.core.BlockPos.ZERO;
-        if (ser == EntityDataSerializers.DIRECTION)
-            return v instanceof net.minecraft.core.Direction ? null : net.minecraft.core.Direction.NORTH;
-        if (ser == EntityDataSerializers.COMPOUND_TAG)
-            return v instanceof net.minecraft.nbt.CompoundTag ? null : new net.minecraft.nbt.CompoundTag();
-        return null;
+    @Inject(method = "define(Lnet/minecraft/network/syncher/EntityDataAccessor;Ljava/lang/Object;)V",
+            at = @At("HEAD"), cancellable = true)
+    private <T> void yizmodqzk$resolveDuplicateDefine(EntityDataAccessor<T> key, T value, CallbackInfo ci) {
+        try {
+            var map = SyncedDataSupport.itemsById((SynchedEntityData) (Object) this);
+            if (map == null) return;
+            SynchedEntityData.DataItem<?> item = map.get(key.getId());
+            if (item == null) return;   // 正常路径
+            EntityDataAccessor<?> existing = SyncedDataSupport.accessorOf(item);
+            if (existing == key) {
+                ci.cancel();            // 同一个 accessor 被 define 两次：保留第一次，不再抛
+                return;
+            }
+            if (SyncedDataSupport.keepExisting((SynchedEntityData) (Object) this, key, existing)) {
+                ci.cancel();            // 保留已有条目 → 丢弃这次定义（不再抛异常）
+                return;
+            }
+            map.remove(key.getId());    // 驱逐外来占用者 → 让原版定义正常写入
+        } catch (Throwable ignored) {}
     }
+
+    // 类型安全默认值表已移到 net.minecraft.client.yiz.tool.health.SyncedDataSupport.defaultFor：
+    // mixin 里的静态字段初始化会被合并进目标类 <clinit>，生产 SRG 环境引用原版字段会 NoSuchFieldError。
 }
