@@ -448,10 +448,18 @@ public final class YizAttributes {
     public static final RegistryObject<Attribute> SHOCK_TIME =
         ATTRIBUTES.register("shock_time",
             () -> new RangedAttribute("attribute.yizmodqzk.shock_time", 0.0, 0.0, Double.MAX_VALUE).setSyncable(true));
-    /** 击飞时长(tick) — 值域 ≥0。 */
+    /** 击飞时长(tick) — 值域 ≥0。上抛时间 + 下落时间的总和（缺省 40）。 */
     public static final RegistryObject<Attribute> KNOCKBACK_TIME =
         ATTRIBUTES.register("knockback_time",
             () -> new RangedAttribute("attribute.yizmodqzk.knockback_time", 0.0, 0.0, Double.MAX_VALUE).setSyncable(true));
+    /** 击飞高度(格) — 值域 ≥0。抛物线最高点相对起飞点的高度（缺省 4）。 */
+    public static final RegistryObject<Attribute> KNOCKBACK_HEIGHT =
+        ATTRIBUTES.register("knockback_height",
+            () -> new RangedAttribute("attribute.yizmodqzk.knockback_height", 0.0, 0.0, Double.MAX_VALUE).setSyncable(true));
+    /** 击飞水平距离(格) — 值域 ≥0。沿「攻击者→目标」水平连线推出的距离（0 = 原地垂直上抛）。 */
+    public static final RegistryObject<Attribute> KNOCKBACK_DISTANCE =
+        ATTRIBUTES.register("knockback_distance",
+            () -> new RangedAttribute("attribute.yizmodqzk.knockback_distance", 0.0, 0.0, Double.MAX_VALUE).setSyncable(true));
     /** 感电范围(格) — 值域 ≥0。缺省 2.5。 */
     public static final RegistryObject<Attribute> SHOCK_RANGE =
         ATTRIBUTES.register("shock_range",
@@ -476,10 +484,6 @@ public final class YizAttributes {
     public static final RegistryObject<Attribute> SHOCK_DAMAGE =
         ATTRIBUTES.register("shock_damage",
             () -> new RangedAttribute("attribute.yizmodqzk.shock_damage", 0.0, 0.0, Double.MAX_VALUE).setSyncable(true));
-    /** 击飞伤害 — 值域 ≥0。 */
-    public static final RegistryObject<Attribute> KNOCKBACK_DAMAGE =
-        ATTRIBUTES.register("knockback_damage",
-            () -> new RangedAttribute("attribute.yizmodqzk.knockback_damage", 0.0, 0.0, Double.MAX_VALUE).setSyncable(true));
 
     /** 感电数量 — 值域 ≥0。控制感电影响实体上限（伤害/闪电链）；0=未配置走默认。可累加。 */
     public static final RegistryObject<Attribute> SHOCK_COUNT =

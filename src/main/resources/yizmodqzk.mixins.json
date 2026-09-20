@@ -40,7 +40,8 @@
     "LivingEntityRendererSurfaceLightningMixin",
     "ClientMultiJumpMixin",
     "ItemNbtTooltipMixin",
-    "EntityRenderDispatcherOutlineMixin"
+    "EntityRenderDispatcherOutlineMixin",
+    "LivingEntityRendererLaunchTiltMixin"
   ],
   "injectors": {
     "defaultRequire": 1

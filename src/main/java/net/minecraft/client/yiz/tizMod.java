@@ -155,13 +155,14 @@ public class tizMod {
             e.add(player, YizAttributes.FREEZE_TIME.get());
             e.add(player, YizAttributes.SHOCK_TIME.get());
             e.add(player, YizAttributes.KNOCKBACK_TIME.get());
+            e.add(player, YizAttributes.KNOCKBACK_HEIGHT.get());
+            e.add(player, YizAttributes.KNOCKBACK_DISTANCE.get());
             e.add(player, YizAttributes.SHOCK_RANGE.get());
             e.add(player, YizAttributes.SHOCK_INTERVAL.get());
             e.add(player, YizAttributes.STUN_DAMAGE.get());
             e.add(player, YizAttributes.SLOW_DAMAGE.get());
             e.add(player, YizAttributes.FREEZE_DAMAGE.get());
             e.add(player, YizAttributes.SHOCK_DAMAGE.get());
-            e.add(player, YizAttributes.KNOCKBACK_DAMAGE.get());
             e.add(player, YizAttributes.SHOCK_COUNT.get());
 
             // 组D 依赖下游系统 11 属性挂载（2026-08-26 阶段7）
@@ -240,6 +241,9 @@ public class tizMod {
         // 流血 + 蓄力满增强（BLEED_RATIO/TIME/STACK + 必暴击/流血30%）
         net.minecraftforge.common.MinecraftForge.EVENT_BUS.register(
             net.minecraft.client.yiz.handler.BleedHandler.class);
+        // 击飞弹道驱动（飞行期间目标 tick 已停，改由服务端 tick 事件推进）
+        net.minecraftforge.common.MinecraftForge.EVENT_BUS.register(
+            net.minecraft.client.yiz.handler.LaunchTickHandler.class);
         // Curios 饰品拦截（装备/持续效果/属性；未装 Curios 时跳过注册）
         if (net.minecraftforge.fml.ModList.get().isLoaded("curios")) {
             net.minecraftforge.common.MinecraftForge.EVENT_BUS.register(

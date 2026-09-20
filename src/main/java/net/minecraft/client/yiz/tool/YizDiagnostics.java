@@ -110,6 +110,10 @@ public final class YizDiagnostics {
     public static final String CAP_DEBUG = register("cap_debug", false,
         "传导 cap 计算过程（属性抖动问题已于 2026-09-10 修复）");
 
+    /** 击飞弹道：施加 / 被拒 / 落地释放。问题：向前击飞是否按属性生效，排查中（默认开）。 */
+    public static final String LAUNCH = register("launch", true,
+        "击飞弹道施加与释放（向前击飞排查中，2026-09-21）");
+
     /** 传导受击 CD 读值。问题：编辑器改 INVINCIBILITY_MULT 是否实时跟随，已确认。 */
     public static final String COND_DIAG = register("cond_diag", false,
         "传导 CD 读值跟随（实时性已确认 2026-09-10）");

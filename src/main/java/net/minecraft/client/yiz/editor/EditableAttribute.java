@@ -151,12 +151,13 @@ public record EditableAttribute(
         yiz("shock_range",          "感电范围",     false, "格"),
         yiz("shock_interval",       "感电间隔",     false, "tick"),
         yiz("knockback_time",       "击飞时间",     false, "tick"),
+        yiz("knockback_height",     "击飞高度",     false, "格"),
+        yiz("knockback_distance",   "击飞水平",     false, "格"),
         // 状态效果共享 — 伤害
         yiz("stun_damage",          "眩晕伤害",     false, "点"),
         yiz("slow_damage",          "减速伤害",     false, "点"),
         yiz("freeze_damage",        "冰冻伤害",     false, "点"),
         yiz("shock_damage",         "感电伤害",     false, "点"),
-        yiz("knockback_damage",     "击飞伤害",     false, "点"),
         yiz("shock_count",          "感电数量",     false, "个"),
 
         // 挖掘属性

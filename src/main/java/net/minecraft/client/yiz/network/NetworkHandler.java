@@ -37,6 +37,12 @@ public final class NetworkHandler {
             C2SMultiJumpPayload::handle
         );
         CHANNEL.registerMessage(packetId++,
+            S2CLaunchFxPayload.class,
+            S2CLaunchFxPayload::encode,
+            S2CLaunchFxPayload::decode,
+            S2CLaunchFxPayload::handle
+        );
+        CHANNEL.registerMessage(packetId++,
             net.minecraft.client.yiz.editor.C2SAttributeEditorPayload.class,
             net.minecraft.client.yiz.editor.C2SAttributeEditorPayload::encode,
             net.minecraft.client.yiz.editor.C2SAttributeEditorPayload::decode,

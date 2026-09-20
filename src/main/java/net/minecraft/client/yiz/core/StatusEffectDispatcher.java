@@ -50,9 +50,6 @@ public final class StatusEffectDispatcher {
     /** UUID → 各类型剩余 tick */
     private static final Map<UUID, EnumMap<StatusEffectType, Integer>> CONTROL_TIMERS = new java.util.concurrent.ConcurrentHashMap<>();
 
-    /** UUID → 击飞每 tick 上升速度（含重力补偿） */
-    private static final Map<UUID, Float> KNOCKBACK_LIFT = new java.util.concurrent.ConcurrentHashMap<>();
-
     /** 感电源头：UUID → [剩余tick, 单次伤害, 范围, 间隔, 原始来源, 吸血比例]。仅被直接命中的目标为源头，不传播。 */
     private static final Map<UUID, ShockState> SHOCK_STATES = new java.util.concurrent.ConcurrentHashMap<>();
     private record ShockState(int remaining, float dmg, float range, int interval,
@@ -80,7 +77,7 @@ public final class StatusEffectDispatcher {
         DAMAGE_ATTRS.put(StatusEffectType.SLOW,      YizAttributes.SLOW_DAMAGE.get());
         DAMAGE_ATTRS.put(StatusEffectType.FREEZE,    YizAttributes.FREEZE_DAMAGE.get());
         DAMAGE_ATTRS.put(StatusEffectType.SHOCK,     YizAttributes.SHOCK_DAMAGE.get());
-        DAMAGE_ATTRS.put(StatusEffectType.KNOCKBACK, YizAttributes.KNOCKBACK_DAMAGE.get());
+        // 击飞不再结算附加伤害（击飞伤害属性已弃用并移除）
     }
 
     private StatusEffectDispatcher() {}
@@ -145,8 +142,6 @@ public final class StatusEffectDispatcher {
             }
 
             if (timers == null || timers.isEmpty()) {
-                // 击飞 lift 清理
-                KNOCKBACK_LIFT.remove(uuid);
                 if (bridge.yizmodqzk$getControlTicks() != 0) {
                     bridge.yizmodqzk$setControlTicks(0);
                     onControlEnd(entity);
@@ -170,15 +165,9 @@ public final class StatusEffectDispatcher {
                 }
             }
 
-            // 击飞：每 tick 施加上升速度
-            Float lift = KNOCKBACK_LIFT.get(uuid);
-            if (lift != null && timers.containsKey(StatusEffectType.KNOCKBACK)) {
-                entity.setDeltaMovement(entity.getDeltaMovement().x, lift, entity.getDeltaMovement().z);
-            }
-
+            // 击飞的运动由 LaunchController 逐 tick 驱动（飞行期间目标 tick 被停，不走这里）
             if (timers.isEmpty()) {
                 CONTROL_TIMERS.remove(uuid);
-                KNOCKBACK_LIFT.remove(uuid);
             }
             bridge.yizmodqzk$setControlTicks(maxRemaining);
             if (maxRemaining == 0) onControlEnd(entity);
@@ -186,8 +175,7 @@ public final class StatusEffectDispatcher {
     }
 
     /** 某类型过期时的清理 */
-    private static void onTypeExpire(LivingEntity entity, StatusEffectType type) {
-        if (type == StatusEffectType.FREEZE) {
+    private static void onTypeExpire(LivingEntity entity, StatusEffectType type) {        if (type == StatusEffectType.FREEZE) {
             entity.setTicksFrozen(0); // 清除冰冻视觉
         }
     }
@@ -236,24 +224,26 @@ public final class StatusEffectDispatcher {
 
     // ── 击飞（高度固定 4 格，时长由 knockback_time 控制）─────────────
 
-    /** 击飞最大高度（格） */
-    private static final float KNOCKBACK_MAX_HEIGHT = 4f;
-    /** 重力加速度（格/tick²），与 Minecraft 原版一致 */
-    private static final float GRAVITY = 0.08f;
-
     private static void applyKnockback(LivingEntity target, LivingEntity source) {
-        float timeAttr = readTimeAttr(source, StatusEffectType.KNOCKBACK);
-        float damage = readDamageAttr(source, StatusEffectType.KNOCKBACK);
-        int time = Math.max((int) timeAttr, 5);
+        int time = Math.max((int) readTimeAttr(source, StatusEffectType.KNOCKBACK), 5);
 
-        // 每 tick 上升速度 = 高度/时长 + 重力补偿
-        // 补偿重力是因为 travel 每 tick 会从 vy 减去 0.08
-        float liftVelocity = KNOCKBACK_MAX_HEIGHT / time + GRAVITY;
-        KNOCKBACK_LIFT.put(target.getUUID(), liftVelocity);
+        // 玩家：只保留原版攻击击退 + "倒下"动画。不接管位置/速度、不加控制计时、不结算击飞伤害，
+        // 即"除此之外不产生任何额外效果"。
+        // 注意：本模组棋子直接调 target.hurt()（不走 Mob.doHurtTarget），原版近战击退不会自动发生，
+        // 所以这里显式补一次标准击退（强度 0.4F 与原版一致，仍受击退免疫属性门禁）。
+        if (target instanceof net.minecraft.world.entity.player.Player) {
+            double dx = target.getX() - source.getX();
+            double dz = target.getZ() - source.getZ();
+            target.knockback(0.4F, dx, dz);
+            target.hurtMarked = true;
+            LaunchController.poseOnly(target, time);
+            return;
+        }
 
-        target.hurtMarked = true;
+        // 定向弹道由 LaunchController 接管（高度/水平/时间三属性 → 速度向量 + 停 tick）
+        LaunchController.launch(target, source);
+
         addControlTime(target, StatusEffectType.KNOCKBACK, time);
-        if (damage > 0) dealStatusDamage(target, StatusEffectType.KNOCKBACK, damage, source);
     }
 
     // ── 减速 ────────────────────────────────────────────────────
@@ -572,6 +562,30 @@ public final class StatusEffectDispatcher {
             if (newVal > currentMax) {
                 bridge.yizmodqzk$setControlTicks(newVal);
             }
+        }
+    }
+
+    /**
+     * 立即清除某实体的某一类控制计时（击飞落地释放时调用）。
+     * 击飞期间目标 tick 被停，计时器不会自行递减，必须由释放方清掉，否则落地后会残留冻 AI。
+     */
+    public static void clearType(LivingEntity entity, StatusEffectType type) {
+        if (entity == null) return;
+        UUID uuid = entity.getUUID();
+        var timers = CONTROL_TIMERS.get(uuid);
+        if (timers != null) {
+            timers.remove(type);
+            if (timers.isEmpty()) CONTROL_TIMERS.remove(uuid);
+        }
+        if (entity instanceof ControlDataBridge bridge) {
+            var left = CONTROL_TIMERS.get(uuid);
+            int max = 0;
+            if (left != null) {
+                for (int v : left.values()) {
+                    if (v > max) max = v;
+                }
+            }
+            bridge.yizmodqzk$setControlTicks(max);
         }
     }
 

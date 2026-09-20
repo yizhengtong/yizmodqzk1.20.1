@@ -181,6 +181,22 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
 
     // ==================== tick / die 注入 ====================
 
+    /**
+     * 击飞飞行期间停掉实体自身 tick（服务端）。
+     *
+     * <p>停 tick 比"只拦 AI"更彻底：AI、重力、摩擦、着火/药水/第三方模组的每 tick 逻辑全部不跑，
+     * 位置与速度完全由 {@code LaunchController} 逐 tick 驱动，落地后自动恢复。
+     * 玩家除外（{@code ServerPlayer} 的 tick 与连接/同步强绑定，停了会破坏权威移动）。</p>
+     */
+    @Inject(method = "tick", at = @At("HEAD"), cancellable = true)
+    private void yizmodqzk$launchTickStop(CallbackInfo ci) {
+        LivingEntity self = (LivingEntity) (Object) this;
+        if (self.level().isClientSide()) return;
+        if (net.minecraft.client.yiz.core.LaunchController.shouldStopTick(self)) {
+            ci.cancel();
+        }
+    }
+
     @Inject(method = "tick", at = @At("TAIL"))
     private void yizmodqzk$onTick(CallbackInfo ci) {
         LivingEntity entity = (LivingEntity) (Object) this;
