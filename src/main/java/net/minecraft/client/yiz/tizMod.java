@@ -266,6 +266,12 @@ public class tizMod {
         }
     }
 
+    /** 生物原型：数据包加载入口（data/&lt;ns&gt;/yiz_creature/*.json），/reload 时重建数据包轨。 */
+    @SubscribeEvent
+    public void onAddReloadListener(net.minecraftforge.event.AddReloadListenerEvent event) {
+        event.addListener(new net.minecraft.client.yiz.creature.CreatureProfileReloadListener());
+    }
+
     @SubscribeEvent
     public void onServerStarting(ServerStartingEvent event) {
         LOGGER.debug("YizMod QZK 服务端启动");

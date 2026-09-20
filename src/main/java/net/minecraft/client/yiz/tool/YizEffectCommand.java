@@ -26,16 +26,6 @@ import java.util.UUID;
  */
 public final class YizEffectCommand {
 
-    private static final String[] KNOWN_EFFECTS = {
-        net.minecraft.client.yiz.tool.effect.InstanceEffectState.CLEAR_IMMUNITY,
-        net.minecraft.client.yiz.tool.effect.InstanceEffectState.PULLBACK,
-        net.minecraft.client.yiz.tool.effect.InstanceEffectState.TELEPORT_IMMUNITY,
-        net.minecraft.client.yiz.tool.effect.InstanceEffectState.POTION_IMMUNITY,
-        net.minecraft.client.yiz.tool.effect.InstanceEffectState.KNOCKBACK_IMMUNITY,
-        net.minecraft.client.yiz.tool.effect.InstanceEffectState.PHYSICAL_IMMUNITY,
-        net.minecraft.client.yiz.tool.effect.InstanceEffectState.RIDE_IMMUNITY,
-    };
-
     private YizEffectCommand() {}
 
     public static void register() {
@@ -80,7 +70,7 @@ public final class YizEffectCommand {
             String effect = StringArgumentType.getString(ctx, "effect");
             if (!isKnown(effect)) {
                 ctx.getSource().sendFailure(Component.literal("§c未知效果: " + effect
-                    + "（可选 " + String.join("/", KNOWN_EFFECTS) + "）"));
+                    + "（可选 " + String.join("/", net.minecraft.client.yiz.tool.effect.InstanceEffectState.knownEffectIds()) + "）"));
                 return 0;
             }
             if (!(target instanceof LivingEntity living)) {
@@ -122,9 +112,7 @@ public final class YizEffectCommand {
     }
 
     private static boolean isKnown(String effect) {
-        for (String k : KNOWN_EFFECTS) {
-            if (k.equals(effect)) return true;
-        }
-        return false;
+        // 效果列表来自组件注册表：新增效果只需在 CreatureComponents 登记，无需改指令
+        return net.minecraft.client.yiz.tool.effect.InstanceEffectState.knownEffectIds().contains(effect);
     }
 }
