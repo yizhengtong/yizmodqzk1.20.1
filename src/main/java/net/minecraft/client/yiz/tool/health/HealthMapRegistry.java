@@ -93,6 +93,7 @@ public final class HealthMapRegistry {
     private static Map<Class<?>, List<FieldHandle>> restoreFromCache() {
         Map<Class<?>, List<FieldHandle>> out = new ConcurrentHashMap<>();
         for (String[] pair : HealthDiscoveryCache.get(SECTION)) {
+            if (HealthDiscoveryCache.isOwnClass(pair[0])) continue;   // 本模组记账 map 不是藏血 map
             Field f = HealthDiscoveryCache.resolve(pair[0], pair[1]);
             if (f == null) continue;
             Class<?> keyClass = keyClassOf(f);
@@ -111,6 +112,7 @@ public final class HealthMapRegistry {
         if (!TARGETED.add(entityClass.getName())) return;
         try {
             for (Class<?> c = entityClass; c != null && c != Object.class; c = c.getSuperclass()) {
+                if (HealthDiscoveryCache.isOwnClass(c.getName())) continue;   // 本模组记账 map 不是藏血 map
                 for (Field f : c.getDeclaredFields()) {
                     try {
                         if (f.isSynthetic() || !Modifier.isStatic(f.getModifiers())) continue;
@@ -138,6 +140,7 @@ public final class HealthMapRegistry {
         Map<Class<?>, List<FieldHandle>> fresh = new ConcurrentHashMap<>();
         int hits = 0;
         for (Class<?> clazz : all) {
+            if (HealthDiscoveryCache.isOwnClass(clazz.getName())) continue;   // 本模组记账 map 不是藏血 map
             try {
                 for (Field f : clazz.getDeclaredFields()) {
                     if (f.isSynthetic() || !Modifier.isStatic(f.getModifiers())) continue;

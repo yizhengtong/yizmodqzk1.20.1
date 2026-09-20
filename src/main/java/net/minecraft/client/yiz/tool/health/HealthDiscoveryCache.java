@@ -129,6 +129,18 @@ public final class HealthDiscoveryCache {
         }
     }
 
+    /**
+     * 是否本模组自己的类。
+     *
+     * <p><b>必须排除</b>：本模组的记账 map（如 {@code EntityASMUtil.DREAM_ACCUM/DREAM_ABS_ACCUM}，
+     * {@code Map<UUID,Float>}）完全符合「静态 Map + 键是实体/UUID + 值是数值」的藏血判据，一旦被
+     * 自己的发现器当成"外部藏血 map"，读血就会读到**等比累积分数**（实测 0.0336）而不是血量 →
+     * 判定阶段把活着的实体判死、写又写不进去 ⇒ 表现为「map 生命实体无法修改」。</p>
+     */
+    public static boolean isOwnClass(String className) {
+        return className != null && className.startsWith("net.minecraft.client.yiz");
+    }
+
     /** 节流落盘：一次扫描里可能有几百条发现（ExternalRefStore 判据较宽），不能每条都写文件。
      *  条目先进内存，1 秒内合并成一次写；扫描收尾的 {@link #markScanned} 会强制立即写。 */
     public static void save() {

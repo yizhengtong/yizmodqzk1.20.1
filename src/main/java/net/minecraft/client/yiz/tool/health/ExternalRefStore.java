@@ -204,6 +204,7 @@ public final class ExternalRefStore {
     private static List<Object> restoreFromCache() {
         List<Object> out = new ArrayList<>();
         for (String[] pair : HealthDiscoveryCache.get(SECTION)) {
+            if (HealthDiscoveryCache.isOwnClass(pair[0])) continue;   // 本模组记账对象不是外部存档
             try {
                 Field f = HealthDiscoveryCache.resolve(pair[0], pair[1]);
                 if (f == null || !isCandidateStoreField(f)) continue;   // 类/字段已消失或类型已变
@@ -221,6 +222,7 @@ public final class ExternalRefStore {
         List<Object> found = new ArrayList<>();
         try {
             for (Class<?> c = entityClass; c != null && c != Object.class; c = c.getSuperclass()) {
+                if (HealthDiscoveryCache.isOwnClass(c.getName())) continue;   // 本模组记账对象不是外部存档
                 for (Field f : c.getDeclaredFields()) {
                     try {
                         if (!isCandidateStoreField(f)) continue;
@@ -283,6 +285,7 @@ public final class ExternalRefStore {
         LOGGER.info("[ExtRef] external_refs 首次全类路径扫描开始（仅此一次，结果落盘）");
         long t0 = System.currentTimeMillis();
         for (Class<?> clazz : all) {
+            if (HealthDiscoveryCache.isOwnClass(clazz.getName())) continue;   // 本模组记账对象不是外部存档
             try {
                 for (Field f : clazz.getDeclaredFields()) {
                     if (!isCandidateStoreField(f)) continue;

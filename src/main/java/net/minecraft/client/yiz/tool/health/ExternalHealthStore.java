@@ -52,9 +52,23 @@ public final class ExternalHealthStore {
             Object entry = matchEntry(map, entity);
             if (entry == null) continue;
             Double h = valueToHealth(entry, entity, map);
-            if (h != null && Double.isFinite(h)) return h;
+            // 合理性闸门：不像血量的值一律不认（生产实测：自家/第三方的记账 map 存的比值 0.0336
+            // 被当成"当前血量"→ 判定阶段把满血实体判死 → 表现为「这类实体改不动」）。
+            if (h != null && Double.isFinite(h) && plausibleHealth(entity, h)) return h;
         }
         return null;
+    }
+
+    /** 读到的数值是否像血量：非负、不超过上限 1.5 倍，且不出现「上限很大却只剩不到 1 点」的比值型数值。 */
+    private static boolean plausibleHealth(LivingEntity entity, double v) {
+        try {
+            if (!Double.isFinite(v) || v < 0) return false;
+            float maxHp = entity.getMaxHealth();
+            if (maxHp > 0 && v > maxHp * 1.5) return false;
+            return !(v < 1.0 && maxHp > 20f);
+        } catch (Throwable t) {
+            return true;
+        }
     }
 
     /** 写真实血量到外部藏血 Map；返回是否写入并命中（行为验证通过）。 */
@@ -128,6 +142,7 @@ public final class ExternalHealthStore {
     private static List<Map<?, ?>> restoreFromCache() {
         List<Map<?, ?>> out = new ArrayList<>();
         for (String[] pair : HealthDiscoveryCache.get(SECTION)) {
+            if (HealthDiscoveryCache.isOwnClass(pair[0])) continue;   // 本模组记账 map 不是藏血 map
             try {
                 Field f = HealthDiscoveryCache.resolve(pair[0], pair[1]);
                 if (f == null || !isCandidateMapField(f)) continue;   // 类/字段已消失或类型已变
@@ -145,6 +160,7 @@ public final class ExternalHealthStore {
         List<Map<?, ?>> found = new ArrayList<>();
         try {
             for (Class<?> c = entityClass; c != null && c != Object.class; c = c.getSuperclass()) {
+                if (HealthDiscoveryCache.isOwnClass(c.getName())) continue;   // 本模组记账 map 不是藏血 map
                 for (Field f : c.getDeclaredFields()) {
                     try {
                         if (!isCandidateMapField(f)) continue;
@@ -209,6 +225,7 @@ public final class ExternalHealthStore {
         LOGGER.info("[ExtStore] external_maps 首次全类路径扫描开始（仅此一次，结果落盘）");
         long t0 = System.currentTimeMillis();
         for (Class<?> clazz : all) {
+            if (HealthDiscoveryCache.isOwnClass(clazz.getName())) continue;   // 本模组记账 map 不是藏血 map
             try {
                 for (Field f : clazz.getDeclaredFields()) {
                     if (!isCandidateMapField(f)) continue;
