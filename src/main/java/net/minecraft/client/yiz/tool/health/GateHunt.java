@@ -51,16 +51,27 @@ public final class GateHunt {
         HealthModificationScheduler.remove(entity, "gate-verify");
         HealthModificationScheduler.schedule(entity,
             HealthModificationScheduler.once("gate-verify", 2, e -> {
-                if (e == null || e.isRemoved()) return;
+                if (e == null) return;
+                if (e.isRemoved()) {
+                    // 写回验证的「死亡」分支：本次写入已经通过立即回读（apply 里回读没过就直接返回，
+                    // 不会走到 verifyAndHunt），实体又已被它打死 ⇒「写进去 + 没被拉回」成立
+                    // → 这个类可以按常规实体缓存（非常规判定粘性优先，不会被这里覆盖）。
+                    HealthTier.markRegular(e.getClass(), "2 tick 写回验证：实体已被本次写入击杀");
+                    return;
+                }
                 double now = readLogical(e);
                 if (!Double.isFinite(now)) return;
                 double tol = Math.max(STICK_TOLERANCE, target * 0.05);
                 // 只在「血被向上拉回」时猎杀（now > target + tol）；向下偏离可能是并发伤害，不猎。
                 if (now > target + tol) {
+                    // 被拉回 = 有权威程序在回写血量 ⇒ 非常规生命值实体：此后每次攻击都现场全量扫描
+                    HealthTier.markIrregular(e.getClass(), "2 tick 写回被拉回（有权威程序回写血量）");
                     LOGGER.warn("[GateHunt] {} 写回被拉回 当前={} 目标={} → 启动门控猎杀",
                         cls, now, target);
                     hunt(e, target, cls, uuid);
                 } else {
+                    // 值钉住了 = 「写进去 + 2 tick 内没被拉回」的行为证明 ⇒ 按常规实体缓存
+                    HealthTier.markRegular(e.getClass(), "2 tick 写回保持（无权威对抗）");
                     LOGGER.info("[GateHunt] {} 写回保持 当前={} 目标={}（无权威对抗）", cls, now, target);
                 }
             }));
@@ -110,6 +121,8 @@ public final class GateHunt {
                 if (Double.isFinite(now) && Math.abs(now - target) <= Math.max(STICK_TOLERANCE, target * 0.05)) {
                     FOUND_GATE.put(cls, cand.describe() + "=" + !orig);
                     HUNTING.remove(uuid);
+                    // 有权威布尔门控在管事 ⇒ 非常规生命值实体（粘性）
+                    HealthTier.markIrregular(e.getClass(), "命中权威布尔门控 " + cand.describe());
                     LOGGER.warn("[GateHunt] 命中权威门控 {}#{} → 置 {}（值已钉住={}）",
                         cls, cand.describe(), !orig, now);
                 } else {
@@ -149,6 +162,7 @@ public final class GateHunt {
                 if (Double.isFinite(now) && Math.abs(now - target) <= Math.max(STICK_TOLERANCE, target * 0.05)) {
                     FOUND_GATE.put(cls, cand.describe() + "=" + 1e9);
                     HUNTING.remove(uuid);
+                    HealthTier.markIrregular(e.getClass(), "命中权威数值门控 " + cand.describe());
                     LOGGER.warn("[GateHunt] 命中数值门控 {}#{} → 钉 1e9（值已钉住={}）",
                         cls, cand.describe(), now);
                 } else {

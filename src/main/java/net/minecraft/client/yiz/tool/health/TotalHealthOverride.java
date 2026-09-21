@@ -40,9 +40,15 @@ public final class TotalHealthOverride {
     public static boolean apply(LivingEntity attacker, LivingEntity entity, double amount) {
         if (entity == null || amount <= 0) return false;
         if (entity.level().isClientSide()) return false;
+        // 发现分层：常规实体走缓存（跳过外部藏血发现的候选走查），非常规生命值实体一律现场扫描。
+        // 未知一律按现场扫描走 —— 见 HealthTier 的匹配策略与强度取舍。
+        boolean live = HealthTier.liveScan(entity);
         // 差值血量实体（getHealth = 两个 Float 来源相减 + 独立死亡标记）交给 FSUB 判据处理：
         // 全量直改只改一个分量、不改死亡标记，会误判「已落地」但实体不死 → 让路
-        if (DynamicHealthAccessor.detect(entity) != null) return false;
+        if (DynamicHealthAccessor.detect(entity) != null) {
+            HealthTier.markIrregular(entity.getClass(), "差值血量(FSUB)：getHealth 由分量相减算出");
+            return false;
+        }
         // 重置 delta 通道（不清 DREAM_ACCUM 累积）：
         // agent specialGetHealth/isAlive 按 delta 钳制读值；死亡链残留的 delta(-inf)
         // 会让 agent 包装的 getHealth 与存储真值不一致 → 模组每 tick 看门狗（按 getHealth
@@ -54,7 +60,7 @@ public final class TotalHealthOverride {
         } catch (Throwable ignored) {}
 
         // —— judge：当前逻辑血量（主槽存储解码优先，免疫 agent/delta/累积干扰）——
-        double current = judgeCurrentHealth(entity);
+        double current = judgeCurrentHealth(entity, live);
         if (!Double.isFinite(current)) return false;
         if (current <= 0) return true;                 // 已死，视为处理完成
         double target = Math.max(0, current - amount); // 纯减法
@@ -62,13 +68,15 @@ public final class TotalHealthOverride {
             entity.getClass().getName(), current, amount, target);
 
         // —— modify：主槽 + 镜像同步 + 门控击穿 + 正常死亡 + 写回验证 ——
-        boolean any = modify(entity, target, current);
+        boolean any = modify(entity, target, current, live);
         if (!any) return false;
         // 写后回读验证（每次）：未落地说明改到的是误判字段（如 castCooldown），不是真实血量 →
         // 返回 false 让调用方（applyProportionalDreamDamage）继续走到 DREAM_ACCUM 累积软压，
         // 否则「定位误判」实体会卡在 TotalOverride 空转、永远到不了死亡链（无法累加击杀）。
-        double readback = judgeCurrentHealth(entity);
+        double readback = judgeCurrentHealth(entity, live);
         if (Double.isFinite(readback) && Math.abs(readback - target) >= 1.0) {
+            // 写不进去 = 这个类不该被当常规实体缓存 → 作废判定，下次攻击重新现场全量扫描
+            HealthTier.demote(entity.getClass(), "写后回读未落地（改到的不是真实血量）");
             if (READBACK_DIAG.add(entity.getClass().getName())) {
                 LOGGER.info("[TotalOverride] {} 写后回读={} 目标={} 未落地(误判槽) → 回退累积软压",
                     entity.getClass().getName(), readback, target);
@@ -116,20 +124,33 @@ public final class TotalHealthOverride {
 
     // ==================== 阶段二：判定 ====================
 
-    /** 判定当前逻辑血量：主槽存储解码 → 兜底 getHealth。 */
-    private static double judgeCurrentHealth(LivingEntity entity) {
+    /**
+     * 判定当前逻辑血量：主槽存储解码 → 外部藏血（仅现场扫描档）→ 兜底 getHealth。
+     *
+     * <p>{@code live=false}（已确认的常规实体）跳过三处外部藏血发现：那些通道在这类实体上
+     * 已被证明读不出东西，跳过只省候选走查、不改判定结果（主槽与 vanilla 兜底照旧）。</p>
+     */
+    private static double judgeCurrentHealth(LivingEntity entity, boolean live) {
         try {
             Double v = EntityHealthLocator.readLocated(entity);
             if (v != null && Double.isFinite(v)) return v;
         } catch (Throwable ignored) {}
-        try {
-            Double v = ExternalHealthStore.readHealth(entity);
-            if (v != null && Double.isFinite(v)) return v;
-        } catch (Throwable ignored) {}
-        try {
-            Double v = ExternalRefStore.readHealth(entity);
-            if (v != null && Double.isFinite(v)) return v;
-        } catch (Throwable ignored) {}
+        if (live) {
+            try {
+                Double v = ExternalHealthStore.readHealth(entity);
+                if (v != null && Double.isFinite(v)) {
+                    HealthTier.markIrregular(entity.getClass(), "外部藏血 Map 读到真血");
+                    return v;
+                }
+            } catch (Throwable ignored) {}
+            try {
+                Double v = ExternalRefStore.readHealth(entity);
+                if (v != null && Double.isFinite(v)) {
+                    HealthTier.markIrregular(entity.getClass(), "外部存档/静态单例读到真血");
+                    return v;
+                }
+            } catch (Throwable ignored) {}
+        }
         try {
             return entity.getHealth();
         } catch (Throwable t) {
@@ -143,7 +164,7 @@ public final class TotalHealthOverride {
      * 统一修改：主槽写目标 + 全部「健康镜像/参考值」同步写目标 + vanilla 通道（无槽实体）。
      * 返回是否改到任何表征。
      */
-    private static boolean modify(LivingEntity entity, double target, double current) {
+    private static boolean modify(LivingEntity entity, double target, double current, boolean live) {
         boolean any = false;
         int[] counts = new int[6];   // 主槽/数值通道/字符串通道/藏血Map/图字段/NBT
         // 首次遇到该类时逐段计时：首击卡顿曾经来自「外部藏血发现」的全类路径扫描，留证据便于回归验证
@@ -152,6 +173,10 @@ public final class TotalHealthOverride {
         long tPrev = t0;
         double[] stage = new double[8];
         boolean hasSlot = EntityHealthLocator.locate(entity) != null;
+        if (hasSlot) {
+            // 行为定位到主槽 = 血量不在 vanilla 通道里 → 非常规，永远现场扫描
+            HealthTier.markIrregular(entity.getClass(), "行为定位到主槽（隐藏血量槽）");
+        }
         if (timing) { long n = System.nanoTime(); stage[0] = (n - tPrev) / 1e6; tPrev = n; }
 
         // 1. 主槽（行为定位的 forward/inverse/codec/通道/声明式槽）
@@ -190,38 +215,47 @@ public final class TotalHealthOverride {
             });
         } catch (Throwable ignored) {}
 
-        // 4. 静态藏血 Map（K=实体/ID/UUID、V=数值；unreflectSpecial 绕过写方法鉴权）
+        // 4~4c. 外部藏血（静态藏血 Map / 外部单例藏血 Map / 外部存档对象）
+        // 只对「现场扫描」档执行：常规实体已被行为验证证明这些通道读不出东西，
+        // 跳过只是省下几千个候选对象的字段走查，不改判定结果；一旦其中任一命中，
+        // 立即升级为「非常规」→ 之后每次攻击都现场扫描（不缓存、不收敛候选）。
         if (timing) { long n = System.nanoTime(); stage[3] = (n - tPrev) / 1e6; tPrev = n; }
-        try {
-            Double hp = HealthMapRegistry.readHealth(entity);
-            if (hp != null) {
-                HealthMapRegistry.tamperHealth(entity, target);
-                any = true;
-                counts[3]++;
-            }
-        } catch (Throwable ignored) {}
-
-        // 4b. 外部静态单例藏血 Map（K=UUID/实体id、V=数值或密码对象；下钻 + ARX 密码反解写真实血）
-        try {
-            if (ExternalHealthStore.writeHealth(entity, target)) {
-                any = true;
-                counts[3]++;
-                // 同步写 vanilla 显示通道：外部藏血实体 getHealth=上限−acc，vanilla 通道即显示通道，
-                // 直写让客户端血条在本 tick 立即更新（不等模组下一 tick 的 syncDisplayHealth 再刷）
-                if (DirectHealthFallback.VANILLA_HEALTH_ACCESSOR != null) {
-                    DirectHealthFallback.setFloatChannelValue(entity,
-                        DirectHealthFallback.VANILLA_HEALTH_ACCESSOR, (float) target, true);
+        if (live) {
+            // 4. 静态藏血 Map（K=实体/ID/UUID、V=数值；unreflectSpecial 绕过写方法鉴权）
+            try {
+                Double hp = HealthMapRegistry.readHealth(entity);
+                if (hp != null) {
+                    HealthTier.markIrregular(entity.getClass(), "静态藏血 Map 命中");
+                    HealthMapRegistry.tamperHealth(entity, target);
+                    any = true;
+                    counts[3]++;
                 }
-            }
-        } catch (Throwable ignored) {}
+            } catch (Throwable ignored) {}
 
-        // 4c. 外部存档/全局对象（SavedData + 静态单例；按实体引用定位 → 写血量参考字段）
-        try {
-            if (ExternalRefStore.writeHealth(entity, current, target)) {
-                any = true;
-                counts[3]++;
-            }
-        } catch (Throwable ignored) {}
+            // 4b. 外部静态单例藏血 Map（K=UUID/实体id、V=数值或密码对象；下钻 + ARX 密码反解写真实血）
+            try {
+                if (ExternalHealthStore.writeHealth(entity, target)) {
+                    HealthTier.markIrregular(entity.getClass(), "外部单例藏血 Map 命中");
+                    any = true;
+                    counts[3]++;
+                    // 同步写 vanilla 显示通道：外部藏血实体 getHealth=上限−acc，vanilla 通道即显示通道，
+                    // 直写让客户端血条在本 tick 立即更新（不等模组下一 tick 的 syncDisplayHealth 再刷）
+                    if (DirectHealthFallback.VANILLA_HEALTH_ACCESSOR != null) {
+                        DirectHealthFallback.setFloatChannelValue(entity,
+                            DirectHealthFallback.VANILLA_HEALTH_ACCESSOR, (float) target, true);
+                    }
+                }
+            } catch (Throwable ignored) {}
+
+            // 4c. 外部存档/全局对象（SavedData + 静态单例；按实体引用定位 → 写血量参考字段）
+            try {
+                if (ExternalRefStore.writeHealth(entity, current, target)) {
+                    HealthTier.markIrregular(entity.getClass(), "外部存档/静态单例命中");
+                    any = true;
+                    counts[3]++;
+                }
+            } catch (Throwable ignored) {}
+        }
 
         // 5. 可达对象图数值字段镜像（与当前血量同值 → 同步写，含实体自身层级字段）
         if (timing) { long n = System.nanoTime(); stage[4] = (n - tPrev) / 1e6; tPrev = n; }
@@ -268,8 +302,9 @@ public final class TotalHealthOverride {
 
         if (timing) { long n = System.nanoTime(); stage[7] = (n - tPrev) / 1e6; tPrev = n; }
         if (WRITE_LOG.add(entity.getClass().getName())) {
-            LOGGER.info("[TotalOverride] {} 表征扫描: 主槽={} 数值通道={} 字符串={} 藏血Map={} 图字段={} NBT={}",
-                entity.getClass().getName(), counts[0], counts[1], counts[2], counts[3], counts[4], counts[5]);
+            LOGGER.info("[TotalOverride] {} 表征扫描({}): 主槽={} 数值通道={} 字符串={} 藏血Map={} 图字段={} NBT={}",
+                entity.getClass().getName(), live ? "现场全量" : "常规缓存", counts[0], counts[1], counts[2],
+                counts[3], counts[4], counts[5]);
         }
         if (timing) {
             LOGGER.info("[TotalOverride] {} 首击耗时(ms): 定位={} 主槽写={} 数值通道={} 串通道={} 藏血Map/外部={} 对象图={} NBT={} vanilla={} 合计={}",
