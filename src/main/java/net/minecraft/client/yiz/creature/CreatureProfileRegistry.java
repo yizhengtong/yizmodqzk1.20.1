@@ -131,6 +131,21 @@ public final class CreatureProfileRegistry {
         return CombatSpec.EMPTY;
     }
 
+    /**
+     * 原型里的布尔效果组件（{@code effects} 列表）——供 {@link InstanceEffectState} 的判定使用。
+     *
+     * <p><b>热路径安全</b>：只做「类 → 原型 id」与「id → 已合并组件集合」两次查表 + 一次组件读，
+     * 不合并、不分配（{@link #componentsOf} 会应用实例补丁并新建集合，不适合每 tick 调用）。</p>
+     *
+     * @return 原型里显式写了的布尔值；原型未写该组件返回 {@code null}（交给下一档判定）
+     */
+    public static Boolean profileEffect(LivingEntity entity, ComponentType<Boolean> type) {
+        if (entity == null || type == null) return null;
+        ResourceLocation id = bindingOfClass(entity.getClass());
+        if (id == null) return null;
+        return resolvedComponents(id).get(type);
+    }
+
     /** 取实体当前的形态表（实例补丁优先 → 原型 → 空表），按 index 升序。 */
     public static java.util.List<PhaseSpec> phasesOf(LivingEntity entity) {
         if (entity == null) return java.util.List.of();

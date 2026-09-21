@@ -53,7 +53,13 @@ public record CreatureProfileJson(
         if (!phases.isEmpty()) map = map.with(CreatureComponents.PHASES, phases);
         for (String id : effects) {
             ComponentType<Boolean> type = CreatureComponents.booleanEffect(id);
-            if (type != null) map = map.with(type, Boolean.TRUE);
+            if (type == null) {
+                // 静默忽略会让"配了但没生效"极难查（效果名写错/漏命名空间都走这里）
+                net.minecraft.client.yiz.tizMod.LOGGER.warn(
+                    "[Creature] 原型 effects 里有未注册的效果 id：{}（已忽略；可用 /yiz diag 或 InstanceEffectState.knownEffectIds() 查全部合法 id）", id);
+                continue;
+            }
+            map = map.with(type, Boolean.TRUE);
         }
         return map;
     }

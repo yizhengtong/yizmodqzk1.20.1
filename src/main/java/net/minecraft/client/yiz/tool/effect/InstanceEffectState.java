@@ -117,7 +117,16 @@ public final class InstanceEffectState {
         return isEffectEnabled(entity, type);
     }
 
-    /** 组件化判定：实例补丁优先 → 类型基础 → 默认 false。 */
+    /**
+     * 组件化判定：实例补丁优先 → 生物原型（{@code yiz_creature} 的 {@code effects}）→ 类型基础 → 默认 false。
+     *
+     * <p>原型这一档此前没有接上：{@code CreatureProfileJson.toComponents()} 会把 {@code effects}
+     * 解析成布尔组件，但没人查它 ⇒ 数据包/代码轨里写的 {@code yizmodqzk:knockback_immunity} 这类效果
+     * 一直是「写了不生效」。这里接上，顺序仍满足文档约定「实例补丁 → 原型（含父链）→ 缺省」。</p>
+     *
+     * <p>性能：走 {@link CreatureProfileRegistry#profileEffect}（类→原型 id 查表 + 已合并组件集合查表），
+     * 不做合并/分配 —— 这个判定在 {@code setDeltaMovement}/{@code knockback} 等热路径上被频繁调用。</p>
+     */
     public static boolean isEffectEnabled(LivingEntity entity, ComponentType<Boolean> type) {
         if (entity == null || type == null) return false;
         Entry e = STATES.get(entity.getUUID());
@@ -127,6 +136,8 @@ public final class InstanceEffectState {
             Object v = p.added().get(type);
             if (v instanceof Boolean b) return b;
         }
+        Boolean fromProfile = net.minecraft.client.yiz.creature.CreatureProfileRegistry.profileEffect(entity, type);
+        if (fromProfile != null) return fromProfile;
         Set<String> base = baseEffects(entity.getClass());
         return base != null && base.contains(type.id().getPath());
     }
