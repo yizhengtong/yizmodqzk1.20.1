@@ -164,6 +164,8 @@ public final class HealthDiscovery {
 
     /** 后台重扫：类数量没变就只刷新检查时间；变了就全范围重建并原子换快照。 */
     private static void refresh() {
+        // 顺带做通道漂移检测（只读 8 个静态字段）：id 撞车是会话中途事件，这里给它打时间戳
+        SyncedDataSupport.auditEntityChannelDrift();
         Snapshot old = SNAPSHOT;
         Class<?>[] all = allLoadedClasses();
         if (all == null || all.length == 0) return;          // agent 未就绪 → 保留旧快照，下次再试

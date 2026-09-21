@@ -54,6 +54,16 @@ public final class SyncedDataSupport {
     /** 已告警过的冲突键，防刷屏。 */
     private static final Set<String> LOGGED = ConcurrentHashMap.newKeySet();
 
+    /**
+     * 启动自检时记下的「声明类.字段名 → id@对象身份」快照。
+     *
+     * <p>用来抓 id 撞车的真凶：生产实测同一个类在<b>启动时通道 id 完全正常</b>（0..7、类池=7），
+     * 打到某场战斗中途却出现「两个通道同 id」——说明字段里装的 accessor <b>在会话中途被换掉/改掉了</b>。
+     * 冲突时把「启动时的 id/对象」与「现在的 id/对象」并排打出来，就能直接看出是哪条字段漂移、
+     * 是换了对象还是改了 id。</p>
+     */
+    private static final Map<String, String> CHANNEL_SNAPSHOT = new ConcurrentHashMap<>();
+
     // ==================== 反射入口 ====================
 
     @SuppressWarnings("unchecked")
@@ -233,14 +243,15 @@ public final class SyncedDataSupport {
         // 字段名是关键证据：两个 accessor 都「声明在 Entity」时，只有字段名能说明到底是哪两条
         // 通道撞了同一个 id（生产 id 0 撞车就是靠这个才能确定 DATA_POSE 被谁占了槽）。
         LOGGER.error("[SynchedEntityData] 通道 id 冲突（id={}，实体={}）：{}；"
-                + "本次 accessor={}[{}]（{}，序列化器={}），占用者={}[{}]（{}）→ {}",
+                + "本次 accessor={}[{}]（{}，序列化器={}），占用者={}[{}]（{}）→ {}；类池[Entity]={}",
             incoming.getId(), entityClass == null ? "?" : entityClass.getName(), what,
-            incoming, fieldNameOf(entityClass, incoming),
+            incoming, describeAccessor(entityClass, incoming),
             incomingOwner == null ? "外来" : incomingOwner,
             incoming.getSerializer().getClass().getSimpleName(),
-            existing, fieldNameOf(entityClass, existing),
+            existing, describeAccessor(entityClass, existing),
             existingOwner == null ? "外来" : existingOwner,
-            evict ? "驱逐占用者、保留本次定义" : "保留占用者、丢弃本次定义");
+            evict ? "驱逐占用者、保留本次定义" : "保留占用者、丢弃本次定义",
+            entityPoolId());
         // 调用栈点名「谁在给这个实体加通道」——定位第三方模组用
         try {
             StackTraceElement[] st = new Throwable().getStackTrace();
@@ -268,6 +279,23 @@ public final class SyncedDataSupport {
             }
         } catch (Throwable ignored) {}
         return "?";
+    }
+
+    /**
+     * 诊断：把一个 accessor 描述成「字段名(id@身份)」，并与启动快照对比，漂移时并排打出启动值。
+     *
+     * <p>这是定位「谁在会话中途换掉了通道」的关键证据：只看当前 id 无法区分
+     * 「字段被换成别的 accessor」和「同一个 accessor 的 id 被改」——把启动时的
+     * {@code id@identityHashCode} 一起打出来就一目了然。</p>
+     */
+    private static String describeAccessor(Class<?> entityClass, EntityDataAccessor<?> accessor) {
+        if (accessor == null) return "?";
+        String field = fieldNameOf(entityClass, accessor);
+        String now = accessor.getId() + "@" + Integer.toHexString(System.identityHashCode(accessor));
+        String before = CHANNEL_SNAPSHOT.get(field);
+        if (before == null) return field + "(id=" + accessor.getId() + ")";
+        if (before.equals(now)) return field + "(id=" + accessor.getId() + "，与启动一致)";
+        return field + " ⚠漂移: 启动时=" + before + " → 现在=" + now;
     }
 
     // ==================== 启动自检：Entity 通道 id ====================
@@ -301,6 +329,11 @@ public final class SyncedDataSupport {
                 int id = v instanceof EntityDataAccessor<?> a ? a.getId() : -1;
                 if (ids.length() > 0) ids.append(' ');
                 ids.append(f.getName()).append('=').append(id);
+                // 记快照：冲突时用来判断「字段被换掉」还是「同一对象的 id 被改」
+                if (v != null) {
+                    CHANNEL_SNAPSHOT.put("Entity." + f.getName(),
+                            id + "@" + Integer.toHexString(System.identityHashCode(v)));
+                }
                 String prev = seen.put(id, f.getName());
                 if (prev != null) dup.add(f.getName() + " 与 " + prev + " 同为 id " + id);
                 index++;
@@ -331,6 +364,45 @@ public final class SyncedDataSupport {
             }
         } catch (Throwable ignored) {}
         return -1;
+    }
+
+    /** 已告警过的漂移签名，防刷屏。 */
+    private static final Set<String> DRIFT_LOGGED = ConcurrentHashMap.newKeySet();
+
+    /**
+     * 周期性漂移检测：把 {@code Entity} 各通道的「id@对象身份」与启动快照比对，一有变化立刻 ERROR。
+     *
+     * <p>生产实测：启动自检时通道 id 完全正常（0..7、类池=7），打到战斗中途才出现「两个通道同 id」。
+     * 说明漂移是<b>会话中途事件</b>而不是启动顺序问题——这个方法就是给那一刻打时间戳，
+     * 好在日志里和 {@code [YizRestore]} 之类的类重定义事件对齐时间线。只读 8 个静态字段，成本可忽略，
+     * 挂在藏血发现的后台 ticker（5 秒一次）上跑。</p>
+     */
+    public static void auditEntityChannelDrift() {
+        if (CHANNEL_SNAPSHOT.isEmpty()) return;
+        try {
+            StringBuilder drift = new StringBuilder();
+            for (Field f : Entity.class.getDeclaredFields()) {
+                if (!Modifier.isStatic(f.getModifiers())) continue;
+                if (!EntityDataAccessor.class.isAssignableFrom(f.getType())) continue;
+                f.setAccessible(true);
+                Object v = f.get(null);
+                if (!(v instanceof EntityDataAccessor<?> a)) continue;
+                String key = "Entity." + f.getName();
+                String before = CHANNEL_SNAPSHOT.get(key);
+                String now = a.getId() + "@" + Integer.toHexString(System.identityHashCode(v));
+                if (before != null && !before.equals(now)) {
+                    drift.append(f.getName()).append(": ").append(before).append(" → ").append(now).append("; ");
+                }
+            }
+            if (drift.length() > 0) {
+                String sig = drift.toString();
+                if (DRIFT_LOGGED.add(sig)) {
+                    LOGGER.error("[SynchedEntityData] ⚠ Entity 通道在会话中途漂移: {}；类池[Entity]={} —— "
+                            + "通道 id 撞车（Duplicate id value / 读出错类型值崩 tick 或渲染）就是从这一刻开始的",
+                        sig, entityPoolId());
+                }
+            }
+        } catch (Throwable ignored) {}
     }
 
     // ==================== 类型安全默认值 ====================
