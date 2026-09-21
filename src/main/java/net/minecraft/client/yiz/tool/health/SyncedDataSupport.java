@@ -187,7 +187,10 @@ public final class SyncedDataSupport {
     }
 
     private static boolean isVanilla(String owner) {
-        return owner != null && owner.startsWith("net.minecraft.");
+        // ⚠️ 下游模组的类也声明在 net.minecraft.client.yiz.xian.*（影子包名），只按 net.minecraft.
+        // 前缀判断会把本模组自己的通道误判成原版 → 冲突时走「原版优先」去驱逐真正的原版通道，
+        // 把 vanilla 的槽位让给自家通道。必须先排除本模组自己的类。
+        return owner != null && owner.startsWith("net.minecraft.") && !HealthSelfFilter.isOwnClass(owner);
     }
 
     /** 在本实体继承链上查该通道的声明类名；不在链上返回 {@code null}（即外来通道）。 */
@@ -227,12 +230,16 @@ public final class SyncedDataSupport {
                             String existingOwner, boolean evict) {
         String key = (entityClass == null ? "?" : entityClass.getName()) + "#" + incoming.getId();
         if (!LOGGED.add(key)) return;
+        // 字段名是关键证据：两个 accessor 都「声明在 Entity」时，只有字段名能说明到底是哪两条
+        // 通道撞了同一个 id（生产 id 0 撞车就是靠这个才能确定 DATA_POSE 被谁占了槽）。
         LOGGER.error("[SynchedEntityData] 通道 id 冲突（id={}，实体={}）：{}；"
-                + "本次 accessor={}（{}，序列化器={}），占用者={}（{}）→ {}",
+                + "本次 accessor={}[{}]（{}，序列化器={}），占用者={}[{}]（{}）→ {}",
             incoming.getId(), entityClass == null ? "?" : entityClass.getName(), what,
-            incoming, incomingOwner == null ? "外来" : incomingOwner,
+            incoming, fieldNameOf(entityClass, incoming),
+            incomingOwner == null ? "外来" : incomingOwner,
             incoming.getSerializer().getClass().getSimpleName(),
-            existing, existingOwner == null ? "外来" : existingOwner,
+            existing, fieldNameOf(entityClass, existing),
+            existingOwner == null ? "外来" : existingOwner,
             evict ? "驱逐占用者、保留本次定义" : "保留占用者、丢弃本次定义");
         // 调用栈点名「谁在给这个实体加通道」——定位第三方模组用
         try {
@@ -245,10 +252,98 @@ public final class SyncedDataSupport {
         } catch (Throwable ignored) {}
     }
 
+    /** accessor 在实体继承链上的「声明类.字段名」；定位不到返回 {@code "?"}（仅诊断用）。 */
+    private static String fieldNameOf(Class<?> entityClass, EntityDataAccessor<?> accessor) {
+        if (entityClass == null || accessor == null) return "?";
+        try {
+            for (Class<?> c = entityClass; c != null && c != Object.class; c = c.getSuperclass()) {
+                for (Field f : c.getDeclaredFields()) {
+                    if (!Modifier.isStatic(f.getModifiers())) continue;
+                    if (!EntityDataAccessor.class.isAssignableFrom(f.getType())) continue;
+                    try {
+                        f.setAccessible(true);
+                        if (f.get(null) == accessor) return c.getSimpleName() + "." + f.getName();
+                    } catch (Throwable ignored) {}
+                }
+            }
+        } catch (Throwable ignored) {}
+        return "?";
+    }
+
+    // ==================== 启动自检：Entity 通道 id ====================
+
+    /**
+     * 自检 vanilla {@code Entity} 的通道 id 是否仍然「一个通道一个 id」。
+     *
+     * <p>1.20.1 的 id 来自 {@code SynchedEntityData} 的<b>全局可变类池</b>（{@code ENTITY_ID_POOL}）。
+     * 生产实测出现过：{@code Entity} 的两个通道拿到同一个 id 0（例如 {@code DATA_POSE} 与
+     * {@code DATA_SHARED_FLAGS_ID} 同槽）→ 读 {@code getPose()} 读出 {@code Byte} →
+     * {@code ClassCastException} 崩服务端 tick + 客户端渲染。这里在启动时把 id 打出来并点名重复项，
+     * 便于下次直接从日志确认类池是否被外部改动过（只读，不改任何状态）。</p>
+     */
+    public static void auditEntityChannelIds() {
+        try {
+            java.util.List<Field> channels = new java.util.ArrayList<>();
+            for (Field f : Entity.class.getDeclaredFields()) {
+                if (!Modifier.isStatic(f.getModifiers())) continue;
+                if (!EntityDataAccessor.class.isAssignableFrom(f.getType())) continue;
+                channels.add(f);
+            }
+            if (channels.isEmpty()) return;
+            // 字段声明顺序 == Entity.<clinit> 里 defineId 的调用顺序 → 正常时 id 应等于序号
+            StringBuilder ids = new StringBuilder();
+            java.util.Map<Integer, String> seen = new java.util.LinkedHashMap<>();
+            java.util.List<String> dup = new java.util.ArrayList<>();
+            int index = 0;
+            for (Field f : channels) {
+                f.setAccessible(true);
+                Object v = f.get(null);
+                int id = v instanceof EntityDataAccessor<?> a ? a.getId() : -1;
+                if (ids.length() > 0) ids.append(' ');
+                ids.append(f.getName()).append('=').append(id);
+                String prev = seen.put(id, f.getName());
+                if (prev != null) dup.add(f.getName() + " 与 " + prev + " 同为 id " + id);
+                index++;
+            }
+            LOGGER.info("[SynchedEntityData] Entity 通道 id 自检（正常=序号）: {}；实际 {} 条", ids, index);
+            int pooled = entityPoolId();
+            LOGGER.info("[SynchedEntityData] 类池 ENTITY_ID_POOL[Entity]={}（正常={}）",
+                pooled < 0 ? "读取失败" : pooled, index - 1);
+            if (!dup.isEmpty()) {
+                LOGGER.error("[SynchedEntityData] ⚠ Entity 通道 id 重复：{} —— 类池已被外部改动，"
+                        + "这些槽位互相覆盖（读出来会是别的通道的类型，轻则数值错乱、重则 "
+                        + "ClassCastException 崩 tick/渲染）。读守卫已按序列化器兜底默认值。", dup);
+            }
+        } catch (Throwable t) {
+            LOGGER.warn("[SynchedEntityData] Entity 通道 id 自检跳过: {}", t.toString());
+        }
+    }
+
+    /** 读 {@code SynchedEntityData} 里类池对 {@code Entity.class} 的登记值；读不到返回 -1。 */
+    private static int entityPoolId() {
+        try {
+            Field poolField = findField(SynchedEntityData.class,
+                it.unimi.dsi.fastutil.objects.Object2IntMap.class);
+            if (poolField == null) return -1;
+            Object pool = poolField.get(null);
+            if (pool instanceof it.unimi.dsi.fastutil.objects.Object2IntMap<?> m) {
+                return m.containsKey(Entity.class) ? m.getInt(Entity.class) : -1;
+            }
+        } catch (Throwable ignored) {}
+        return -1;
+    }
+
     // ==================== 类型安全默认值 ====================
 
     /**
-     * 值类型与序列化器不匹配时的兜底值；返回 {@code null} 表示"无需修复"（类型正常或未覆盖的序列化器）。
+     * 值类型与序列化器不匹配时的兜底值；返回 {@code null} 表示"无需修复"（类型正常、或该序列化器
+     * 不认识——保守起见不动）。
+     *
+     * <p><b>必须覆盖 1.20.1 全部原生序列化器</b>：漏一个就等于那个通道没有兜底。生产实测漏了
+     * {@link EntityDataSerializers#POSE}：通道 id 撞车后 {@code DATA_POSE} 槽里是
+     * {@code DATA_SHARED_FLAGS_ID} 的 {@code Byte}，这里返回 null → 守卫提前放行 → vanilla
+     * {@code Entity.getPose()} 抛 {@code ClassCastException: Byte cannot be cast to Pose}，
+     * 服务端崩 tick（玩家）、客户端崩渲染（实体）。补上后同一场景只是读到默认姿态，不再崩。</p>
      */
     public static Object defaultFor(EntityDataSerializer<?> ser, Object v) {
         // 基础类型
@@ -258,6 +353,13 @@ public final class SyncedDataSupport {
         if (ser == EntityDataSerializers.BYTE) return v instanceof Byte ? null : (Object) (byte) 0;
         if (ser == EntityDataSerializers.BOOLEAN) return v instanceof Boolean ? null : (Object) false;
         if (ser == EntityDataSerializers.STRING) return v instanceof String ? null : (Object) "";
+        if (ser == EntityDataSerializers.OPTIONAL_UNSIGNED_INT) {
+            return v instanceof java.util.OptionalInt ? null : (Object) java.util.OptionalInt.empty();
+        }
+        // 姿态（Entity 的 DATA_POSE 通道；用 Pose.STANDING 而不是 null，避免下游 NPE）
+        if (ser == EntityDataSerializers.POSE) {
+            return v instanceof net.minecraft.world.entity.Pose ? null : net.minecraft.world.entity.Pose.STANDING;
+        }
         // 对象类型（读取端最后一道防线）
         if (ser == EntityDataSerializers.COMPONENT) {
             return v instanceof net.minecraft.network.chat.Component ? null
@@ -284,6 +386,44 @@ public final class SyncedDataSupport {
         }
         if (ser == EntityDataSerializers.COMPOUND_TAG) {
             return v instanceof net.minecraft.nbt.CompoundTag ? null : new net.minecraft.nbt.CompoundTag();
+        }
+        if (ser == EntityDataSerializers.ROTATIONS) {
+            return v instanceof net.minecraft.core.Rotations ? null : new net.minecraft.core.Rotations(0.0F, 0.0F, 0.0F);
+        }
+        if (ser == EntityDataSerializers.PARTICLE) {
+            return v instanceof net.minecraft.core.particles.ParticleOptions ? null
+                    : net.minecraft.core.particles.ParticleTypes.CRIT;
+        }
+        if (ser == EntityDataSerializers.VILLAGER_DATA) {
+            return v instanceof net.minecraft.world.entity.npc.VillagerData ? null
+                    : new net.minecraft.world.entity.npc.VillagerData(
+                        net.minecraft.world.entity.npc.VillagerType.PLAINS,
+                        net.minecraft.world.entity.npc.VillagerProfession.NONE, 1);
+        }
+        if (ser == EntityDataSerializers.CAT_VARIANT) {
+            // 猫变体是注册表对象：从内置注册表取默认项（取不到就交给 try/catch 视为"不修"）
+            return v instanceof net.minecraft.world.entity.animal.CatVariant ? null
+                    : net.minecraft.core.registries.BuiltInRegistries.CAT_VARIANT
+                        .getOrThrow(net.minecraft.world.entity.animal.CatVariant.TABBY);
+        }
+        if (ser == EntityDataSerializers.FROG_VARIANT) {
+            return v instanceof net.minecraft.world.entity.animal.FrogVariant ? null
+                    : net.minecraft.world.entity.animal.FrogVariant.TEMPERATE;
+        }
+        if (ser == EntityDataSerializers.PAINTING_VARIANT) {
+            return v instanceof net.minecraft.core.Holder ? null
+                    : net.minecraft.core.Holder.direct(
+                        new net.minecraft.world.entity.decoration.PaintingVariant(16, 16));
+        }
+        if (ser == EntityDataSerializers.SNIFFER_STATE) {
+            return v instanceof net.minecraft.world.entity.animal.sniffer.Sniffer.State ? null
+                    : net.minecraft.world.entity.animal.sniffer.Sniffer.State.IDLING;
+        }
+        if (ser == EntityDataSerializers.VECTOR3) {
+            return v instanceof org.joml.Vector3f ? null : new org.joml.Vector3f();
+        }
+        if (ser == EntityDataSerializers.QUATERNION) {
+            return v instanceof org.joml.Quaternionf ? null : new org.joml.Quaternionf();
         }
         return null;
     }

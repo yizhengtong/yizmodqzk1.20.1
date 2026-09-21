@@ -1,15 +1,12 @@
 package net.minecraft.client.yiz.tool.health;
 
-import net.minecraft.client.yiz.core.asm.AgentBridge;
+import net.minecraft.client.yiz.tool.key.FieldHandle;
 import net.minecraft.client.yiz.tool.key.UnsafeAccess;
-import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import sun.misc.Unsafe;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
-import java.lang.reflect.ParameterizedType;
-import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -71,102 +68,24 @@ public final class ExternalHealthStore {
 
     // ==================== 发现（静态 Map 字段） ====================
 
-    /** 已发现的外部藏血 Map 缓存（静态单例，发现后基本不变；有新类加载才重扫）。 */
-    private static volatile List<Map<?, ?>> MAP_CACHE = new ArrayList<>();
-    private static volatile int lastClassCount = -1;
-    private static volatile long lastRescanMs = 0L;
-    private static final long RESCAN_INTERVAL_MS = 2000L;
-
+    /**
+     * 候选外部藏血 Map：字段判据（静态 + {@code Map} + K 是实体身份型）
+     * 由 {@link HealthDiscovery} 全类路径枚举一次并缓存<b>字段句柄</b>；这里每次调用都
+     * <b>现读字段值</b>（Unsafe 静态读，不触发声明类 {@code <clinit>}），拿到当前真正挂在字段上的 Map。
+     *
+     * <p>不再自己枚举类表，也不缓存解析出来的 Map 实例：旧实现把「字段 → Map 实例」整体缓存，
+     * 第三方把字段换成新 Map 后会一直读旧实例 → 读不到真血（判定退回被 delta 抬高的显示值）。
+     * 现在缓存的只有字段句柄，实例每次都重新取。</p>
+     */
     private static List<Map<?, ?>> candidateMaps(LivingEntity entity) {
-        rescanIfNeeded();
-        return MAP_CACHE;
-    }
-
-    private static void rescanIfNeeded() {
-        long now = System.currentTimeMillis();
-        if (now - lastRescanMs < RESCAN_INTERVAL_MS) return;
-        int count = classCount();
-        if (count < 0 || count == lastClassCount) {
-            lastRescanMs = now;
-            return;
-        }
-        synchronized (ExternalHealthStore.class) {
-            if (count == lastClassCount) return;
-            List<Map<?, ?>> fresh = scanMaps();
-            if (!fresh.isEmpty()) MAP_CACHE = fresh;
-            lastClassCount = count;
-            lastRescanMs = now;
-        }
-    }
-
-    private static List<Map<?, ?>> scanMaps() {
+        HealthDiscovery.Snapshot snap = HealthDiscovery.current();
+        if (snap == null) return java.util.Collections.emptyList();
         List<Map<?, ?>> out = new ArrayList<>();
-        try {
-            Class<?>[] all = allLoadedClasses();
-            if (all == null) return out;
-            for (Class<?> clazz : all) {
-                if (HealthSelfFilter.isOwnClass(clazz.getName())) continue;   // 本模组记账 map 不是藏血 map
-                for (Field f : clazz.getDeclaredFields()) {
-                    int m = f.getModifiers();
-                    if (f.isSynthetic() || !Modifier.isStatic(m)) continue;
-                    if (!Map.class.isAssignableFrom(f.getType())) continue;
-                    if (!isEntityKey(f.getGenericType())) continue;
-                    try {
-                        f.setAccessible(true);
-                        // 用 Unsafe 读静态字段，避免 Field.get(null) 触发声明类 <clinit>：
-                        // 反射 get 会 ensureClassInitialized，把 Registrate 等第三方库的 <clinit> 引爆
-                        // （其 <clinit> 里 ObfuscationReflectionHelper 找 LootContextParamSets.REGISTRY 失败
-                        // → NoSuchFieldException / NoClassDefFoundError）。Unsafe 读绕过类初始化。
-                        Object v;
-                        sun.misc.Unsafe u = UnsafeAccess.get();
-                        if (u != null) {
-                            Object base = u.staticFieldBase(f);
-                            long offset = u.staticFieldOffset(f);
-                            v = u.getObject(base, offset);
-                        } else {
-                            v = f.get(null);
-                        }
-                        if (v instanceof Map<?, ?> map) out.add(map);
-                    } catch (Throwable ignored) {}
-                }
-            }
-        } catch (Throwable ignored) {}
-        return out;
-    }
-
-    private static int classCount() {
-        try {
-            var inst = AgentBridge.getInstrumentation();
-            if (inst != null) {
-                Class<?>[] all = inst.getAllLoadedClasses();
-                if (all != null) return all.length;
-            }
-        } catch (Throwable ignored) {}
-        return -1;
-    }
-
-    /** K 是否为「实体身份」型（UUID / 实体id / 实体 / 弱引用）。 */
-    private static boolean isEntityKey(Type genericType) {
-        if (!(genericType instanceof ParameterizedType pt)) return false;
-        Type[] args = pt.getActualTypeArguments();
-        if (args == null || args.length != 2) return false;
-        Type kt = args[0];
-        if (kt instanceof Class<?> c) {
-            return c == java.util.UUID.class
-                    || c == Integer.class || c == int.class
-                    || c == String.class
-                    || Entity.class.isAssignableFrom(c)
-                    || c == java.lang.ref.WeakReference.class;
+        for (FieldHandle h : snap.externalKeyMaps()) {
+            Object v = h.tryGetObject();
+            if (v instanceof Map<?, ?> map) out.add(map);
         }
-        return false;
-    }
-
-    private static Class<?>[] allLoadedClasses() {
-        try {
-            var inst = AgentBridge.getInstrumentation();
-            if (inst != null) return inst.getAllLoadedClasses();
-        } catch (Throwable ignored) {}
-        return null;
+        return out;
     }
 
     // ==================== 条目匹配 ====================
@@ -502,15 +421,29 @@ public final class ExternalHealthStore {
         }
     }
 
+    /**
+     * 实例字段清单按类缓存（<b>只缓存字段句柄</b>，值每次现读）。
+     *
+     * <p>攻击路径上 {@code bossMaxOf/findCipherCarrier/cipherFields/isCipherClass} 都会遍历条目类的
+     * 实例字段；旧实现每次都 {@code getDeclaredFields()} 走一遍继承链并 {@code setAccessible}，
+     * 是无槽实体每次攻击都要付的重复成本。字段集合不会变，故按类缓存。</p>
+     */
+    private static final Map<Class<?>, List<Field>> INSTANCE_FIELDS = new ConcurrentHashMap<>();
+
     private static List<Field> allInstanceFields(Class<?> clazz) {
-        List<Field> list = new ArrayList<>();
-        for (Class<?> c = clazz; c != null && c != Object.class; c = c.getSuperclass()) {
-            for (Field f : c.getDeclaredFields()) {
-                if (Modifier.isStatic(f.getModifiers())) continue;
-                list.add(f);
+        return INSTANCE_FIELDS.computeIfAbsent(clazz, c -> {
+            List<Field> list = new ArrayList<>();
+            for (Class<?> k = c; k != null && k != Object.class; k = k.getSuperclass()) {
+                for (Field f : k.getDeclaredFields()) {
+                    if (Modifier.isStatic(f.getModifiers())) continue;
+                    try {
+                        f.setAccessible(true);
+                    } catch (Throwable ignored) {}
+                    list.add(f);
+                }
             }
-        }
-        return list;
+            return List.copyOf(list);
+        });
     }
 
     private static void logOnce(LivingEntity entity, Map<?, ?> map, CipherCarrier cc) {

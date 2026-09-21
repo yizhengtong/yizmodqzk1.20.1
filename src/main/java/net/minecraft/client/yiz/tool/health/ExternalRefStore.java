@@ -1,8 +1,6 @@
 package net.minecraft.client.yiz.tool.health;
 
-import net.minecraft.client.yiz.core.asm.AgentBridge;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.phys.Vec3;
 
@@ -41,12 +39,38 @@ public final class ExternalRefStore {
 
     // ==================== 公共 API ====================
 
+    /**
+     * 本次调用要匹配的实体身份快照（UUID 串/UUID/id/坐标/最大血）。
+     *
+     * <p>这些东西在旧实现里是<b>每个候选存储对象都重算一遍</b>的（{@code getStringUUID()} 造串、
+     * {@code position()} 造 Vec3、{@code getMaxHealth()} 查属性）——候选对象动辄成千上万，
+     * 于是每次攻击就是几万次多余分配。同一次调用内实体不会变，跑一次即可，匹配语义完全不变。</p>
+     */
+    private static final class Target {
+        final LivingEntity entity;
+        final String uuidStr;
+        final UUID uuid;
+        final int id;
+        final Vec3 pos;
+        final double maxHealth;
+
+        Target(LivingEntity entity) {
+            this.entity = entity;
+            this.uuidStr = entity.getStringUUID();
+            this.uuid = entity.getUUID();
+            this.id = entity.getId();
+            this.pos = entity.position();
+            this.maxHealth = entity.getMaxHealth();
+        }
+    }
+
     /** 从外部存档/全局对象读真实血量；非此类实体返回 null。 */
     public static Double readHealth(LivingEntity entity) {
         if (entity == null || entity.level().isClientSide()) return null;
+        Target target = new Target(entity);
         for (Object store : candidateStores(entity)) {
-            if (!holdsEntityRef(store, entity)) continue;
-            Field hf = findHealthField(store, entity, entity.getHealth());
+            if (!holdsEntityRef(store, target)) continue;
+            Field hf = findHealthField(store, target, entity.getHealth());
             if (hf == null) continue;
             double v = readField(hf, store);
             if (Double.isFinite(v)) {
@@ -61,9 +85,10 @@ public final class ExternalRefStore {
     public static boolean writeHealth(LivingEntity entity, double current, double target) {
         if (entity == null || entity.level().isClientSide()) return false;
         boolean any = false;
+        Target ref = new Target(entity);
         for (Object store : candidateStores(entity)) {
-            if (!holdsEntityRef(store, entity)) continue;
-            Field hf = findHealthField(store, entity, current);
+            if (!holdsEntityRef(store, ref)) continue;
+            Field hf = findHealthField(store, ref, current);
             if (hf == null) continue;
             if (writeField(store, hf, target)) any = true;
         }
@@ -96,27 +121,18 @@ public final class ExternalRefStore {
             }
         } catch (Throwable ignored) {}
         // b. 静态对象字段（非 Map/集合/字符串/枚举/原始类型）
-        try {
-            Class<?>[] all = allLoadedClasses();
-            if (all != null) {
-                for (Class<?> clazz : all) {
-                    if (HealthSelfFilter.isOwnClass(clazz.getName())) continue;   // 本模组记账对象不是外部存档
-                    for (Field f : clazz.getDeclaredFields()) {
-                        int m = f.getModifiers();
-                        if (!Modifier.isStatic(m) || f.isSynthetic()) continue;
-                        Class<?> t = f.getType();
-                        if (t.isPrimitive() || t == String.class || t.isEnum()) continue;
-                        if (Map.class.isAssignableFrom(t) || Iterable.class.isAssignableFrom(t)) continue;
-                        if (t.getName().startsWith("java.") && !t.getName().startsWith("java.util.UUID")) continue;
-                        try {
-                            f.setAccessible(true);
-                            Object v = f.get(null);
-                            if (v != null) out.add(v);
-                        } catch (Throwable ignored) {}
-                    }
-                }
+        //    字段判据由 HealthDiscovery 全类路径枚举一次并缓存「字段句柄」，这里每次调用
+        //    用 Field.get(null) 现读字段值 —— 与旧实现一致（会触发声明类 <clinit>，语义不变），
+        //    但不再每次攻击都重新 getAllLoadedClasses + 逐类逐字段过滤。
+        HealthDiscovery.Snapshot snap = HealthDiscovery.current();
+        if (snap != null) {
+            for (Field f : snap.staticStores()) {
+                try {
+                    Object v = f.get(null);
+                    if (v != null) out.add(v);
+                } catch (Throwable ignored) {}
             }
-        } catch (Throwable ignored) {}
+        }
         return out;
     }
 
@@ -132,42 +148,33 @@ public final class ExternalRefStore {
             }
         }
     }
-
-    private static Class<?>[] allLoadedClasses() {
-        try {
-            var inst = AgentBridge.getInstrumentation();
-            if (inst != null) return inst.getAllLoadedClasses();
-        } catch (Throwable ignored) {}
-        return null;
-    }
-
     // ==================== 2. 实体引用匹配 ====================
 
     /** 判断对象是否持有该实体的引用（UUID/坐标/id/实体/弱引用，多形态）。 */
-    private static boolean holdsEntityRef(Object store, LivingEntity entity) {
+    private static boolean holdsEntityRef(Object store, Target t) {
         try {
-            String uuidStr = entity.getStringUUID();
-            UUID uuid = entity.getUUID();
-            int id = entity.getId();
-            Vec3 pos = entity.position();
+            LivingEntity entity = t.entity;
+            String uuidStr = t.uuidStr;
+            UUID uuid = t.uuid;
+            int id = t.id;
+            Vec3 pos = t.pos;
             for (Field f : allFields(store.getClass())) {
                 if (Modifier.isStatic(f.getModifiers())) continue;
-                Class<?> t = f.getType();
+                Class<?> type = f.getType();
                 try {
-                    f.setAccessible(true);
                     Object v = f.get(store);
                     if (v == null) continue;
                     if (v == entity) return true;
-                    if (t == String.class && (v.equals(uuidStr) || v.equals(uuid.toString()))) return true;
-                    if (t == UUID.class && v.equals(uuid)) return true;
-                    if (t == int.class || t == Integer.class) {
+                    if (type == String.class && (v.equals(uuidStr) || v.equals(uuid.toString()))) return true;
+                    if (type == UUID.class && v.equals(uuid)) return true;
+                    if (type == int.class || type == Integer.class) {
                         if (((Number) v).intValue() == id) return true;
                     }
-                    if (Vec3.class.isAssignableFrom(t)) {
+                    if (Vec3.class.isAssignableFrom(type)) {
                         Vec3 vec = (Vec3) v;
                         if (vec.distanceToSqr(pos) < REF_TOL * REF_TOL) return true;
                     }
-                    if (t == WeakReference.class) {
+                    if (type == WeakReference.class) {
                         if (((WeakReference<?>) v).get() == entity) return true;
                     }
                 } catch (Throwable ignored) {}
@@ -179,18 +186,14 @@ public final class ExternalRefStore {
     // ==================== 3. 血量参考字段 ====================
 
     /** 找对象里「血量参考」数值字段：∈ [参考血−容差, 最大血+容差]，取最接近参考血者。 */
-    private static Field findHealthField(Object store, LivingEntity entity, double reference) {
+    private static Field findHealthField(Object store, Target t, double reference) {
         try {
-            double gmh = entity.getMaxHealth();
+            double gmh = t.maxHealth;
             double tol = Math.max(REF_TOL, Math.abs(gmh) * 0.01);
             Field best = null;
             double bestDiff = Double.MAX_VALUE;
-            for (Field f : allFields(store.getClass())) {
-                if (Modifier.isStatic(f.getModifiers())) continue;
-                Class<?> t = f.getType();
-                if (t != double.class && t != float.class && t != int.class && t != long.class) continue;
+            for (Field f : numericFields(store.getClass())) {
                 try {
-                    f.setAccessible(true);
                     double v = readField(f, store);
                     if (!Double.isFinite(v)) continue;
                     // 血量参考字段必然滞后于当前血、不超过最大血（∈ [reference−tol, maxHealth+tol]）
@@ -236,12 +239,44 @@ public final class ExternalRefStore {
         }
     }
 
+    /**
+     * 实例字段清单按类缓存（<b>只缓存字段句柄，值每次现读</b>）。
+     *
+     * <p>候选外部存储对象数量很大（全类路径的静态对象字段），而 {@code holdsEntityRef} 与
+     * {@code findHealthField} 每次调用都要遍历它们各自类的实例字段；旧实现每次都
+     * {@code getDeclaredFields()} 走一遍继承链并逐个 {@code setAccessible} —— 这是首击
+     * 「藏血Map/外部」段耗时的主要来源。字段集合不会变，故按类缓存；可访问性只在这里设一次。</p>
+     */
+    private static final Map<Class<?>, List<Field>> FIELD_CACHE = new ConcurrentHashMap<>();
+    /** 只含数值类型字段的子集（{@link #findHealthField} 用），同样按类缓存。 */
+    private static final Map<Class<?>, List<Field>> NUMERIC_FIELD_CACHE = new ConcurrentHashMap<>();
+
     private static List<Field> allFields(Class<?> clazz) {
-        List<Field> list = new ArrayList<>();
-        for (Class<?> c = clazz; c != null && c != Object.class; c = c.getSuperclass()) {
-            for (Field f : c.getDeclaredFields()) list.add(f);
-        }
-        return list;
+        return FIELD_CACHE.computeIfAbsent(clazz, c -> {
+            List<Field> list = new ArrayList<>();
+            for (Class<?> k = c; k != null && k != Object.class; k = k.getSuperclass()) {
+                for (Field f : k.getDeclaredFields()) {
+                    try {
+                        f.setAccessible(true);
+                    } catch (Throwable ignored) {}
+                    list.add(f);
+                }
+            }
+            return List.copyOf(list);
+        });
+    }
+
+    /** 数值类型实例字段子集（double/float/int/long），按类缓存。 */
+    private static List<Field> numericFields(Class<?> clazz) {
+        return NUMERIC_FIELD_CACHE.computeIfAbsent(clazz, c -> {
+            List<Field> list = new ArrayList<>();
+            for (Field f : allFields(c)) {
+                if (Modifier.isStatic(f.getModifiers())) continue;
+                Class<?> t = f.getType();
+                if (t == double.class || t == float.class || t == int.class || t == long.class) list.add(f);
+            }
+            return List.copyOf(list);
+        });
     }
 
     private static void logOnce(LivingEntity entity, Object store, Field f) {

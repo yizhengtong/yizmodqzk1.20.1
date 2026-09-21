@@ -1,26 +1,18 @@
 package net.minecraft.client.yiz.tool.health;
 
-import net.minecraft.client.yiz.core.asm.AgentBridge;
 import net.minecraft.client.yiz.tool.key.FieldHandle;
 import net.minecraft.client.yiz.tool.key.UnsafeAccess;
-import net.minecraft.client.yiz.tizMod;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
-import org.slf4j.Logger;
 import sun.misc.Unsafe;
 
-import java.lang.instrument.Instrumentation;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
-import java.lang.reflect.ParameterizedType;
-import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 通用「藏血 Map」检测 + 篡改（涨跌多空攻击线的藏血实体分支）。
@@ -37,16 +29,8 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class HealthMapRegistry {
 
-    private static final Logger LOGGER = tizMod.LOGGER;
-
-    /** key 类型（实体类）→ 该类型的藏血 Map 字段句柄列表（同 key 类可能有多个 Map，如「当前血量 + 拉回依据」）。 */
-    private static volatile Map<Class<?>, List<FieldHandle>> HEALTH_MAPS = new ConcurrentHashMap<>();
-    private static volatile boolean scanned = false;
-    /** 上次扫描时已加载类总数（-1=未扫描/无 agent）；用于检测「是否有新类加载」。 */
-    private static volatile int lastClassCount = -1;
-    /** 上次检查类表增长的时间戳（节流用，避免每次攻击都遍历全类表）。 */
-    private static volatile long lastRescanCheckMs = 0L;
-    private static final long RESCAN_CHECK_INTERVAL_MS = 2000L;
+    /** agent 未就绪时的空表兜底（拿不到类表 = 与旧版一样扫不出东西）。 */
+    private static final Map<Class<?>, List<FieldHandle>> NO_MAPS = java.util.Collections.emptyMap();
 
     /** 全权限 lookup（{@code IMPL_LOOKUP} 非 public，用 Unsafe 直读拿），供 unreflectSpecial 锁基类 put。 */
     private static final MethodHandles.Lookup TRUSTED_LOOKUP = trustedLookup();
@@ -66,98 +50,17 @@ public final class HealthMapRegistry {
 
     // ==================== 检测（枚举 + 泛型判据） ====================
 
-    /** 懒扫描：枚举所有已加载类的静态 Map 字段，按泛型判据识别藏血 Map 并缓存。
-     *  有「新类加载」就重扫（按类缓存，而非进程级一次性），避免首次攻击早于目标类加载导致漏判。 */
-    public static void ensureScanned() {
-        if (scanned && !newClassesLoaded()) return;
-        synchronized (HealthMapRegistry.class) {
-            if (scanned && !newClassesLoaded()) return;
-            lastClassCount = scan();
-            scanned = true;
-            lastRescanCheckMs = System.currentTimeMillis();
-        }
-    }
-
-    /** 无副作用检查：节流是否到期且类数量是否变化。
-     *  时间戳由 ensureScanned 在真正重扫后更新——避免双检锁里两次调用带副作用，
-     *  导致第一次调用刷新节流时间戳后、第二次调用（进锁）被节流吞掉 → 重扫永远跳过。 */
-    private static boolean newClassesLoaded() {
-        long now = System.currentTimeMillis();
-        if (now - lastRescanCheckMs < RESCAN_CHECK_INTERVAL_MS) {
-            return false;
-        }
-        int cur = currentClassCount();
-        return cur >= 0 && cur != lastClassCount;
-    }
-
-    private static int currentClassCount() {
-        try {
-            Instrumentation inst = AgentBridge.getInstrumentation();
-            if (inst != null) {
-                Class<?>[] all = inst.getAllLoadedClasses();
-                if (all != null) return all.length;
-            }
-        } catch (Throwable ignored) {}
-        return -1;
-    }
-
-    private static int scan() {
-        Class<?>[] all = allLoadedClasses();
-        if (all == null || all.length == 0) return -1;
-        Map<Class<?>, List<FieldHandle>> fresh = new ConcurrentHashMap<>();
-        int hits = 0;
-        for (Class<?> clazz : all) {
-            if (HealthSelfFilter.isOwnClass(clazz.getName())) continue;   // 本模组记账 map 不是藏血 map
-            try {
-                for (Field f : clazz.getDeclaredFields()) {
-                    if (f.isSynthetic() || !Modifier.isStatic(f.getModifiers())) continue;
-                    if (!Map.class.isAssignableFrom(f.getType())) continue;
-                    Class<?> keyClass = keyClassOf(f);
-                    Class<?> valClass = valClassOf(f);
-                    if (keyClass == null || valClass == null) continue;
-                    if (!Entity.class.isAssignableFrom(keyClass)) continue;   // K 是实体
-                    if (!Number.class.isAssignableFrom(valClass)) continue;   // V 是数值
-                    FieldHandle h = FieldHandle.of(f);
-                    if (h == null) continue;
-                    fresh.computeIfAbsent(keyClass, k -> new ArrayList<>()).add(h);
-                    hits++;
-                    LOGGER.info("[HealthMap] 识别藏血 Map: {} -> {}", keyClass.getName(), h.describe());
-                }
-            } catch (Throwable ignored) {}
-        }
-        HEALTH_MAPS = fresh;   // 原子交换，避免清空/重填期间读竞态
-        LOGGER.info("[HealthMap] 藏血 Map 扫描完成，命中 {} 个", hits);
-        return all.length;
-    }
-
-    private static Class<?>[] allLoadedClasses() {
-        try {
-            Instrumentation inst = AgentBridge.getInstrumentation();
-            if (inst != null) return inst.getAllLoadedClasses();
-        } catch (Throwable ignored) {}
-        return null;
-    }
-
-    /** 读字段泛型 K（实体 key 类型）；非具体类（TypeVariable/Wildcard）返回 null。 */
-    private static Class<?> keyClassOf(Field f) {
-        Type gt = f.getGenericType();
-        if (!(gt instanceof ParameterizedType pt)) return null;
-        Type[] args = pt.getActualTypeArguments();
-        if (args == null || args.length != 2) return null;
-        return toClass(args[0]);
-    }
-
-    /** 读字段泛型 V（血量 value 类型）；非具体类返回 null。 */
-    private static Class<?> valClassOf(Field f) {
-        Type gt = f.getGenericType();
-        if (!(gt instanceof ParameterizedType pt)) return null;
-        Type[] args = pt.getActualTypeArguments();
-        if (args == null || args.length != 2) return null;
-        return toClass(args[1]);
-    }
-
-    private static Class<?> toClass(Type t) {
-        return t instanceof Class<?> c ? c : null;
+    /**
+     * 藏血 Map 判据的枚举结果：全类路径枚举与「静态 Map + K=实体类 + V=数值」的泛型判据
+     * 已统一挪到 {@link HealthDiscovery}（三处发现器共享一次枚举、跑在后台线程、只缓存字段句柄）。
+     *
+     * <p>这里只读最新快照，<b>不再自己枚举类表</b>——原先每次攻击都可能触发
+     * {@code getAllLoadedClasses()} + 逐类逐字段 {@code getGenericType()}，是首击 1~3 秒的主因。
+     * 发现范围不变：仍是全类路径、仍按类数量变化重扫（节流在 {@code HealthDiscovery} 里）。</p>
+     */
+    private static Map<Class<?>, List<FieldHandle>> healthMaps() {
+        HealthDiscovery.Snapshot snap = HealthDiscovery.current();
+        return snap == null ? NO_MAPS : snap.healthMaps();
     }
 
     // ==================== 判定 + 篡改 ====================
@@ -170,9 +73,8 @@ public final class HealthMapRegistry {
     public static List<FieldHandle> resolveHealthMaps(LivingEntity entity) {
         List<FieldHandle> result = new ArrayList<>();
         if (entity == null) return result;
-        ensureScanned();
         int bestDepth = -1;
-        for (Map.Entry<Class<?>, List<FieldHandle>> e : HEALTH_MAPS.entrySet()) {
+        for (Map.Entry<Class<?>, List<FieldHandle>> e : healthMaps().entrySet()) {
             if (!e.getKey().isInstance(entity)) continue;
             int depth = entityDepth(e.getKey());
             if (depth > bestDepth) {

@@ -272,6 +272,14 @@ public class tizMod {
         } catch (Throwable t) {
             LOGGER.warn("Agent 加载跳过（不影响血量扫描体系）: {}", t.getMessage());
         }
+        // 藏血发现扫描预热：全类路径枚举一次（约 1~3 秒）挪到后台，别留给首次攻击
+        try {
+            net.minecraft.client.yiz.tool.health.HealthDiscovery.warmupAsync();
+        } catch (Throwable ignored) {}
+        // 通道 id 自检：把 Entity 各通道的实际 id 打出来（类池被外部改动时点名重复项，只读不改）
+        try {
+            net.minecraft.client.yiz.tool.health.SyncedDataSupport.auditEntityChannelIds();
+        } catch (Throwable ignored) {}
     }
 
     /** 生物原型：数据包加载入口（data/&lt;ns&gt;/yiz_creature/*.json），/reload 时重建数据包轨。 */
@@ -283,6 +291,10 @@ public class tizMod {
     @SubscribeEvent
     public void onServerStarting(ServerStartingEvent event) {
         LOGGER.debug("YizMod QZK 服务端启动");
+        // 藏血发现扫描预热（幂等）：进存档前就把全类路径枚举跑在后台，首击不再卡 1~3 秒
+        try {
+            net.minecraft.client.yiz.tool.health.HealthDiscovery.warmupAsync();
+        } catch (Throwable ignored) {}
         // 全量扫描物品功能（服务端权威，写 items.json 缓存）
         net.minecraft.client.yiz.itemcfg.ItemFeatureDiscoverer.scanAll();
         // 万能物品配置：VTable donors 初始化 + 全局废除（abolish.json）应用
