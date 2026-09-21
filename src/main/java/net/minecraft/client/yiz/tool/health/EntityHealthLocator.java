@@ -698,8 +698,14 @@ public final class EntityHealthLocator {
                 if (isRealHealthField(entity, f, delta, true)) {
                     // 累加器型（inverse）：找等值镜像字段（lastAcc 类）配对，直写时同步写
                     String pair = findMirrorPairField(entity, f);
-                    String meta = pair != null ? "pair=" + pair : "";
-                    return new HealthSlot(stableClassName(entity.getClass()), f.getName(), typeName(f), true, "field", meta);
+                    // ★ 上限 B 必须在这里记下来（= maxHp）：反向槽写回是 store = B − 逻辑血量。
+                    //   不记 B 就只能运行时自推导（存储值 + getHealth()）——只要两者瞬时不一致
+                    //   （刚写完累加器 / attributesReady() 为 false 时 getHealth 读的是 vanilla 通道 /
+                    //   实体正处于回血与扣血之间），B 就会算错，写回落到错误的累加器值上。
+                    //   accessor 反向槽（naccessor）一直记 b=maxHp，field 反向槽此前漏了，补齐。
+                    StringBuilder meta = new StringBuilder("b=").append(entity.getMaxHealth());
+                    if (pair != null) meta.append(";pair=").append(pair);
+                    return new HealthSlot(stableClassName(entity.getClass()), f.getName(), typeName(f), true, "field", meta.toString());
                 }
             }
         } finally {
@@ -1182,19 +1188,62 @@ public final class EntityHealthLocator {
     }
 
     /**
-     * 反向映射槽的上限 B（逻辑血量 = B − 存储值）。优先读 meta {@code b}（检测时写入 = maxHp，
-     * 确定性、免疫 delta 软压）；缺省回退 {@code B = 存储值 + getHealth()}（与 field 反向槽同款推导）。
+     * 反向映射槽的上限 B（逻辑血量 = B − 存储值）。
+     *
+     * <p>优先级：meta {@code b}（检测时写入 = maxHp，确定性）→ {@code getMaxHealth()}（同样是确定性的
+     * 属性上限，且已有的 field 反向槽历史上就是按 maxHp 记的）→ {@code B = 存储值 + getHealth()}。</p>
+     *
+     * <p>⚠️ 最后那条自推导依赖「存储值与 getHealth() 此刻一致」：我们刚写完累加器、或实体进入
+     * {@code attributesReady()==false} 让 getHealth() 退回 vanilla 通道时都不一致，B 会算错 →
+     * 写回落到错误的存储值上。所以它只作最后兜底，不再作首选。</p>
      */
     private static double inverseBase(HealthSlot slot, LivingEntity entity, double channelValue) {
         String bStr = metaGet(slot.meta(), "b");
         if (bStr != null) {
             try {
                 double b = Double.parseDouble(bStr);
-                if (Double.isFinite(b)) return b;
+                if (Double.isFinite(b) && b > 0) return b;
             } catch (NumberFormatException ignored) {}
         }
+        try {
+            double maxHp = entity.getMaxHealth();
+            if (Double.isFinite(maxHp) && maxHp > 0) return maxHp;
+        } catch (Throwable ignored) {}
         double h = entity.getHealth();
         return (Double.isFinite(h) && h > 0) ? channelValue + h : channelValue;
+    }
+
+    // ==================== 反向累加器槽的重写（钉住）====================
+
+    /** 当前实体的定位槽是不是「反向（累加器/计数器）槽」——血量 = B − 存储值，写回必须走同一字段。 */
+    public static boolean isInverseLocatedSlot(LivingEntity entity) {
+        try {
+            HealthSlot slot = locate(entity);
+            return slot != null && slot.inverse();
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * 把定位到的反向槽重写成「逻辑血量 = logical」并回读确认。
+     *
+     * <p>用途：这类实体的血量权威就是那一个字段，第三方自己回血（例如
+     * {@code heal() → 字段 -= amount}）也是改同一个字段 —— 于是「写回对抗」不需要去猎门控，
+     * 直接把这个字段再写一遍即可把值钉回去。</p>
+     *
+     * @return true = 重写后回读到的逻辑血量已经贴近目标（±1.0）
+     */
+    public static boolean reassertLocatedSlot(LivingEntity entity, double logical) {
+        if (entity == null || entity.level().isClientSide()) return false;
+        try {
+            if (!isInverseLocatedSlot(entity)) return false;
+            writeLocated(entity, logical);
+            Double back = readLocated(entity);
+            return back != null && Math.abs(back - logical) <= 1.0;
+        } catch (Throwable t) {
+            return false;
+        }
     }
 
     // ==================== 反射工具 ====================

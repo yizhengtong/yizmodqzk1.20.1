@@ -138,8 +138,15 @@ public final class VitalitySeveranceHandler {
 
     /**
      * 字段级绝妄生机强制：对已绝妄生机目标，用 {@link EntityHealthLocator} 定位真实血量字段，
-     * 检测「回血方向」变化（inverse 型字段减少 / 正向型字段增加 = 回血）→ 反射写回基线抵消。
-     * 由实体每 ~10 tick 与 enforceTick 一起调用。
+     * 检测「回血方向」变化 → 反射写回基线抵消。
+     *
+     * <p>⚠️ <b>回血判据只看逻辑血量是否变高</b>：{@link EntityHealthLocator#readLocated} 返回的已经是
+     * <b>逻辑血量</b>（反向/编码槽都已换算过），与槽本身是否 inverse 无关。
+     * 生产事故：这里曾写成 {@code slot.inverse() ? (cur < prev) : (cur > prev)} —— 对「累加器型」
+     * （血量 = B − 存储值）正好判反：<b>我们自己的扣血被当成回血抵消回去，而 boss 的真回血被当成
+     * "没变化"放行</b>。表现就是「首次能正常改血，之后永远锁死在首次改完的值」——因为第一刀时
+     * 还没有禁疗配置（config == null 直接 return），写进去的值生效；从第二刀起禁疗已生效，
+     * 每一次扣血都会被这里按"回血"回滚到改前的值。</p>
      */
     public static void enforceFieldTick(LivingEntity entity) {
         var config = VitalitySeveranceConfig.get(entity);
@@ -158,13 +165,35 @@ public final class VitalitySeveranceHandler {
         Number prev = FIELD_SNAPSHOTS.get(entity.getUUID());
         if (prev != null) {
             double prevVal = prev.doubleValue();
-            boolean healed = slot.inverse() ? (curVal < prevVal) : (curVal > prevVal);
+            // 逻辑血量升高 = 回血（无论存储方向如何）→ 写回基线抵消；降低 = 我们/别处的扣血 → 接受并推进基线（棘轮）
+            boolean healed = curVal > prevVal + 0.0001;
             if (healed) {
                 EntityHealthLocator.writeLocated(entity, prevVal);
                 curVal = prevVal;
             }
         }
         FIELD_SNAPSHOTS.put(entity.getUUID(), curVal);
+    }
+
+    /**
+     * 反向累加器槽的每 tick 轻量棘轮：只有「已禁疗 + 命中槽是反向槽」的实体才继续往下走
+     * （其余实体第一次判断就返回，成本 = 一次 map 查 + 一次字段读）。
+     *
+     * <p>为什么需要它：这类实体的回血是<b>每 tick</b> 改同一个字段（如
+     * {@code heal() → totalDamageTaken -= amount}），而 {@link #enforceFieldTick} 走的是
+     * {@code tickCount % 10} 的周期项 —— 10 tick 窗口内「扣血 → 回血」可能已经来回一轮，
+     * 周期快照只看到"没变化"。每 tick 棘轮保证扣下去的值不会被回血悄悄抬回去。</p>
+     */
+    public static void enforceFieldFastTick(LivingEntity entity) {
+        if (VitalitySeveranceConfig.get(entity) == null) return;
+        Number prev = FIELD_SNAPSHOTS.get(entity.getUUID());
+        if (prev == null) return;                       // 基线还没建立 → 交给周期项建立
+        if (!EntityHealthLocator.isInverseLocatedSlot(entity)) return;
+        Double cur = EntityHealthLocator.readLocated(entity);
+        if (cur == null) return;
+        if (cur.doubleValue() > prev.doubleValue() + 0.0001) {
+            EntityHealthLocator.writeLocated(entity, prev.doubleValue());
+        }
     }
 
     /**

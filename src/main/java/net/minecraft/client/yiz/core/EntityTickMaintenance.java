@@ -49,6 +49,11 @@ public final class EntityTickMaintenance {
             VitalitySeveranceHandler.enforceTick(entity);
             VitalitySeveranceHandler.enforceFieldTick(entity);
             HealthWriteGuard.enforce(entity);
+        } else {
+            // 每 tick 的反向累加器棘轮（只对「已禁疗 + 命中反向槽」的实体有实际动作，
+            // 其余实体一次 map 查就返回）：这类实体的回血是每 tick 改同一个字段，
+            // 10 tick 的周期窗口会把「扣血→回血」看成"没变化"。
+            VitalitySeveranceHandler.enforceFieldFastTick(entity);
         }
     }
 }
