@@ -26,13 +26,22 @@ public final class HealthChannelScanner {
 
     private static final EntityDataAccessor<Float> VANILLA_HEALTH_ACCESSOR = initVanillaHealthAccessor();
 
-    @SuppressWarnings("unchecked")
+    /**
+     * 原版血量通道解析（<b>必须走映射无关的解析</b>）。
+     *
+     * <p>⚠️ 反射用的字符串常量不会被 reobf 重映射：开发环境字段叫 {@code DATA_HEALTH_ID}，
+     * 生产环境叫 {@code f_20961_}。这里原本只写 official 名 → 生产解析失败返回 {@code null}；
+     * 而调用方（{@code YizxianMob.enforceSecureHealthState} 的 Float 通道清零循环）拿到 null 后
+     * <b>失去「跳过 vanilla 血量通道」的守卫</b>，于是每 tick 把真实血量写进通道后又被清零 ——
+     * 表现正是「生产环境其它模组看不到血量变化、开发环境正常」。</p>
+     *
+     * <p>统一委托 {@link DirectHealthFallback#VANILLA_HEALTH_ACCESSOR}（official 名 → SRG 名 →
+     * 「LivingEntity 里唯一的 static EntityDataAccessor&lt;Float&gt;」三级解析），让全模组只有一处解析口径。</p>
+     */
     private static EntityDataAccessor<Float> initVanillaHealthAccessor() {
         try {
-            Field f = LivingEntity.class.getDeclaredField("DATA_HEALTH_ID");
-            f.setAccessible(true);
-            return (EntityDataAccessor<Float>) f.get(null);
-        } catch (Exception ignored) {
+            return DirectHealthFallback.VANILLA_HEALTH_ACCESSOR;
+        } catch (Throwable t) {
             return null;
         }
     }

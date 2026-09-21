@@ -74,7 +74,10 @@ public final class DirectHealthFallback {
             try {
                 Field f = LivingEntity.class.getDeclaredField(name);
                 f.setAccessible(true);
-                return (EntityDataAccessor<Float>) f.get(null);
+                EntityDataAccessor<Float> acc = (EntityDataAccessor<Float>) f.get(null);
+                net.minecraft.client.yiz.tizMod.LOGGER.info(
+                    "[HealthChannel] 原版血量通道解析成功: {} (id={})", name, acc == null ? -1 : acc.getId());
+                return acc;
             } catch (Exception ignored) {}
         }
         // 兜底：按类型找 static EntityDataAccessor<Float> 字段
@@ -84,10 +87,19 @@ public final class DirectHealthFallback {
                 if (EntityDataAccessor.class.isAssignableFrom(f.getType())
                         && f.getGenericType().getTypeName().contains("Float")) {
                     f.setAccessible(true);
-                    return (EntityDataAccessor<Float>) f.get(null);
+                    EntityDataAccessor<Float> acc = (EntityDataAccessor<Float>) f.get(null);
+                    net.minecraft.client.yiz.tizMod.LOGGER.info(
+                        "[HealthChannel] 原版血量通道按类型兜底解析成功: {} (id={})",
+                        f.getName(), acc == null ? -1 : acc.getId());
+                    return acc;
                 }
             }
         } catch (Exception ignored) {}
+        // 解析失败必须吼出来：调用方拿到 null 会静默退化（跳过守卫/不回写显示通道），
+        // 这类"只在生产复现"的静默退化极难从现象反推，留一条醒目日志。
+        net.minecraft.client.yiz.tizMod.LOGGER.warn(
+            "[HealthChannel] ⚠ 原版血量通道解析失败（DATA_HEALTH_ID / f_20961_ / 类型兜底全落空）"
+                + "→ 血量通道回写与「跳过 vanilla 通道」的守卫都会失效（表现为对外血量不刷新）");
         return null;
     }
 

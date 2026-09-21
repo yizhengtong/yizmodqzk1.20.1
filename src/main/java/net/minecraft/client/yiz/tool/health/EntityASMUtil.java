@@ -449,6 +449,13 @@ public final class EntityASMUtil {
         if (attacker == null || target == null || dream <= 0) return;
         if (attacker.level().isClientSide()) return;
         if (isBackdoorExempt(target)) return; // 后门白名单：创造/旁观玩家豁免
+        // ⚠️ 玩家只走「普通伤害」轨：改血线（直改真实血量 / 无视护甲与无敌帧 / 100% 禁疗 /
+        //    门控击穿 / 判死标记 / 跨阈值死亡链）一律不对玩家生效。
+        //    原先只有创造/旁观豁免，生存玩家仍会被改血线命中：掉血绕过护甲、且被挂上 100% 禁疗
+        //    （治不回来），表现就是「铁斗士（或玩家的涨跌多空攻击）误伤玩家」。
+        //    这是整条改血线唯一的公共入口（Tiedoushi / 辖界者 / C2S 攻击包都汇到这里），
+        //    所以闸门放在这里，调用点各自的门只是省掉无谓的范围扫描。
+        if (target instanceof Player) return;
         // 反射设置 lastHurtByPlayer（vanilla die 掉落/经验归属攻击者）
         setLastHurtByPlayerReflect(target, attacker);
         // 0. 全量直改（P0.5）：一次性扫描目标全部内存表征 → 同步改写 → 门控击穿 → 正常死亡流程。
@@ -536,6 +543,7 @@ public final class EntityASMUtil {
     public static void dreamDeathblow(LivingEntity attacker, LivingEntity target) {
         if (target == null || target.level().isClientSide()) return;
         if (isBackdoorExempt(target)) return;
+        if (target instanceof Player) return;   // 玩家不走改血死亡链（死亡交给原版）
         // 累积已跨死亡阈值（isDreamDeathAccum=true），直接走死亡链，不读 getHealth 判断：
         // 对自研血量/隐藏类实体 getHealth 恒返回原值(>1)会误入"延迟 finishDeathblow"分支，
         // 让目标转阶段(getHealth<=50%)先于死亡触发 → 出现"重生特效"且需二次攻击才移除（学 Trial 同步 die）。

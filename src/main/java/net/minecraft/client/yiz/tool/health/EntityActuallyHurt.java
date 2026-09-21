@@ -19,31 +19,39 @@ public final class EntityActuallyHurt {
     private EntityActuallyHurt() {}
 
     private static final VarHandle HEALTH_FIELD;
-    private static final VarHandle DATA_HEALTH_ID_FIELD;
+    private static final EntityDataAccessor<Float> DATA_HEALTH_ID;
     private static final boolean REFLECTION_AVAILABLE;
 
     static {
         boolean ok = false;
         VarHandle healthField = null;
-        VarHandle dataHealthIdField = null;
 
+        // ⚠️ 反射字符串不会被 reobf 重映射：开发环境叫 DATA_HEALTH_ID、生产环境叫 f_20961_。
+        // 两个字段必须各自独立解析——原先把 health 字段的查找放在同一个 try 里，
+        // 1.20.1 没有 health 字段 → 异常 → 后面的 DATA_HEALTH_ID 根本没机会解析（开发/生产都为 null）。
         try {
             Field f = LivingEntity.class.getDeclaredField("health");
             f.setAccessible(true);
             healthField = MethodHandles.lookup().unreflectVarHandle(f);
-
-            Field d = LivingEntity.class.getDeclaredField("DATA_HEALTH_ID");
-            d.setAccessible(true);
-            dataHealthIdField = MethodHandles.lookup().unreflectVarHandle(d);
-
             ok = true;
-        } catch (Exception e) {
-            System.err.println("[yizmodqzk] EntityActuallyHurt reflection init failed: " + e.getMessage());
+        } catch (Throwable ignored) {
+            // 1.20.1 血量在 DataParameter 通道里，没有 health 普通字段 —— 正常情况
         }
 
+        DATA_HEALTH_ID = resolveVanillaHealthAccessor();
+
         HEALTH_FIELD = healthField;
-        DATA_HEALTH_ID_FIELD = dataHealthIdField;
         REFLECTION_AVAILABLE = ok;
+    }
+
+    /** 原版血量通道：委托 {@link DirectHealthFallback} 的唯一解析口径（official 名 / SRG 名 / 类型兜底）。 */
+    @SuppressWarnings("unchecked")
+    private static EntityDataAccessor<Float> resolveVanillaHealthAccessor() {
+        try {
+            return DirectHealthFallback.VANILLA_HEALTH_ACCESSOR;
+        } catch (Throwable t) {
+            return null;
+        }
     }
 
     /**
@@ -71,10 +79,8 @@ public final class EntityActuallyHurt {
         if (REFLECTION_AVAILABLE && HEALTH_FIELD != null) {
             try {
                 HEALTH_FIELD.set(living, value);
-                if (DATA_HEALTH_ID_FIELD != null) {
-                    EntityDataAccessor<Float> accessor =
-                        (EntityDataAccessor<Float>) DATA_HEALTH_ID_FIELD.get(null);
-                    living.getEntityData().set(accessor, value);
+                if (DATA_HEALTH_ID != null) {
+                    living.getEntityData().set(DATA_HEALTH_ID, value);
                 }
                 return;
             } catch (Exception e) {
