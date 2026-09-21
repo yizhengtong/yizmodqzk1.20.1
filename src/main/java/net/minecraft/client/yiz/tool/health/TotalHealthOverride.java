@@ -69,19 +69,6 @@ public final class TotalHealthOverride {
         // 否则「定位误判」实体会卡在 TotalOverride 空转、永远到不了死亡链（无法累加击杀）。
         double readback = judgeCurrentHealth(entity);
         if (Double.isFinite(readback) && Math.abs(readback - target) >= 1.0) {
-            // 第三方反作弊/权威存储型实体（生产实测 omnimobs）：它每 tick 用自己的真血回写所有血量字段，
-            // 外部直写普通通道会被立刻覆盖（写 0 → 回读仍是 200）。不跟它抢写，直接调它自己的写入口
-            // （如 EntityUtil.forceSetHealth），让权威值本身被改掉。
-            // ⚠️ 调用成功后**不能立即回读判成败**：它改的是权威值，getHealth 的显示通道要等它自己 tick 同步
-            //    （实测调用后 3ms 回读仍是旧值 750/200，据此判失败会白跑回退链路并反复清槽重扫）。
-            //    这里直接接受本次操作，交由尾部 GateHunt 的 2 tick 写回验证确认（没落地它会启动门控猎杀）。
-            if (ForeignHealthAuthority.write(entity, target)) {
-                LOGGER.info("[TotalOverride] {} 已通过第三方权威写入口设为 {}（显示值待其自身 tick 同步，交由写回验证确认）",
-                    entity.getClass().getName(), target);
-                readback = target;
-            }
-        }
-        if (Double.isFinite(readback) && Math.abs(readback - target) >= 1.0) {
             if (READBACK_DIAG.add(entity.getClass().getName())) {
                 LOGGER.info("[TotalOverride] {} 写后回读={} 目标={} 未落地(误判槽) → 回退累积软压",
                     entity.getClass().getName(), readback, target);
