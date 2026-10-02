@@ -217,6 +217,8 @@ public class tizMod {
         net.minecraft.client.yiz.tool.YizFxCommand.register();
         // 物品描边指令（/yiz mb <0-5> 给主手物品加描边）
         net.minecraft.client.yiz.tool.YizOutlineCommand.register();
+        // 体积火焰测试指令（/yiz flame wall|ring|rope|burning|off）
+        net.minecraft.client.yiz.tool.YizFlameCommand.register();
         // 每实例效果开关指令（/yiz eff，隔离模型测试）
         net.minecraft.client.yiz.tool.YizEffectCommand.register();
         // 诊断日志开关指令（/yiz diag，集中开关排查日志）

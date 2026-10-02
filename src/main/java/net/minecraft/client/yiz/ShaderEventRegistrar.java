@@ -25,7 +25,13 @@ public final class ShaderEventRegistrar {
 
     @SubscribeEvent
     public static void onRegisterShaders(RegisterShadersEvent event) throws IOException {
+        // 先声明（纯登记，不碰 event），让保护注册表统一注册并做 Iris 兼容；
+        // 实例由 FlameShaders.flame() 在首帧惰性取用（事件期间 registerShader 只是排队）
+        net.minecraft.client.yiz.flame.render.FlameShaders.declareProtected();
+        // 贴模型火焰（"着火"贴实体实际模型）：同一套声明式注册，单独一个 shader + RenderType
+        net.minecraft.client.yiz.flame.render.FlameSurfaceShaders.declareProtected();
         ShaderProtectionRegistry.onRegisterShaders(event);
+
         LightningShaders.onRegisterShaders(event);
         net.minecraft.client.yiz.client.render.LockOutlineShaders.onRegisterShaders(event);
     }

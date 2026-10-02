@@ -36,6 +36,8 @@ public final class LightningShaders extends RenderType {
             ResourceLocation.fromNamespaceAndPath("yizmodqzk", "rendertype_lightning_spark");
     private static final ResourceLocation SURFACE_ID =
             ResourceLocation.fromNamespaceAndPath("yizmodqzk", "rendertype_lightning_surface");
+    private static final ResourceLocation MODEL_ARC_ID =
+            ResourceLocation.fromNamespaceAndPath("yizmodqzk", "rendertype_lightning_modelarc");
 
     private static final VertexFormat FMT = DefaultVertexFormat.POSITION_TEX_COLOR;
 
@@ -45,6 +47,10 @@ public final class LightningShaders extends RenderType {
     public static ShaderInstance surface;
     /** 体表闪电表面 RenderType（NEW_ENTITY 格式 + 加法混合 + LEQUAL 深度贴附模型表面）。 */
     public static RenderType surfaceType;
+    /** 围绕实体的游离弧（模型几何驱动）着色器：几何同样来自模型双写，观感见 {@code rendertype_lightning_modelarc.fsh}。 */
+    public static ShaderInstance modelArc;
+    /** 游离弧的 RenderType（与 surfaceType 同族：NEW_ENTITY + 加法 + LEQUAL + 不剔除）。 */
+    public static RenderType modelArcType;
 
     private LightningShaders(String name, VertexFormat format, VertexFormat.Mode mode,
                              int bufferSize, boolean affectsCrumbling, boolean sortOnUpload,
@@ -64,6 +70,10 @@ public final class LightningShaders extends RenderType {
                     s -> { surface = s;
                            surfaceType = createSurfaceType(() -> surface);
                            LOGGER.info("Lightning surface shader loaded"); });
+            event.registerShader(new ShaderInstance(event.getResourceProvider(), MODEL_ARC_ID, DefaultVertexFormat.NEW_ENTITY),
+                    s -> { modelArc = s;
+                           modelArcType = createModelArcType(() -> modelArc);
+                           LOGGER.info("Lightning model-arc shader loaded"); });
         } catch (IOException e) {
             LOGGER.error("Failed to load lightning shaders", e);
         }
@@ -99,6 +109,41 @@ public final class LightningShaders extends RenderType {
                         .setWriteMaskState(COLOR_WRITE).setCullState(NO_CULL)
                         .setDepthTestState(new DepthTestStateShard("<=", 515)).setTransparencyState(additive)
                         .setOutputState(ITEM_ENTITY_TARGET)
+                        .createCompositeState(false));
+    }
+
+    /**
+     * 游离弧表面 RenderType：与 {@link #createSurfaceType} 同族（NEW_ENTITY + 加法 + {@code <=} + 不剔除），
+     * 只换着色器（弧更细更碎、颜色由 {@code uArcColor} 给）。
+     *
+     * <p><b>输出目标用 {@code MAIN_TARGET}（空实现）而不是 {@code ITEM_ENTITY_TARGET}</b>：
+     * 本层由模型几何镜像驱动，驱动在刷帧前已经保证"当前渲染目标是主渲染目标"；
+     * 而 {@code ITEM_ENTITY_TARGET} 在「极佳 Fabulous」画质下会把几何送进 entity 轮廓 FBO
+     * （{@code RenderStateShard.java:224-234}）—— 那是给原版附魔光效用的目标，特效画进去就看不见了。</p>
+     */
+    private static RenderType createModelArcType(Supplier<ShaderInstance> shader) {
+        ShaderStateShard shaderState = new ShaderStateShard(shader);
+        TransparencyStateShard additive = new TransparencyStateShard("lightning_modelarc_additive",
+                () -> {
+                    com.mojang.blaze3d.systems.RenderSystem.enableBlend();
+                    com.mojang.blaze3d.systems.RenderSystem.blendFuncSeparate(
+                            com.mojang.blaze3d.platform.GlStateManager.SourceFactor.SRC_ALPHA,
+                            com.mojang.blaze3d.platform.GlStateManager.DestFactor.ONE,
+                            com.mojang.blaze3d.platform.GlStateManager.SourceFactor.ONE,
+                            com.mojang.blaze3d.platform.GlStateManager.DestFactor.ONE);
+                },
+                () -> {
+                    com.mojang.blaze3d.systems.RenderSystem.disableBlend();
+                    com.mojang.blaze3d.systems.RenderSystem.defaultBlendFunc();
+                });
+        return create("lightning_modelarc",
+                DefaultVertexFormat.NEW_ENTITY,
+                VertexFormat.Mode.QUADS, 1536, false, false,
+                CompositeState.builder()
+                        .setShaderState(shaderState)
+                        .setWriteMaskState(COLOR_WRITE).setCullState(NO_CULL)
+                        .setDepthTestState(new DepthTestStateShard("<=", 515)).setTransparencyState(additive)
+                        .setOutputState(MAIN_TARGET)
                         .createCompositeState(false));
     }
 }

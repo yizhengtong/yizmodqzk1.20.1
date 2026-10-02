@@ -12,6 +12,7 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.yiz.api.TargetFrameManager;
 import net.minecraft.client.yiz.api.TargetFrameProvider;
+import net.minecraft.client.yiz.modelmirror.RenderStateSnapshot;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
@@ -95,31 +96,38 @@ public final class EntityLockRenderer {
         if (tex == null) tex = CORNER_TEX;
 
         PoseStack ps = event.getPoseStack();
-        // 四角锁定框 + 中心标记（用专用 BufferBuilder，避免共享 Tesselator 与世界渲染冲突）
-        float[][] corners = {{-hs, hs}, {hs, hs}, {hs, -hs}, {-hs, -hs}};
-        for (int i = 0; i < 4; i++) {
-            Vec3 worldPos = bodyCenter.add(r.scale(corners[i][0])).add(u.scale(corners[i][1]));
+        // ── 状态快照 → try/finally 全量还原 ──
+        // 本渲染器改「0 号纹理单元 + 着色器颜色（充能透明度）+ 混合/深度测试/剔除」。
+        // 旧写法结尾是"把纹理设成 tex[0]、颜色设成 (1,1,1,1)"这种**强制默认值**而不是"进来时的原值"：
+        // 若它跑在别人（例如体表特效 pass / 描边后处理）留下的状态之上，就会把对的纹理/染色的原值冲掉，
+        // 后续渲染拿着错的 Sampler0 采样 → 黑屏/花屏，而且不会自愈。这里改成快照整份还回。
+        // （说明：本类当前**没有**被注册到事件总线——会心/渴攻的目标框实际由 LockOutlineRenderer 负责；
+        //  这里按同一规范处理，避免以后一旦接回去就踩这个坑。）
+        RenderStateSnapshot snapshot = RenderStateSnapshot.capture();
+        try {
+            // 四角锁定框 + 中心标记（用专用 BufferBuilder，避免共享 Tesselator 与世界渲染冲突）
+            float[][] corners = {{-hs, hs}, {hs, hs}, {hs, -hs}, {-hs, -hs}};
+            for (int i = 0; i < 4; i++) {
+                Vec3 worldPos = bodyCenter.add(r.scale(corners[i][0])).add(u.scale(corners[i][1]));
+                ps.pushPose();
+                ps.translate(worldPos.x - camPos.x, worldPos.y - camPos.y, worldPos.z - camPos.z);
+                ps.mulPose(camera.rotation());
+                RenderSystem.setShaderTexture(0, tex[i]);
+                RenderSystem.setShaderColor(1f, 1f, 1f, alpha);
+                drawBillboardQuad(ps, CORNER_TEX_SIZE);
+                ps.popPose();
+            }
+            // 中心标记点
             ps.pushPose();
-            ps.translate(worldPos.x - camPos.x, worldPos.y - camPos.y, worldPos.z - camPos.z);
+            ps.translate(bodyCenter.x - camPos.x, bodyCenter.y - camPos.y, bodyCenter.z - camPos.z);
             ps.mulPose(camera.rotation());
-            RenderSystem.setShaderTexture(0, tex[i]);
+            RenderSystem.setShaderTexture(0, tex[0]);
             RenderSystem.setShaderColor(1f, 1f, 1f, alpha);
-            drawBillboardQuad(ps, CORNER_TEX_SIZE);
+            drawBillboardQuad(ps, 0.16f);
             ps.popPose();
+        } finally {
+            snapshot.restore("entity-lock");
         }
-        // 中心标记点
-        ps.pushPose();
-        ps.translate(bodyCenter.x - camPos.x, bodyCenter.y - camPos.y, bodyCenter.z - camPos.z);
-        ps.mulPose(camera.rotation());
-        RenderSystem.setShaderTexture(0, tex[0]);
-        RenderSystem.setShaderColor(1f, 1f, 1f, alpha);
-        drawBillboardQuad(ps, 0.16f);
-        ps.popPose();
-
-        RenderSystem.setShaderColor(1f, 1f, 1f, 1f);
-        RenderSystem.enableDepthTest();
-        RenderSystem.enableCull();
-        RenderSystem.disableBlend();
     }
 
     /** 正对摄像机画一个带纹理的四边形（专用 BufferBuilder，1.20.1）。 */

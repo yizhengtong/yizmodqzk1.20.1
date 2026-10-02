@@ -6,7 +6,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * 客户端感电状态机 — 维护"哪些实体正在感电"的持续状态（entityId → ShockedEntry）。
  *
  * <p>服务端 {@code S2CShockFxPayload}（kind=0/BURST 次目标）调 {@link #putClient} 注册感电实体；
- * {@code LivingEntityRendererSurfaceLightningMixin} 渲染时查 {@link #isShocked}/{@link #getFade}
+ * {@code LightningSurfaceLayer}（模型几何镜像的体表闪电消费者）渲染时查 {@link #isShocked}/{@link #getFade}
  * 决定是否叠加表面闪电 + 渐显渐隐。{@link #tick} 由 ClientTickEvent 每 tick 衰减，到期自动移除。</p>
  *
  * <p>渐隐机制：fade = min(elapsed/FADE, remaining/FADE)，前 FADE tick(=0.3s) 渐显、后 FADE tick 渐隐、中间满。</p>

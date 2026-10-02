@@ -38,10 +38,12 @@
   ],
   "client": [
     "LiquidBlockShapeMixin",
-    "LivingEntityRendererSurfaceLightningMixin",
     "ClientMultiJumpMixin",
     "ItemNbtTooltipMixin",
     "EntityRenderDispatcherOutlineMixin",
+    "EntityRenderDispatcherModelMirrorMixin",
+    "ItemRendererMirrorExclusionMixin",
+    "HumanoidArmorLayerMirrorExclusionMixin",
     "LivingEntityRendererLaunchTiltMixin",
     "PlayerRangeMixin"
   ],

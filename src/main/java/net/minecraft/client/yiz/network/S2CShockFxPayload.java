@@ -17,13 +17,16 @@ import java.util.function.Supplier;
  *
  * <p>两种事件（{@link #kind}）：
  * <ul>
- *   <li><b>0 = APPLY</b>：实体体表电弧 + surface 着色器叠加（带去重），持续 = durationTicks</li>
- *   <li><b>1 = BURST</b>：center→targetIds 链式闪电电弧（短寿命）。</li>
+ *   <li><b>0 = APPLY</b>：注册"这个实体正在感电"（持续时间 = durationTicks）→ 体表闪电由
+ *       {@code LightningSurfaceLayer}（模型几何镜像的 LIGHTNING 层，几何 = 实体模型本身）画出来；</li>
+ *   <li><b>1 = BURST</b>：center→targetIds 链式闪电电弧（短寿命，空气里的电弧）。</li>
  * </ul>
  *
- * <p>handle 侧做两件事：维护 {@link ShockedEntityAPI} 感电状态（实体带电发光由
- * {@code LivingEntityRendererSurfaceLightningMixin} 渲染），并把电弧几何交给
- * {@code LightningFX.spawnSurfaceArc/spawnArc} 绘制。</p>
+ * <p><b>分工</b>：<b>挂在实体身上的弧</b>（体表持续电流 + 命中瞬间游离弧）一律走模型几何镜像
+ * （几何 = 实体模型顶点双写，贴四肢/头部/盔甲轮廓）；只有<b>真正在空气里</b>的弧
+ * （两点之间的链式 / 球状闪电表面）才用 {@code LightningFX.spawnArc/spawnSurfaceArcOnBall}。
+ * kind=0 因此<b>不再</b>生成按包围盒算的 {@code SurfaceArcEffect} —— 那是"围着一个方盒子跳的电"，
+ * 本来就不贴模型；kind=1（链式）保留 {@code spawnArc}。</p>
  */
 public class S2CShockFxPayload {
 
@@ -66,29 +69,18 @@ public class S2CShockFxPayload {
             long nowMs0 = System.currentTimeMillis();
             if (nowMs0 - lastCleanupMs > 500L) {
                 lastCleanupMs = nowMs0;
-                SURFACE_ARC_EXPIRY.values().removeIf(exp -> exp < nowMs0);
-                CELL_SURFACE_EXPIRY.values().removeIf(exp -> exp < nowMs0);
                 ARC_PAIR_EXPIRY.values().removeIf(exp -> exp < nowMs0);
             }
 
-            float lifeSec = payload.durationTicks / 20f;
             if (payload.kind == 0) {
-                // APPLY：体表电流去重 + 注册感电状态 + 表面缠绕电弧（LightningFX.spawnSurfaceArc）
-                Long expiry = SURFACE_ARC_EXPIRY.get(payload.centerId);
-                long nowMs = System.currentTimeMillis();
-                if (expiry != null && nowMs < expiry) return;
-                SURFACE_ARC_EXPIRY.put(payload.centerId, nowMs + (long) (lifeSec * 1000));
-
-                Entity target = mc.level.getEntity(payload.centerId);
-                if (target == null) return;
-                // 同格去重：多个实体同格只渲染一份体表电流
-                long cell = cellKey(target.getX(), target.getY(), target.getZ());
-                Long cellExp = CELL_SURFACE_EXPIRY.get(cell);
-                if (cellExp != null && nowMs < cellExp) return;
-                CELL_SURFACE_EXPIRY.put(cell, nowMs + 500L);
-
-                net.minecraft.client.yiz.lightning.LightningFX.spawnSurfaceArc(
-                    target, Math.max(lifeSec, 1f), 0.028f, 0.4f, 0.6f, 1.0f);
+                // ── 两类闪电的分工（用户两次反馈之后的定案：「体表跳跃闪电没贴合模型」+「空气电弧也要跟着模型轮廓」）──
+                // ① 挂在实体身上的弧，全部走模型几何镜像（几何 = 实体模型双写，贴四肢/头部/盔甲轮廓）：
+                //    · LIGHTNING 层（LightningSurfaceLayer）＝ 持续感电的体表电流，由本分支注册的状态驱动；
+                //    · AIR_ARC 层（LightningAirArcLayer）＝ 命中瞬间的短寿命游离弧，由 LightningFX.spawnSurfaceArc 注册。
+                // ② 真正在空气里的弧 = LightningRenderer.ARCS（链式，两点折线）与
+                //    spawnSurfaceArcOnBall（球状闪电表面；球不是实体，没有模型可镜像）。
+                // 历史上 kind=0 会生成 SurfaceArcEffect（按<b>包围盒六个面</b>撒弧、还会跨 40~80% 面宽），
+                // 那正是"一圈围着脸的方盒子电"——已彻底不再用于实体。
                 ShockedEntityAPI.putClient(payload.centerId, payload.durationTicks);
             } else {
                 // BURST：链式电弧 — 逐段连接（高版本逻辑）：targetIds 逐段 spawnArc，最后连回中心
@@ -128,20 +120,11 @@ public class S2CShockFxPayload {
         ctx.get().setPacketHandled(true);
     }
 
-    /** 实体 ID → 体表电弧过期时间戳（ms），防重复堆积。 */
-    private static final ConcurrentHashMap<Integer, Long> SURFACE_ARC_EXPIRY = new ConcurrentHashMap<>();
-    /** 格子坐标(long) → 体表电弧过期时间戳，同格多实体只渲染一份。 */
-    private static final ConcurrentHashMap<Long, Long> CELL_SURFACE_EXPIRY = new ConcurrentHashMap<>();
     /** (fromId,toId) 无序配对 → 链式电弧过期时间戳，防密集 AoE 同一段电弧重复叠加。 */
     private static final ConcurrentHashMap<Long, Long> ARC_PAIR_EXPIRY = new ConcurrentHashMap<>();
     /** 链式电弧配对去重窗口（ms），与 BURST 电弧寿命 0.5s 一致。 */
     private static final long ARC_PAIR_EXPIRY_MS = 500L;
     private static long lastCleanupMs = 0L;
-
-    private static long cellKey(double x, double y, double z) {
-        int ix = (int) Math.floor(x), iy = (int) Math.floor(y), iz = (int) Math.floor(z);
-        return ((long)ix << 42) ^ ((long)iy << 21) ^ (long)iz;
-    }
 
     /** 两个实体 id 编码成无序配对 key（(a,b) 与 (b,a) 同 key）。 */
     private static long pairKey(int a, int b) {

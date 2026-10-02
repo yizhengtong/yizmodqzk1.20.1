@@ -9,16 +9,31 @@ import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.entity.EntityRenderer;
 import net.minecraft.client.yiz.api.OutlineRegistry;
+import net.minecraft.client.yiz.modelmirror.MirrorDiag;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.Entity;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 锁定描边双写缓冲（复刻 vanilla {@code OutlineBufferSource}）：
  * 当前渲染实体需要描边时，一次渲染同时写主缓冲（正常显示）+ 填充 FBO（穿墙纯色）。
  * fill RenderType 带实体纹理（纹理过滤）+ 绑 {@link LockOutlineFramebuffer}。
  * 由 {@code EntityRenderDispatcherOutlineMixin} 在实体渲染时 {@link #setCurrent} 驱动。
+ *
+ * <p><b>与 vanilla 的三处对齐</b>（都很关键，理由写在各处）：</p>
+ * <ol>
+ *   <li>只双写 {@code rt.outline().isPresent()}（= affects_outline）的 RenderType：影子/眼睛/贴花等
+ *       NONE 层不能进填充 FBO，否则描边会沿着"地上的影子方块"等非体表几何发光；</li>
+ *   <li>fill consumer 的 {@code defaultColor}/{@code unsetDefaultColor} 是空实现，描边色不会被
+ *       实体自身默认色覆盖；</li>
+ *   <li>fill 只在 {@code MultiBufferSource.BufferSource} 语义下攒批，flush 由
+ *       {@link #endFillBatch()} 驱动（fill RenderType 的 FILL_TARGET 负责"绑 FBO/交还主目标"）。</li>
+ * </ol>
  */
 public final class LockOutlineBufferSource implements MultiBufferSource {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger("YizModelMirror");
 
     private static LockOutlineBufferSource INSTANCE;
 
@@ -77,11 +92,26 @@ public final class LockOutlineBufferSource implements MultiBufferSource {
     @Override
     public VertexConsumer getBuffer(RenderType rt) {
         VertexConsumer normal = mainBufferSource.getBuffer(rt);
-        if (currentEntity != null && currentTexture != null && currentOutline != null) {
+        // ── 门禁（与 vanilla {@code OutlineBufferSource.getBuffer} 一字不差，{@code OutlineBufferSource.java:24-39}）──
+        // 只有 {@code outlineProperty == AFFECTS_OUTLINE} 的 RenderType 才参与描边填充：vanilla 的判据就是
+        // {@code rt.outline().isPresent()}（{@code RenderType.java:459} + {@code :495}，NONE 的返回 empty）。
+        // 漏掉这道门禁会出两类错几何：① 影子（{@code entity_shadow} = createCompositeState(false) → NONE）
+        // 是<b>贴地</b>的一整片四边形，被填进 FBO 后描边会沿着"地上的影子方块"发光；
+        // ② 眼睛/贴花/充能漩涡（eyes / entity_decal / energy_swirl，同样 NONE）等非体表层。
+        // 而且这些层的贴图/UV 与体表不同，填进 FBO 会让后处理的"邻域填充密度"算出一片乱纹
+        // （density≈0.5 的区域会整片变成本层的填充色，是整屏被"糊上一层色"的直接来源）。
+        if (currentEntity != null && currentTexture != null && currentOutline != null
+                && rt != null && rt.outline().isPresent()) {
             // 一次渲染双写：主缓冲正常 + fill 到 FBO（穿墙，顶点色覆盖为实体描边色）
             VertexConsumer fill = new FillColorConsumer(
                 fillBufferSource.getBuffer(LockOutlineRenderType.fill(currentTexture)), currentOutline);
             return VertexMultiConsumer.create(fill, normal);
+        }
+        if (currentEntity != null && currentOutline != null && rt != null
+                && MirrorDiag.first("lock:skipOutlineType:" + MirrorDiag.entity(currentEntity) + ":" + rt)) {
+            LOGGER.info("[LockOutline] 该 RenderType 不参与描边填充（非 affects_outline 层，与 vanilla 一致）: "
+                            + "entity={} renderType={}",
+                    MirrorDiag.entity(currentEntity), rt);
         }
         return normal;
     }
@@ -100,6 +130,20 @@ public final class LockOutlineBufferSource implements MultiBufferSource {
                 (int) (color[0] * 255f), (int) (color[1] * 255f),
                 (int) (color[2] * 255f), (int) (color[3] * 255f));
         }
+
+        /**
+         * <b>必须屏蔽</b>：{@code VertexMultiConsumer} 会把 {@code defaultColor(...)} 广播给每个下游
+         * consumer（{@code VertexMultiConsumer.java:85-93}），而 {@code DefaultedVertexConsumer.defaultColor}
+         * 会覆盖构造器里设好的 {@code defaultR/G/B/A} —— 于是"描边色"会被实体自己的默认色冲掉
+         * （vanilla 的 {@code EntityOutlineGenerator} 同样把这两个方法写成空实现，
+         * {@code OutlineBufferSource.java:66-70}，理由一致）。描边色只能来自本构造函数那一次设置。
+         */
+        @Override
+        public void defaultColor(int r, int g, int b, int a) {}
+
+        /** 同上：屏蔽"清默认色"（否则 endVertex 写出的颜色仍是构造器那份，语义上不该被外部改）。 */
+        @Override
+        public void unsetDefaultColor() {}
 
         @Override
         public VertexConsumer vertex(double x, double y, double z) { this.x = x; this.y = y; this.z = z; return this; }

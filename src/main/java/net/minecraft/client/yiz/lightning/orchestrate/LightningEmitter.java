@@ -78,7 +78,11 @@ public class LightningEmitter {
             PositionSupplier hit = PositionSupplier.offset(
                     PositionSupplier.following(t), 0, t.getBbHeight() * 0.5, 0);
             LightningFX.spawnArc(origin, hit, 0.35f, halfWidth, r, g, b);
-            LightningFX.spawnSurfaceArc(t, 2.5f, halfWidth, r, g, b);   // 命中后体表游离电弧 ~2.5s
+            // 命中瞬间"挂在目标身上"的游离弧：寿命与主电弧一致（0.35s）。
+            // 几何走模型几何镜像的 AIR_ARC 层（LightningAirArcLayer）—— 贴的是<b>实体模型自己的顶点</b>，
+            // 所以弧沿四肢/头部/盔甲轮廓跳，而不是"围着包围盒这个方盒子跳"（旧 SurfaceArcEffect 的行为）。
+            // 命中之后的持续体表表现仍归镜像层 LIGHTNING（由 ShockedEntityAPI 驱动）。
+            LightningFX.spawnSurfaceArc(t, 0.35f, halfWidth, r, g, b);
             if (SparkConfig.isHit()) {   // 命中爆点火花 8~12 颗
                 SparkSpawner.spawnHitBurst(hit.get(0f),
                         java.util.concurrent.ThreadLocalRandom.current().nextInt(),

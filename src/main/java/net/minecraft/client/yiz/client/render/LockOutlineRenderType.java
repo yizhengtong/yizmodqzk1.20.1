@@ -22,11 +22,17 @@ public class LockOutlineRenderType extends RenderType {
 
     /** 填充时切换到专用 FBO（fill flush 时绑定）；clear 切回主缓冲—— fill buffer 若中途自动刷帧
      *  （BufferBuilder 满触发 immediate.endBatch）也必须切回主缓冲，否则后续实体本体 normal 渲染
-     *  写进 FBO 而非主缓冲 → 实体本体不渲染、只剩描边（描边有但实体消失）。 */
+     *  写进 FBO 而非主缓冲 → 实体本体不渲染、只剩描边（描边有但实体消失）。
+     *
+     *  <p><b>两处都必须是"显式且带 viewport"的</b>：setup 用
+     *  {@link LockOutlineFramebuffer#bindForFill()}（{@code bindWrite(true)} —— 描边 FBO 的
+     *  viewport 必须按 FBO 尺寸设，否则 3D 填充几何会落在错误的裁剪区）；clear 用
+     *  {@code getMainRenderTarget().bindWrite(true)}（{@code RenderTarget.clear()} 会把 viewport
+     *  改成描边 FBO 的尺寸并停在 0 号帧缓冲上，见 {@code LockOutlineFramebuffer} 类注释）。</p> */
     private static final RenderStateShard.OutputStateShard FILL_TARGET =
         new RenderStateShard.OutputStateShard("lock_fill_target",
-            () -> LockOutlineRenderer.framebuffer().get().bindWrite(false),
-            () -> net.minecraft.client.Minecraft.getInstance().getMainRenderTarget().bindWrite(false));
+            () -> LockOutlineRenderer.framebuffer().bindForFill(),
+            () -> LockOutlineFramebuffer.bindMain(net.minecraft.client.Minecraft.getInstance()));
 
     /** 按实体纹理缓存 fill RenderType（实体纹理数量有限，避免每帧新建）。 */
     private static final Map<ResourceLocation, RenderType> FILL_CACHE = new HashMap<>();

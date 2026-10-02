@@ -19,6 +19,7 @@ import net.minecraft.client.yiz.lightning.geometry.ArcGeometry;
 import net.minecraft.client.yiz.lightning.geometry.SparkGeometry;
 import net.minecraft.client.yiz.lightning.orchestrate.LightningEmitter;
 import net.minecraft.client.yiz.lightning.util.ShaderTimeUtil;
+import net.minecraft.client.yiz.modelmirror.RenderStateSnapshot;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.client.event.RenderLevelStageEvent;
 import org.joml.Matrix4f;
@@ -28,11 +29,21 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * 闪电特效统一渲染器 — 空气电弧 + 表面游离电弧 + 球状闪电（billboard）+ Emitter 编排（tick）。
+ * 闪电特效统一渲染器 — 空气电弧 + 球状闪电表面游离弧 + 球状闪电（billboard）+ Emitter 编排（tick）。
+ *
+ * <p><b>这里只画"真正在空气里"的那几类</b>（用户要求"空气电弧也要跟着模型轮廓"之后的定案）：</p>
+ * <ul>
+ *   <li>{@code ARCS}：两点之间的链式电弧（{@code LightningFX.spawnArc}，端点可跟随实体）—— 折线，不涉及模型轮廓；</li>
+ *   <li>{@code SURFACE}：<b>只剩球状闪电表面</b>（{@code spawnSurfaceArcOnBall}）。挂<b>实体</b>身上的弧
+ *       已全部改走模型几何镜像（{@code AIR_ARC} 命中游离弧 / {@code LIGHTNING} 体表持续电流），
+ *       不再经过这里 —— 旧行为是按实体包围盒六面撒弧，会"围着方盒子跳"；</li>
+ *   <li>{@code BALLS} / {@code SPARKS}：球状闪电与火花粒子。</li>
+ * </ul>
  */
 public final class LightningRenderer {
 
     private static final List<ArcEffect> ARCS = new CopyOnWriteArrayList<>();
+    /** 球状闪电表面游离弧（{@code spawnSurfaceArcOnBall}）—— 实体身上的弧已改走模型镜像层，见类注释。 */
     private static final List<SurfaceArcEffect> SURFACE = new CopyOnWriteArrayList<>();
     private static final List<BallEffect> BALLS = new CopyOnWriteArrayList<>();
     private static final List<LightningEmitter> EMITTERS = new CopyOnWriteArrayList<>();
@@ -103,6 +114,22 @@ public final class LightningRenderer {
         boolean hasSpark = !SPARKS.isEmpty();
         if ((!hasArc && !hasBall && !hasSpark) || LightningShaders.arc == null) return;
 
+        // ── 状态快照 → try/finally 全量还原 ──
+        // 本 pass 分段绘制，每段都要开混合（加法）/关深度掩码/关切除，并用 {@code Tesselator} 立即绘制。
+        // 只要有一段在恢复之前抛异常（着色器重载竞态、几何 NaN、第三方 mod 干扰…），
+        // 「additive 混合 + depthMask(false) + 不剔除」就会留在全局：之后的手/云/雨/粒子/GUI 全部叠加错乱，
+        // 而且它不会自愈（下一帧这个 pass 先把状态又设一遍，漏的还是漏的）。
+        // 所以这里快照整份、finally 整份还回（逐项理由见 RenderStateSnapshot）。异常本身不吞、照常往上抛。
+        RenderStateSnapshot snapshot = RenderStateSnapshot.capture();
+        try {
+            renderAll(event, hasArc, hasBall, hasSpark);
+        } finally {
+            snapshot.restore("lightning-arc");
+        }
+    }
+
+    /** 实际绘制（全局状态由调用方用 {@link RenderStateSnapshot} 包住）。 */
+    private static void renderAll(RenderLevelStageEvent event, boolean hasArc, boolean hasBall, boolean hasSpark) {
         Vec3 cam = event.getCamera().getPosition();
 
         RenderSystem.enableBlend();
