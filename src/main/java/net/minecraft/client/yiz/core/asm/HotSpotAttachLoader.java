@@ -10,11 +10,20 @@ import java.lang.reflect.Method;
 import java.util.List;
 
 /**
- * HotSpot 同进程 self-attach 加载器（1.20.1 移植版，参考 yiz-main）。
+ * HotSpot 同进程 self-attach 加载器（参考 yiz-main）。
  *
  * <p>通过修改 {@code HotSpotVirtualMachine.ALLOW_ATTACH_SELF} 静态字段绕过 JDK 17
  * 的 Self-Attach 限制（JEP 403），借用 AttachProvider 类加载器加载 {@code sun.*} 类，
  * 全程反射调用 VirtualMachine API。同进程加载，无需子进程。</p>
+ *
+ * <p><b>备注（开发环境）</b>：{@code gradlew runClient} 下 attach <b>本身会成功</b>
+ * （日志能看到「Agent JAR 加载成功: …」），但 agent 的 {@code agentmain} 初始化会失败，
+ * 抛 {@code NoSuchFieldError: BRIDGE_CLASS_REF}，对外表现为
+ * {@code AgentInitializationException: Agent JAR loaded but agent failed to initialize}
+ * → 降级为反射扫描模式。<b>这是开发环境的预期现象</b>：主 mod jar 里的同名类
+ * {@code net.minecraft.client.yiz.agent.LivingHealthTransformer} 已占据 app classpath，
+ * 遮蔽了 agent jar 内那份（只有后者才有 {@code BRIDGE_CLASS_REF}）。
+ * 详见 {@link AbstractAgentLoader} 类注释（含「想 dev 也用上 agent 该怎么改」）。</p>
  */
 public class HotSpotAttachLoader extends AbstractAgentLoader {
 

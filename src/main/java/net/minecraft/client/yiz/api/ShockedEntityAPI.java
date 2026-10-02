@@ -3,7 +3,7 @@ package net.minecraft.client.yiz.api;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 客户端感电状态机 — 维护"哪些实体正在感电"的持续状态（entityId → ShockedEntry）（1.21.1 移植版）。
+ * 客户端感电状态机 — 维护"哪些实体正在感电"的持续状态（entityId → ShockedEntry）。
  *
  * <p>服务端 {@code S2CShockFxPayload}（kind=0/BURST 次目标）调 {@link #putClient} 注册感电实体；
  * {@code LivingEntityRendererSurfaceLightningMixin} 渲染时查 {@link #isShocked}/{@link #getFade}

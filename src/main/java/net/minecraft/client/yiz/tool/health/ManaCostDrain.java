@@ -4,12 +4,10 @@ import net.minecraft.client.yiz.attribute.YizAttributes;
 import net.minecraft.world.entity.player.Player;
 
 /**
- * 持续法力消耗钩子 — 消费 {@link YizAttributes#MANA_COST_PER_SEC}（1.21.1 移植降级版，D5）。
+ * 持续法力消耗钩子 — 消费 {@link YizAttributes#MANA_COST_PER_SEC}。
  *
- * <p>1.21.1 的 MANA_COST/PER_SEC 由技能物品（TianLeiYinItem/BenLeiJiItem/LeiMingDianJiaItem）
- * 硬编码消耗；1.20.1 无技能物品系统（见 port-gap-list #4），本类提供通用的持续耗蓝：
- * 每 tick 读 MANA_COST_PER_SEC，每秒÷20 消耗蓝量（ManaTracker）。一次性 MANA_COST 耗蓝
- * 待技能物品系统移植。</p>
+ * <p>本类提供通用的持续耗蓝：每 tick 读 MANA_COST_PER_SEC，每秒÷20 消耗蓝量（ManaTracker）。
+ * 一次性 MANA_COST 耗蓝留给后续的技能物品系统实现。</p>
  */
 public final class ManaCostDrain {
 

@@ -14,11 +14,11 @@ import java.util.UUID;
 /**
  * 实体级属性读写工具（1.20.1 精简版）。
  *
- * <p>1.20.1 无 DataComponent 系统，物品级属性路径暂不移植（1.21.1 的
+ * <p>1.20.1 无 DataComponent 系统，物品级属性路径暂不实现（1.21.1 的
  * {@code DataComponents.ATTRIBUTE_MODIFIERS} 在 1.20.1 用 NBT 或 AttributeModifier API）。
  * 本类只含实体级方法（供防御属性镜像等使用）。</p>
  *
- * <p> 1.20.1 差异：{@link AttributeModifier} 构造器 id 参数是 {@link UUID}（1.21.1 是
+ * <p> 实现说明：{@link AttributeModifier} 构造器 id 参数是 {@link UUID}（1.21.1 是
  * {@code ResourceLocation}）。用确定性 UUID（{@link UUID#nameUUIDFromBytes} 由 idKey 派生），
  * 保证同 idKey 幂等（先 remove 再 add）。</p>
  */
@@ -54,7 +54,7 @@ public final class ItemAttributeHandler {
     }
 
     // ═══════════════════════════════════════════════════════════
-    //  item 级属性（1.21.1 DataComponents → 1.20.1 Modifier API）
+    //  item 级属性（1.20.1 Modifier API）
     // ═══════════════════════════════════════════════════════════
 
     /**
@@ -111,7 +111,7 @@ public final class ItemAttributeHandler {
     /** 增加最大耐久。 */
     public static void addMaxDurability(ItemStack stack, int delta) {
         int current = stack.getMaxDamage();
-        int newValue = current + delta; // 忽略 1.21.1 的 Math.addExact 溢出防护
+        int newValue = current + delta; // 不做 Math.addExact 溢出防护
         setMaxDurability(stack, Math.max(1, newValue));
     }
 }

@@ -26,7 +26,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 实体真实血量定位器（1.20.1 P0 扩展版）—「全能扫描 / 偏移匹配 / 字节码探测 / 数值通道 / 混淆串 / 编码反解」。
+ * 实体真实血量定位器（1.20.1 P0 扩展版）— 「全能扫描 / 偏移匹配 / 字节码探测 / 数值通道 / 混淆串 / 编码反解」。
  *
  * <p>解决自研血量实体（override getHealth 不走原版）无法被 Delta 通道持久扣血的问题。
  * 对实体类型首个健康实例做「细微改动 + 行为验证」定位真实血量槽，按类缓存到
@@ -458,7 +458,7 @@ public final class EntityHealthLocator {
             DirectHealthFallback.forEachNumericItem(entity, (acc, value, item) -> {
                 if (found[0] != null || probed[0] >= MAX_CHANNEL_PROBES) return;
                 double v = value.doubleValue();
-                // 值域过滤：允许 v=0 —— 计数器型血量满血时 counter=0（如 HIT_COUNT），仍拒负值/超上限
+                // 值域过滤：允许 v=0 —— 计数器型血量「满血时计数为 0」很常见，仍拒负值/超上限
                 if (v < 0 || v > maxHp * 1.5f) return;
                 if (acc.getSerializer() == EntityDataSerializers.FLOAT) {
                     if (acc.getId() == DirectHealthFallback.DELTA_ACCESSOR_ID) return;       // 排除 delta 通道
@@ -611,7 +611,7 @@ public final class EntityHealthLocator {
     /**
      * 分析 getHealth()/setHealth() 字节码，定位其直接访问的 float/double 字段
      * （官方映射名 getHealth 恒定；SRG m_21223_/m_21153_）。定位结果<b>必须</b>通过
-     * 行为复核（直写 ±delta 看 getHealth 跟随）——编码字段（XOR 切片等）会被复核打回，
+     * 行为复核（直写 ±delta 看 getHealth 跟随）—— 编码字段（XOR 切片等）会被复核打回，
      * 交给 {@link #scanCodecFields} 黑箱反解，避免把编码字段误当直映字段缓存。
      */
     private static HealthSlot detectViaBytecode(LivingEntity entity) {
@@ -634,7 +634,7 @@ public final class EntityHealthLocator {
                                                  String signature, String[] exceptions) {
                     // getHealth()F：读血量字段（GETFIELD）。双名匹配（official + SRG），生产字节码方法名是 m_21223_
                     boolean isGet = ("getHealth".equals(name) || "m_21223_".equals(name)) && "()F".equals(descriptor);
-                    // setHealth(F)V：写血量字段（PUTFIELD）——对 getHealth 复合/返回常量（Infinity）但
+                    // setHealth(F)V：写血量字段（PUTFIELD）—— 对 getHealth 复合/返回常量（Infinity）但
                     //    override setHealth 写真实字段的实体也能定位真实血量槽（2026-08-12 定位增强）
                     boolean isSet = ("setHealth".equals(name) || "m_21153_".equals(name)) && "(F)V".equals(descriptor);
                     if (!isGet && !isSet) {
@@ -699,7 +699,7 @@ public final class EntityHealthLocator {
                     // 累加器型（inverse）：找等值镜像字段（lastAcc 类）配对，直写时同步写
                     String pair = findMirrorPairField(entity, f);
                     // ★ 上限 B 必须在这里记下来（= maxHp）：反向槽写回是 store = B − 逻辑血量。
-                    //   不记 B 就只能运行时自推导（存储值 + getHealth()）——只要两者瞬时不一致
+                    //   不记 B 就只能运行时自推导（存储值 + getHealth()）—— 只要两者瞬时不一致
                     //   （刚写完累加器 / attributesReady() 为 false 时 getHealth 读的是 vanilla 通道 /
                     //   实体正处于回血与扣血之间），B 就会算错，写回落到错误的累加器值上。
                     //   accessor 反向槽（naccessor）一直记 b=maxHp，field 反向槽此前漏了，补齐。
@@ -1215,7 +1215,7 @@ public final class EntityHealthLocator {
 
     // ==================== 反向累加器槽的重写（钉住）====================
 
-    /** 当前实体的定位槽是不是「反向（累加器/计数器）槽」——血量 = B − 存储值，写回必须走同一字段。 */
+    /** 当前实体的定位槽是不是「反向（累加器/计数器）槽」—— 血量 = B − 存储值，写回必须走同一字段。 */
     public static boolean isInverseLocatedSlot(LivingEntity entity) {
         try {
             HealthSlot slot = locate(entity);
@@ -1351,6 +1351,9 @@ public final class EntityHealthLocator {
             Files.createDirectories(p.getParent());
             JsonObject root = new JsonObject();
             root.addProperty("_version", 2);
+            // 明确标注来源：这是运行时定位结果（缓存），不是手写声明 —— 删掉会在下次遇到该实体时重新学习
+            root.addProperty("_note", "本文件由运行时自动定位生成/维护（缓存），不是手写针对；"
+                + "删除后会在下次遇到对应实体时重新学习。人工声明请写 health_overrides.json");
             JsonObject slots = new JsonObject();
             CACHE.forEach((k, s) -> {
                 JsonObject o = new JsonObject();

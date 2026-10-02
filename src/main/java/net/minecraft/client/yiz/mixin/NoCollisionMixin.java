@@ -11,7 +11,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
- * 碰撞免疫 — 属性驱动（no_collision > 0 = 穿过实体）（1.21.1 移植版）。
+ * 碰撞免疫 — 属性驱动（no_collision > 0 = 穿过实体）。
  */
 @Mixin(Entity.class)
 public class NoCollisionMixin {

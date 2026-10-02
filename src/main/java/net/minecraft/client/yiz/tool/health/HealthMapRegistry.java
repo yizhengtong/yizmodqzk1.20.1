@@ -20,7 +20,7 @@ import java.util.Map;
  * <p>部分实体把真实血量藏在<b>静态 {@code Map} 字段</b>里（而非自身字段 / DataParameter），
  * 并对 Map 的写方法（put/remove/replace…）做调用栈鉴权，外部直改字段会被 Map 值覆盖。
  * 本类按<b>纯类型特征</b>定位这些 Map，并用 {@code unreflectSpecial} 锁基类 {@code put}
- * 绕过鉴权直写——<b>全程不引用任何目标模组的类名/字段名</b>，只认：</p>
+ * 绕过鉴权直写—— <b>全程不引用任何目标模组的类名/字段名</b>，只认：</p>
  * <ul>
  *   <li>字段是 {@code static}，类型 {@code Map} 或其子类；</li>
  *   <li>泛型 {@code V ∈ Number}（血量数值）、{@code K} 是 {@link Entity} 子类（实体）。</li>
@@ -54,7 +54,7 @@ public final class HealthMapRegistry {
      * 藏血 Map 判据的枚举结果：全类路径枚举与「静态 Map + K=实体类 + V=数值」的泛型判据
      * 已统一挪到 {@link HealthDiscovery}（三处发现器共享一次枚举、跑在后台线程、只缓存字段句柄）。
      *
-     * <p>这里只读最新快照，<b>不再自己枚举类表</b>——原先每次攻击都可能触发
+     * <p>这里只读最新快照，<b>不再自己枚举类表</b>—— 原先每次攻击都可能触发
      * {@code getAllLoadedClasses()} + 逐类逐字段 {@code getGenericType()}，是首击 1~3 秒的主因。
      * 发现范围不变：仍是全类路径、仍按类数量变化重扫（节流在 {@code HealthDiscovery} 里）。</p>
      */
@@ -66,7 +66,7 @@ public final class HealthMapRegistry {
     // ==================== 判定 + 篡改 ====================
 
     /**
-     * 目标实体命中的藏血 Map 字段句柄。只取「继承深度最大」的 key 类型——具体实体类的 Map
+     * 目标实体命中的藏血 Map 字段句柄。只取「继承深度最大」的 key 类型—— 具体实体类的 Map
      * 是「当前血量 + 拉回依据」，而 Entity 基类的 Map 是「最大血量/通用表」，
      * 后者不参与拉回比较、也不该被当作当前血量改，故忽略。
      */

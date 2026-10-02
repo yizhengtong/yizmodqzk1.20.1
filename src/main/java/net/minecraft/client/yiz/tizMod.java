@@ -16,7 +16,7 @@ import net.minecraft.client.yiz.tool.attribute.ItemAttributeHandler;
 /**
  * YizMod QZK — 1.20.1 Forge 前置库主类。
  *
- * <p>包结构对齐 1.21.1（{@code net.minecraft.client.yiz} 家族包根）——
+ * <p>包结构（{@code net.minecraft.client.yiz} 家族包根）——
  * {@link net.minecraft.client.yiz.tool.attribute.EntityAttributeGate} 的调用栈鉴权
  * 信任 {@code net.minecraft.client.yiz} 前缀，所有前置库设施类必须在此家族包根下。</p>
  */
@@ -28,7 +28,7 @@ public class tizMod {
 
     public tizMod() {
         // 兼容性加固（1.20.1 按类池 defineId）：强制初始化 vanilla 实体类，让 Entity/LivingEntity 的
-        // DataParameter id 池在任何第三方提前 defineId 前完成——否则若某模组在 Entity.<clinit> 前
+        // DataParameter id 池在任何第三方提前 defineId 前完成—— 否则若某模组在 Entity.<clinit> 前
         // defineId（抢占 id 0，如 Integer 通道），vanilla DATA_SHARED_FLAGS_ID(Byte) 被挤走 →
         // 服务端实体构造 Duplicate id 0 + 客户端/服务端 DataParameter 同步错位
         // （field 0 Byte vs Integer 崩溃，EndingLibrary/第三方提前 defineId 的兼容性坑）。
@@ -109,7 +109,7 @@ public class tizMod {
             e.add(player, YizAttributes.BLEED_TIME.get());
             e.add(player, YizAttributes.BLEED_STACK.get());
 
-            // 1.21.1 移植属性挂载（2026-08-26）：组A 预留属性 4 + 组B 玩家向独立 24
+            // 属性挂载（2026-08-26）：组A 预留属性 4 + 组B 玩家向独立 24
             e.add(player, YizAttributes.SHIELD_VALUE.get());
             e.add(player, YizAttributes.HEAL_ATK_COEFF.get());
             e.add(player, YizAttributes.HEAL_SPELL_COEFF.get());
@@ -221,6 +221,10 @@ public class tizMod {
         net.minecraft.client.yiz.tool.YizEffectCommand.register();
         // 诊断日志开关指令（/yiz diag，集中开关排查日志）
         net.minecraft.client.yiz.tool.YizDiagCommand.register();
+        // 模组配置指令（/yiz config：查看/临时改/写盘/重读）
+        net.minecraft.client.yiz.tool.YizConfigCommand.register();
+        // 玩家身份指令（/yiz player：改名/换号的记录合并与令牌认领）
+        net.minecraft.client.yiz.tool.YizPlayerCommand.register();
         // 生物组件指令（/yiz creature refresh）
         net.minecraft.client.yiz.tool.YizCreatureCommand.register();
 
@@ -231,8 +235,32 @@ public class tizMod {
         net.minecraft.client.yiz.itemcfg.YizItemConfigCommand.register();
 
         modEventBus.addListener(this::commonSetup);
+        // 模组配置（TOML：config/yizmodqzk-common.toml；装了配置界面模组的会自动出设置界面）
+        try {
+            net.minecraftforge.fml.ModLoadingContext.get().registerConfig(
+                net.minecraftforge.fml.config.ModConfig.Type.COMMON,
+                net.minecraft.client.yiz.core.YizConfig.SPEC);
+        } catch (Throwable t) {
+            LOGGER.warn("配置注册跳过: {}", t.getMessage());
+        }
+        // 玩家身份存储（players.json v2：UUID 别名 + 名字历史 + 个体开关 + 物品配置）
+        try {
+            net.minecraft.client.yiz.core.PlayerIdentityStore.load();
+        } catch (Throwable ignored) {}
         net.minecraftforge.common.MinecraftForge.EVENT_BUS.register(this);
-        // 挖掘属性事件（BreakSpeed/HarvestCheck，1.21.1 由 PlayerMiningMixin 注入，1.20.1 改用事件）
+        // 玩家加入时登记身份：离线模式改名/换号会自动继承物品配置，个体开关需服主批准
+        net.minecraftforge.common.MinecraftForge.EVENT_BUS.addListener(
+            (net.minecraftforge.event.entity.player.PlayerEvent.PlayerLoggedInEvent e) -> {
+                try {
+                    String msg = net.minecraft.client.yiz.core.PlayerIdentityStore.onJoin(e.getEntity());
+                    if (msg != null) {
+                        LOGGER.info("[Identity] {} → {}", e.getEntity().getGameProfile().getName(), msg);
+                    }
+                } catch (Throwable t) {
+                    LOGGER.warn("身份登记失败: {}", t.toString());
+                }
+            });
+        // 挖掘属性事件（BreakSpeed/HarvestCheck，1.20.1 改用事件注入）
         net.minecraftforge.common.MinecraftForge.EVENT_BUS.register(
             net.minecraft.client.yiz.handler.MiningAttributeHandler.class);
         // 锁定系统（HUIXIN/KEGONG 服务端充能状态机）
@@ -256,7 +284,7 @@ public class tizMod {
     private void commonSetup(final FMLCommonSetupEvent event) {
         // 预触发 HealthChannels 通道 defineId：此时所有 vanilla 类已加载（LivingEntity 池已初始化），
         // 通道 id 从继承池 max+1 分配（不与 vanilla id 0 冲突），且早于任何实体构造。
-        // ⚠️ 必须在此（而非 mixin 类静态字段/类加载期）触发——否则若在 vanilla LivingEntity.<clinit>
+        // ⚠️ 必须在此（而非 mixin 类静态字段/类加载期）触发—— 否则若在 vanilla LivingEntity.<clinit>
         // 完成前 defineId，LivingEntity 池从 0 开始 → 与 DATA_SHARED_FLAGS_ID(id 0) 冲突 → Duplicate id 0 崩溃。
         net.minecraft.client.yiz.tool.health.HealthChannels.getDeltaHealth();
         net.minecraft.client.yiz.tool.health.HealthChannels.getSecureObf();
@@ -276,6 +304,11 @@ public class tizMod {
         try {
             net.minecraft.client.yiz.tool.health.HealthDiscovery.warmupAsync();
         } catch (Throwable ignored) {}
+        // 编解码器候选池预热：加载期按类型签名收好「造密文 / 读明文 / 实体读写口」候选，
+        // 现场只做逐一提试（不反解任何具体算法）
+        try {
+            net.minecraft.client.yiz.tool.health.ExternalCodecPool.warmupAsync();
+        } catch (Throwable ignored) {}
         // 通道 id 自检：把 Entity 各通道的实际 id 打出来（类池被外部改动时点名重复项，只读不改）
         try {
             net.minecraft.client.yiz.tool.health.SyncedDataSupport.auditEntityChannelIds();
@@ -294,6 +327,10 @@ public class tizMod {
         // 藏血发现扫描预热（幂等）：进存档前就把全类路径枚举跑在后台，首击不再卡 1~3 秒
         try {
             net.minecraft.client.yiz.tool.health.HealthDiscovery.warmupAsync();
+        } catch (Throwable ignored) {}
+        // 编解码器候选池预热（幂等）：此时模组类已基本加载完，扫描结果最全
+        try {
+            net.minecraft.client.yiz.tool.health.ExternalCodecPool.warmupAsync();
         } catch (Throwable ignored) {}
         // 全量扫描物品功能（服务端权威，写 items.json 缓存）
         net.minecraft.client.yiz.itemcfg.ItemFeatureDiscoverer.scanAll();
@@ -356,7 +393,7 @@ public class tizMod {
         }
     }
 
-    //  1.21.1 移植属性 tick 驱动（2026-08-26）：法力/生命回复/攻击距离/弹射物反射
+    //  属性 tick 驱动（2026-08-26）：法力/生命回复/攻击距离/弹射物反射
 
     /** 每 tick 驱动：弹射物反射 + 法力回复 + 生命回复（ATTACK_RANGE 由 PlayerRangeMixin 注入交互距离 getter）。 */
     @SubscribeEvent

@@ -11,7 +11,7 @@ import net.minecraftforge.fml.common.Mod;
  * net.minecraft.client.yiz.tool.health.EntityASMUtil#clearDreamAccum}）、delta 软压通道、
  * 永久禁疗 / 叠加禁疗 / 临时禁疗（VitalitySeverance）。玩家死亡重生（{@link PlayerEvent.Clone}）
  * 或其它复活途径（{@link PlayerEvent.PlayerRespawnEvent}）时 UUID 不变，按 UUID 存储的状态会残留
- * （delta 还会经 NBT 从旧实体克隆回新实体）——必须在此统一清除，避免「复活后仍被软压 / 禁疗 /
+ * （delta 还会经 NBT 从旧实体克隆回新实体）—— 必须在此统一清除，避免「复活后仍被软压 / 禁疗 /
  * 一击致死」。</p>
  */
 @Mod.EventBusSubscriber(modid = net.minecraft.client.yiz.tizMod.MODID, bus = Mod.EventBusSubscriber.Bus.FORGE)

@@ -18,11 +18,11 @@ import net.minecraft.world.entity.LivingEntity;
  * <p>原来分散在 {@code AttackInterceptorMixin} 与 {@code LivingEntityMixin.onHurtReturn}
  * 的施加逻辑收敛到这里（幂等：Config.set / addTempBan 都是覆盖语义，重复调用无害）。</p>
  *
- * <p>1.20.1 移植版：
+ * <p>1.20.1：
  * <ul>
  *   <li>属性引用 {@link YizAttributes} 字段为 {@code RegistryObject<Attribute>}，访问加 {@code .get()}。</li>
- *   <li>{@code VitalitySeveranceAttributeRegistry} 尚未移植（1.21.1 中位于 api 包，约 98 行），见下方 TODO。</li>
- *   <li>{@code VitalitySeveranceHandler.addTempBan} 尚未移植（目标 handler 目前仅有叠加式
+ *   <li>{@code VitalitySeveranceAttributeRegistry} 尚未实现（1.21.1 中位于 api 包，约 98 行），见下方 TODO。</li>
+ *   <li>{@code VitalitySeveranceHandler.addTempBan} 尚未实现（目标 handler 目前仅有叠加式
  *       {@code addStackingBan}），见下方 TODO。</li>
  * </ul></p>
  */
@@ -36,7 +36,7 @@ public final class VitalitySeverance {
         if (attacker.level().isClientSide()) return;
 
         // 1. 注册表聚合绝妄生机（百分比 + 固定值）
-        // TODO(1.20.1-port): 需先移植 api/VitalitySeveranceAttributeRegistry
+        // TODO(待实现): 需先实现 api/VitalitySeveranceAttributeRegistry
         // （Holder<Attribute> → Attribute 键，1.20.1 属性为 RegistryObject<Attribute>）。
         float percent = VitalitySeveranceAttributeRegistry.getPercentTotal(attacker);
         float fixed = VitalitySeveranceAttributeRegistry.getFixedTotal(attacker);
@@ -55,7 +55,7 @@ public final class VitalitySeverance {
         // 3. 绝妄生机时间：目标完全禁疗 N 秒（秒 → tick，连续攻击 put 覆盖刷新时长）
         var atInst = attacker.getAttribute(YizAttributes.VITALITY_SEVERANCE_TIME.get());
         if (atInst != null && atInst.getValue() > 0) {
-            // TODO(1.20.1-port): VitalitySeveranceHandler 尚无 addTempBan(LivingEntity, float, long)。
+            // TODO(待实现): VitalitySeveranceHandler 尚无 addTempBan(LivingEntity, float, long)。
             // 语义 = 100% 禁疗 N tick；可用现成 addStackingBan(target, 1.0f, ticks) 近似，
             // 或后续按 1.21.1 补 addTempBan。
             VitalitySeveranceHandler.addTempBan(target, 1.0f, (long) (atInst.getValue() * 20.0));

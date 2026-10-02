@@ -17,11 +17,11 @@ import java.util.concurrent.ConcurrentHashMap;
  * 技能配置界面容器的服务端存储（v2: 430×200 新布局）。
  * <p>内存容器 + PlayerDataAPI 持久化。</p>
  *
- * <p>1.20.1 移植：
+ * <p>1.20.1：
  * <ul>
  *   <li>DataComponent（CUSTOM_DATA）→ 1.20.1 的 ItemStack NBT（getTag/getOrCreateTag）。</li>
  *   <li>{@code ItemStack.save(registryAccess)}/{@code ItemStack.parse} → {@code save(new CompoundTag())}/{@code ItemStack.of}。</li>
- *   <li>PlayerDataAPI（1.21.1，未移植）→ {@link #savePlayerData}/{@link #loadPlayerData} TODO 占位（暂不持久化）。</li>
+ *   <li>PlayerDataAPI（未实现）→ {@link #savePlayerData}/{@link #loadPlayerData} TODO 占位（暂不持久化）。</li>
  * </ul></p>
  */
 public final class SkillConfigStorage {
@@ -145,9 +145,9 @@ public final class SkillConfigStorage {
         }
     }
 
-    // TODO(1.20.1-port): 依赖 api/PlayerDataAPI（1.21.1 持久化 API，未移植）。
+    // TODO(待实现): 依赖 api/PlayerDataAPI（持久化 API，未实现）。
     // 原实现：PlayerDataAPI.set(player, key, value) / PlayerDataAPI.get(player, key)。
-    // 待 PlayerDataAPI 移植后替换下方两个方法体，其余代码零改动。
+    // 待 PlayerDataAPI 实现后替换下方两个方法体，其余代码零改动。
     private static void savePlayerData(Player player, String key, String value) {
         // 暂不持久化：内存容器仍可用，服务端重启后配置丢失。
     }

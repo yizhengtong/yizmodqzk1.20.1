@@ -5,7 +5,7 @@ import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.ai.attributes.AttributeInstance;
 
 /**
- * CDR（攻击速度加成）破无敌帧模块（1.21.1 移植补全）。
+ * CDR（攻击速度加成）破无敌帧模块。
  *
  * <p>职责：读取攻击者的 COOLDOWN_REDUCTION 属性值，
  * 等比缩减目标的 {@code invulnerableTime}。</p>

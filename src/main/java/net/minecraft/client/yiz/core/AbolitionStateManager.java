@@ -14,7 +14,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 全局废除状态持久化（1.20.1 移植版，路径改用 FMLPaths.CONFIGDIR）。
+ * 全局废除状态持久化（路径改用 FMLPaths.CONFIGDIR）。
  *
  * <p>存 {@code config/yizmodqzk/abolish.json}：已废除的物品 ID 集合 + 护甲废除开关。
  * 属于全局创作偏好（跨世界保留），第三方 mod 移除后条目保留，重装自动恢复。</p>

@@ -7,7 +7,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 蓝量追踪器 — 当前蓝量 + tick 回蓝（1.21.1 移植版）。
+ * 蓝量追踪器 — 当前蓝量 + tick 回蓝。
  *
  * <p>回蓝公式（每 tick）：
  * <pre>regen = MANA_REGEN × 0.05 + MAX_MANA × MANA_REGEN_PCT / 100 / 20</pre>
@@ -19,20 +19,22 @@ public final class ManaTracker {
 
     /**
      * 初始蓝量策略：true（默认）= 无记录的实体从 0 起算（棋子/新建实体语义，用户拍板）；
-     * false = 无记录时返回上限（旧玩家语义）。
+     * false = 无记录时返回上限（旧玩家语义）。开关走配置（mana.default_empty）。
      */
-    private static volatile boolean defaultEmpty = true;
-
     private ManaTracker() {}
 
-    public static boolean isDefaultEmpty() { return defaultEmpty; }
+    public static boolean isDefaultEmpty() {
+        return net.minecraft.client.yiz.core.YizConfig.bool("mana.default_empty");
+    }
 
-    public static void setDefaultEmpty(boolean empty) { defaultEmpty = empty; }
+    public static void setDefaultEmpty(boolean empty) {
+        net.minecraft.client.yiz.core.YizConfig.setSession("mana.default_empty", String.valueOf(empty));
+    }
 
     /** 获取当前蓝量。无记录时：defaultEmpty → 0，否则返回上限。 */
     public static float get(LivingEntity entity) {
         Float v = MANA.get(entity.getUUID());
-        return v != null ? v : (defaultEmpty ? 0.0F : getMax(entity));
+        return v != null ? v : (isDefaultEmpty() ? 0.0F : getMax(entity));
     }
 
     /** 设置蓝量（不超上限、不低 0）。 */
@@ -47,7 +49,7 @@ public final class ManaTracker {
      * 将蓝量置为 0 并保留记录。
      *
      * <p>{@link #get} 对无记录的实体默认返回上限（玩家语义 = 满蓝），默认空蓝的棋子实体靠这条 0 记录
-     * 从零开始累积；释放技能后也用它清零——否则 set(0) 会删记录，下一 tick get() 又回到满蓝，
+     * 从零开始累积；释放技能后也用它清零—— 否则 set(0) 会删记录，下一 tick get() 又回到满蓝，
      * 导致「满蓝」条件每 tick 成立、技能连续释放。</p>
      */
     public static void setZero(LivingEntity entity) {

@@ -13,7 +13,7 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * 简易指令注册器（1.20.1 移植版）。
+ * 简易指令注册器。
  *
  * <p>下游模组调用 {@link #register} 提交指令，无需自行订阅 {@link RegisterCommandsEvent}。
  * 指令在服务端启动时自动注册到 {@link CommandDispatcher}。</p>

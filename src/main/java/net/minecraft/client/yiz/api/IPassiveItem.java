@@ -4,7 +4,7 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 
 /**
- * 被动技能/饰品物品接口（1.20.1 移植版）。
+ * 被动技能/饰品物品接口。
  */
 public interface IPassiveItem extends IEnhanceable {
 

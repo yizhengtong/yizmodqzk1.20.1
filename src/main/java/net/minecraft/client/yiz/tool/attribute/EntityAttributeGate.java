@@ -14,13 +14,13 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.UUID;
 
 /**
- * 受保护实体属性维护门禁 —— 给实体分配「受保护」属性值的统一入口（1.20.1 移植版）。
+ * 受保护实体属性维护门禁 —— 给实体分配「受保护」属性值的统一入口。
  *
  * <p>与 1.21.1 版本同逻辑：给任意 {@link LivingEntity} 挂/改/移除 yizmodqzk 自定义属性值，
  * 使用专属 {@code prot_} 前缀 modifier（确定性 UUID 由 idKey 派生），配合
  * {@link net.minecraft.client.yiz.mixin.AttributeInstanceMixin} 对移除做调用栈鉴权。</p>
  *
- * <p> 1.20.1 差异：{@link AttributeModifier} 构造器 id 参数是 {@link UUID}（非 ResourceLocation），
+ * <p> 实现说明：{@link AttributeModifier} 构造器 id 参数是 {@link UUID}（非 ResourceLocation），
  * 用 {@link UUID#nameUUIDFromBytes} 派生确定性 UUID 保证 remove 幂等。</p>
  */
 public final class EntityAttributeGate {

@@ -9,7 +9,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
  * 摔伤减免 Mixin — 消费 {@link YizAttributes#FALL_SAFE} 与 {@link YizAttributes#FALL_REDUCE}
- * （1.21.1 移植版）。
+ * 。
  *
  * <p>在 {@code LivingEntity#calculateFallDamage} 返回值上应用：
  * <pre>dmg = max(0, dmg - FALL_SAFE)         // 固定安全距离减免（格→点）

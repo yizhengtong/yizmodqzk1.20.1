@@ -68,7 +68,7 @@ public final class LaunchController {
      * 刷新只把「当前位置」当作新起点、重置计时与方向。
      *
      * <p>顶点固定的意义：允许全程刷新（从而无限连续控制同一目标），又不会因为每次都"再抬 N 格"
-     * 而把目标越打越高——目标只会在「原顶点」与「原地面」之间被反复拍打。</p>
+     * 而把目标越打越高—— 目标只会在「原顶点」与「原地面」之间被反复拍打。</p>
      */
     private static final class Launch {
         final LivingEntity entity;
@@ -92,7 +92,7 @@ public final class LaunchController {
         long lastHitGameTime;
         /**
          * 是否允许弹跳（浮空起伏）。
-         * <b>单次击飞不弹跳</b>——第一次施加时保持干净的一上一下；只有同一会话里被再次命中
+         * <b>单次击飞不弹跳</b>—— 第一次施加时保持干净的一上一下；只有同一会话里被再次命中
          * （{@link #refresh}）才开启，之后一直续跳，看起来才顺。
          */
         boolean allowBounce;
@@ -363,7 +363,7 @@ public final class LaunchController {
             y = groundY + (launch.apexY - groundY) * (1.0 - t * t);
         }
 
-        // 连击弹跳：仅当同一会话内被再次命中过（allowBounce）才启用——单次击飞保持一上一下、
+        // 连击弹跳：仅当同一会话内被再次命中过（allowBounce）才启用—— 单次击飞保持一上一下、
         // 正常落地；连续击飞则在弹跳底线上反复起跳，形成不落地的浮空起伏。
         if (launch.allowBounce && launch.elapsed > ascentTicks
                 && y <= launch.bounceFloorY && launch.sessionAlive()) {
@@ -391,7 +391,7 @@ public final class LaunchController {
         // （表现为"只击飞不掉血"）。飞行期间由我们清零，命中照常结算。
         entity.invulnerableTime = 0;
         // 补做必须继续跑的每 tick 维护（实体自身 tick 已停）：
-        // ① 通用清单（延迟任务调度/传导限伤/写基线/禁疗/回血…）——不跑会出现"只有第 1 次攻击造成伤害"；
+        // ① 通用清单（延迟任务调度/传导限伤/写基线/禁疗/回血…）—— 不跑会出现"只有第 1 次攻击造成伤害"；
         // ② 下游桥接（混淆血量对外显示同步等）。
         EntityTickMaintenance.tick(entity, true);
         if (entity instanceof net.minecraft.client.yiz.bridge.LaunchTickBridge bridge) {
@@ -423,7 +423,7 @@ public final class LaunchController {
     /**
      * 姿态朝向：让目标始终<b>面朝</b>击飞来源。
      *
-     * <p>配合渲染侧局部 X 轴 90° 后仰，结果是"目标向后倒下"——头朝远离来源的一侧、双腿留在来源一侧
+     * <p>配合渲染侧局部 X 轴 90° 后仰，结果是"目标向后倒下"—— 头朝远离来源的一侧、双腿留在来源一侧
      * （即腿朝着击飞来源）。来源还活着且同维度时逐 tick 跟随。</p>
      */
     private static void faceToward(Launch launch, LivingEntity entity) {
@@ -455,7 +455,7 @@ public final class LaunchController {
             SoundEvents.ANVIL_PLACE, SoundSource.PLAYERS, 1.0F, 1.0F);
     }
 
-    /** 姿态同步包（开始 / 结束）。结束包由释放方发出——服务端才是唯一知道何时落地的。 */
+    /** 姿态同步包（开始 / 结束）。结束包由释放方发出—— 服务端才是唯一知道何时落地的。 */
     private static void sendPosePacket(ServerLevel level, LivingEntity target, int kind,
                                        int totalTicks, double startY, boolean holdUntilEnd) {
         var payload = new net.minecraft.client.yiz.network.S2CLaunchFxPayload(

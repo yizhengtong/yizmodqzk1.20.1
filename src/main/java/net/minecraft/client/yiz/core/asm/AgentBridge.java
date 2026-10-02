@@ -12,7 +12,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Agent 桥接器（1.20.1 移植版）。
+ * Agent 桥接器。
  * 连接 Java Agent 与主模组，提供 Instrumentation 访问 + 完整诊断状态
  * （agentmain 是否执行 / transformer 是否注册 / 实际 transform 次数 / 加载错误），
  * 供 /yiz agent 指令展示，避免"attach 成功但注入未生效"的误判。
@@ -49,7 +49,7 @@ public final class AgentBridge {
 
     /** 由 agent 的 transformer 处理每个类后调用（实际注入类数）。
      *  有 transform 必然说明 transformer 已注册、agentmain 已执行（transform 线程能访问本类，
-     *  而 agentmain 线程的 context classloader 可能拿不到主模组类导致上报失败——这里兜底补齐状态）。 */
+     *  而 agentmain 线程的 context classloader 可能拿不到主模组类导致上报失败—— 这里兜底补齐状态）。 */
     @SuppressWarnings("unused")
     public static void recordTransform() {
         transformCount.incrementAndGet();
@@ -209,7 +209,7 @@ public final class AgentBridge {
     }
 
     /** 自保护还原 watchdog：周期重拉回已加载受保护类（防外部用 redefineClasses 绕过 transformer 链）。
-     *  建议每 ~2-5s 调一次；内部自带节流（5s，且不再每轮枚举全类表——见下）。 */
+     *  建议每 ~2-5s 调一次；内部自带节流（5s，且不再每轮枚举全类表—— 见下）。 */
     public static int selfRestoreWatchdog() {
         if (!selfRestoreRegistered) return 0;
         Instrumentation inst = instrumentation;

@@ -16,7 +16,7 @@ import net.minecraftforge.registries.RegistryObject;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 
 /**
- * 挖掘属性事件处理 — 消费 7 个挖掘属性（1.21.1 PlayerMiningMixin 移植版）。
+ * 挖掘属性事件处理 — 消费 7 个挖掘属性。
  *
  * <p>1.20.1 用 Forge 标准事件替代 1.21.1 的 getDigSpeed/hasCorrectToolForDrops mixin 注入：
  * <ul>

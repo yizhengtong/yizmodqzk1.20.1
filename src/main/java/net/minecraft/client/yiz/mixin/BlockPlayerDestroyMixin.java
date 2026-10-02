@@ -19,7 +19,7 @@ import javax.annotation.Nullable;
 
 /**
  * 无敌方块掉落 Mixin — 消费 {@link YizAttributes#MINING_LEVEL} ≥ 10
- * + {@link YizAttributes#MINING_ALL} ≥ 1（1.21.1 移植版）。
+ * + {@link YizAttributes#MINING_ALL} ≥ 1。
  *
  * <p>注入 {@link Block#playerDestroy} HEAD：对基岩、屏障、水源、岩浆、
  * 末地传送门等常规不掉落的无敌方块，满足条件时额外生成方块物品掉落。</p>

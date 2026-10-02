@@ -11,7 +11,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * 击飞后仰姿态（纯客户端），由 {@code S2CLaunchFxPayload} 两个包驱动：
  * {@code KIND_START}（开始）与 {@code KIND_END}（落地/释放）。
  *
- * <p><b>时间分配</b>：整体的 <b>2/3 用于"目标导向"（上抛/被推着走）段</b>——姿态在这 2/3 内从 0° 平滑推进到
+ * <p><b>时间分配</b>：整体的 <b>2/3 用于"目标导向"（上抛/被推着走）段</b>—— 姿态在这 2/3 内从 0° 平滑推进到
  * <b>顶点处的 90°</b>；剩下的 <b>1/3 是下落段</b>，姿态保持 90°（平躺）。与 {@code LaunchController} 的
  * 弹道顶点位置一致（顶点也在 2/3 处）。</p>
  *

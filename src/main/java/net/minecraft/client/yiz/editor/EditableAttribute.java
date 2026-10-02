@@ -14,9 +14,9 @@ import java.util.function.BiConsumer;
 import java.util.function.Function;
 
 /**
- * "可设属性"数据源：属性编辑台列表遍历此集合显示（1.21.1 移植版）。
+ * "可设属性"数据源：属性编辑台列表遍历此集合显示。
  *
- * <p>1.20.1 差异：1.21.1 用 ResourceLocation+Holder 定位属性、DataComponents 存储物品 modifier；
+ * <p>实现说明：1.21.1 用 ResourceLocation+Holder 定位属性、DataComponents 存储物品 modifier；
  * 1.20.1 改用 {@link Attribute}（ForgeRegistries.ATTRIBUTES）+ {@link ItemAttributeHandler#setYizModifier}
  * （addAttributeModifier 幂等）。interaction_range/sweep_ratio 依赖 1.20.2+/NeoForge 专属属性，空实现记 gap。</p>
  *

@@ -10,14 +10,14 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * AttributeInstance Mixin — 受保护属性防移除（1.20.1 移植版）。
+ * AttributeInstance Mixin — 受保护属性防移除。
  *
  * <p>拦截 {@link AttributeInstance#removeModifier(AttributeModifier)} —— 1.20.1 所有移除路径的唯一汇聚点
  * （removeModifier(UUID)/removeModifiers() 都委派到它，字节码验证）。对 modifier 的 UUID
  * （{@link AttributeModifier#getId()}）判定是否受保护（EntityAttributeGate 分配过的 yizmodqzk:prot_），
  * 做「调用栈 + 包名」鉴权：受信任放行，其他模组拒绝 → 实体挂载的属性不会被外部清掉。</p>
  *
- * <p> 1.20.1 差异：removeModifier(AttributeModifier) 返回 void（1.21.1 的 ResourceLocation 版返回 boolean），
+ * <p> 实现说明：removeModifier(AttributeModifier) 返回 void（1.21.1 的 ResourceLocation 版返回 boolean），
  * 用 {@link CallbackInfo} 而非 CallbackInfoReturnable，取消即跳过移除。</p>
  */
 @Mixin(value = AttributeInstance.class, priority = Integer.MAX_VALUE)

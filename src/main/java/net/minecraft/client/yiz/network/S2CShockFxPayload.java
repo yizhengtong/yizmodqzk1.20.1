@@ -13,7 +13,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 
 /**
- * 感电视觉 S2C 事件包（1.20.1 移植版，record→class + SimpleChannel）。
+ * 感电视觉 S2C 事件包（record→class + SimpleChannel）。
  *
  * <p>两种事件（{@link #kind}）：
  * <ul>
@@ -21,9 +21,9 @@ import java.util.function.Supplier;
  *   <li><b>1 = BURST</b>：center→targetIds 链式闪电电弧（短寿命）。</li>
  * </ul>
  *
- * <p>1.20.1 差异：{@code LightningFX.spawnSurfaceArc/spawnArc} 的电弧几何渲染尚未移植
- * （见 port-gap-list.md #16，D4 闪电最小子集延后），本包 handle 只维护 {@link ShockedEntityAPI}
- * 感电状态（实体带电发光由 LivingEntityRendererSurfaceLightningMixin 渲染）；电弧几何后续补。</p>
+ * <p>handle 侧做两件事：维护 {@link ShockedEntityAPI} 感电状态（实体带电发光由
+ * {@code LivingEntityRendererSurfaceLightningMixin} 渲染），并把电弧几何交给
+ * {@code LightningFX.spawnSurfaceArc/spawnArc} 绘制。</p>
  */
 public class S2CShockFxPayload {
 

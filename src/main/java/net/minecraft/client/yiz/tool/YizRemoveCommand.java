@@ -19,7 +19,7 @@ import java.util.List;
 
 /**
  * /yiz remove &lt;radius&gt; — 清除玩家周围指定半径内的所有非玩家实体。
- * 1.20.1 移植版。
+ * 1.20.1。
  */
 public final class YizRemoveCommand {
     private static final Logger LOGGER = LoggerFactory.getLogger("YizRemoveCmd");

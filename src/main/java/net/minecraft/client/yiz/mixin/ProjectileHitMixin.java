@@ -11,7 +11,7 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * 投射物碰撞拦截 Mixin（1.21.1 移植版）。
+ * 投射物碰撞拦截 Mixin。
  * <p>
  * 在 {@link Projectile#onHit(HitResult)} 入口处拦截，检测被碰撞实体是否配置了投射物反射。
  * 若是则取消原碰撞事件（无伤害/无效果），并将投射物重定向回攻击者。

@@ -8,7 +8,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
 
 /**
- * 禁疗属性注册表（1.20.1 移植版）。
+ * 禁疗属性注册表。
  * <p>注册的属性自动作为禁疗源：攻击者每近战攻击时，自动计算所有已注册属性总和为目标施加禁疗配置。</p>
  */
 public final class VitalitySeveranceAttributeRegistry {

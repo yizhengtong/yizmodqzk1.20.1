@@ -238,7 +238,7 @@ public final class BlackBoxInverseSolver {
 
     /** 验证 XOR 解在目标血量处的写-读往返（写 w → 读 getHealth → 还原 w0）。
      *  XOR 变换是精确自反的（h = B − intBitsToFloat(rawInt(w)^K)），验证容差必须近似精确
-     *  （±0.5 内）——否则无关字段「写入后血量纹丝不动」也会被宽松容差放行成假阳性。 */
+     *  （±0.5 内）—— 否则无关字段「写入后血量纹丝不动」也会被宽松容差放行成假阳性。 */
     private static boolean verifyXorPoint(LivingEntity entity, StorageAccess access,
                                           double B, int key, double target) {
         double plain = B - target;

@@ -18,14 +18,14 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 服务端锁定状态机 + 交互距离管理（1.21.1 移植版，仅服务端核心）。
+ * 服务端锁定状态机 + 交互距离管理（仅服务端核心）。
  *
  * <p>从玩家实体属性读取会心(HUIXIN)/渴攻(KEGONG)，服务端独立追踪充能进度。
- * 1.20.1 差异（见 port-gap-list #7/#13）：
+ * 1.20.1 实现取舍：
  * <ul>
- *   <li>EntityLockAPI（客户端目标框同步）→ 本类静态 {@link #getLockProgress} 供客户端查询</li>
- *   <li>充能完成挂 ENTITY_INTERACTION_RANGE 距离修饰符（1.20.2+ 属性）→ 跳过，距离效果待 PlayerRange 扩展</li>
- *   <li>LockOnProvider 目标框渲染（TargetFrameProvider）→ 未移植</li>
+ *   <li>没有 EntityLockAPI（客户端目标框同步）→ 本类静态 {@link #getLockProgress} 供客户端查询</li>
+ *   <li>1.20.1 无 ENTITY_INTERACTION_RANGE 属性（1.20.2+ 才有）→ 跳过，距离效果由 PlayerRange 扩展</li>
+ *   <li>目标框渲染尚未实现</li>
  * </ul>
  * HUIXIN/KEGONG 属性驱动充能状态 + 攻击重置仍生效。</p>
  */

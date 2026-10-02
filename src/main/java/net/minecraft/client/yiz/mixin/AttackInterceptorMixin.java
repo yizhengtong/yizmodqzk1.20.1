@@ -15,17 +15,16 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
  * 攻击拦截 Mixin — 消费 {@link YizAttributes#POSHI}（破时）/ {@link YizAttributes#POXIAN}（破限）
- * 属性（1.21.1 移植版，仅属性驱动部分）。
+ * 属性（纯属性驱动）。
  *
- * <p>完整版（1.21.1）还含"强制执行标签"系统：AttackContext/DamageTag/DirectAttackExecutor/
- * SpecialDamageAttributeRegistry/DirectHealthModExecutor（真伤/破甲/直改血量标签）。1.20.1
- * 该独立系统未移植（见 port-gap-list.md），本类只保留属性触发的破时/破限。</p>
+ * <p>1.20.1 暂不实现"强制执行标签"系统（AttackContext/DamageTag/DirectAttackExecutor/
+ * SpecialDamageAttributeRegistry/DirectHealthModExecutor —— 真伤/破甲/直改血量标签），
+ * 本类只保留属性触发的破时/破限。</p>
  *
  * <p>破时（POSHI）：攻击命中时按概率清目标无敌帧（invulnerableTime=0）并开 Agent 绕过。
  * 破限（POXIAN）：按概率捕获 attack() 传入 hurt() 的原始伤害，供 LivingEntityMixin 恢复。</p>
  *
- * <p>触发概率 = 属性值%（纯属性驱动；1.21.1 另有 yizmodqzk:poshi/poxian 附魔每级+20%，
- * 1.20.1 无此附魔，故附魔加成留空）。</p>
+ * <p>触发概率 = 属性值%（纯属性驱动；没有 poshi/poxian 附魔加成）。</p>
  */
 @Mixin(Player.class)
 public abstract class AttackInterceptorMixin {

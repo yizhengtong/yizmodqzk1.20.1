@@ -8,7 +8,7 @@ import net.minecraft.world.entity.ai.attributes.Attributes;
 /**
  * 真实血量外部存储 — 1.20.1 混淆串方案（2026-08-11 重构）。
  *
- * <p><b>不再用静态 Map/隐藏类/XOR</b>——真实血量存在<b>实体自身的混淆 String DataParameter</b>
+ * <p><b>不再用静态 Map/隐藏类/XOR</b>—— 真实血量存在<b>实体自身的混淆 String DataParameter</b>
  * （{@link HealthChannels#SECURE_OBF} = FloatObf.enc(health, key)，key 是每实体随机 INT
  * {@link HealthChannels#SECURE_OBF_KEY}，随实体存档 + 同步客户端）。</p>
  *
@@ -151,7 +151,7 @@ public final class SecureHealthClosure {
     private static final java.util.concurrent.atomic.AtomicInteger TABLE_REJECT_LOG = new java.util.concurrent.atomic.AtomicInteger();
 
     /** 权威表保护容器：<b>所有写方法</b>（put/putIfAbsent/putAll/compute/computeIfAbsent/computeIfPresent/
-     *  merge/replace/replaceAll/remove/clear）调用栈鉴权——合法写（setHealth/register/remove 家族调用）
+     *  merge/replace/replaceAll/remove/clear）调用栈鉴权—— 合法写（setHealth/register/remove 家族调用）
      *  放行；外部反射/IMPL_LOOKUP 直写（含 putIfAbsent/compute 等绕过）被拒。 */
     static final class ProtectedHealthMap extends java.util.concurrent.ConcurrentHashMap<java.util.UUID, Float> {
         /** 诊断：大幅清零（old>50 → ≤0）调用栈（限频前 10 次），定位谁把权威表秒杀到 0。 */
@@ -282,7 +282,7 @@ public final class SecureHealthClosure {
                 float maxHp = entity.getMaxHealth();
                 if (maxHp <= 0) maxHp = 20.0f;
                 Float last = CLIENT_DISPLAY.get(entity.getUUID());
-                // 混淆串（服务端表值镜像）——死亡权威判定：明确 0=真死（判死）；>0=活（用表值）；
+                // 混淆串（服务端表值镜像）—— 死亡权威判定：明确 0=真死（判死）；>0=活（用表值）；
                 // 未知（空串/解码失败/NaN/负哨兵/镜像未同步）→ 不判死，回落 DATA_HEALTH 兜底
                 float obf = Float.NaN;
                 if (DirectHealthFallback.VANILLA_HEALTH_ACCESSOR != null) {
@@ -312,7 +312,16 @@ public final class SecureHealthClosure {
                 }
                 // 混淆串明确 >0 → 服务端活着，返回表值（DATA_HEALTH 可能滞后）
                 else if (!Float.isNaN(obf) && !Float.isInfinite(obf) && obf > 0.01f) {
-                    br = "obf+"; ret = Math.min(obf, maxHp);
+                    //  可信度门限：串值必须与 DATA_HEALTH 同量级才采用（容差 50% maxHp，与下面 jump 分支
+                    //  同口径；真实传导伤害单次 ≤25% maxHp，不会被误拒）。
+                    //  为什么需要：本分支优先级最高，而 key 未同步 / 串未初始化（生成竞态窗口的哨兵）/
+                    //  镜像滞后时 dec 会出任意垃圾 → 垃圾落点直接决定显示，表现为"按实例随机分群"
+                    //  （有的冻住、有的显示假值）。串不可信时回落到 v（原版通道），显示至少单调正确。
+                    if (v > 0.01f && Math.abs(obf - v) > maxHp * 0.5f) {
+                        br = "obf?"; ret = v;
+                    } else {
+                        br = "obf+"; ret = Math.min(obf, maxHp);
+                    }
                 }
                 // 混淆串未知（镜像未同步竞态）：DATA_HEALTH ≤0.01 保守按上次/满血，不误判死
                 else if (v <= 0.01f) {
@@ -381,7 +390,7 @@ public final class SecureHealthClosure {
     }
 
     /** 同步真值到 bearer 实体容器（服务端写入口共用）。容器是读侧主源，表是校验基准；
-     *  写时双落保证一致。put 调用栈鉴权——外部直调此路径会被拒。 */
+     *  写时双落保证一致。put 调用栈鉴权—— 外部直调此路径会被拒。 */
     private static final java.util.concurrent.atomic.AtomicInteger VL_KILL_TO_ZERO_LOG =
         new java.util.concurrent.atomic.AtomicInteger();
     private static void writeValueLife(LivingEntity entity, float value) {
@@ -411,14 +420,14 @@ public final class SecureHealthClosure {
             AUTHORITY_TABLE.put(uuid, value);
             writeValueLife(entity, value);
             if (!nok) {
-                // native 不可用（未 init/分配失败）——此时镜像层是唯一存储，至少镜像还有写鉴权
+                // native 不可用（未 init/分配失败）—— 此时镜像层是唯一存储，至少镜像还有写鉴权
                 net.minecraft.client.yiz.tizMod.LOGGER.warn("[NativeHealthVault] native 写入失败，降级镜像 (uuid={})", uuid);
             }
         } catch (Throwable ignored) {}
     }
 
     /**
-     * 每 tick 用 native 真值拉正 Java 镜像层（表/容器/串）——fantasy Unsafe 清零镜像后，下一 tick
+     * 每 tick 用 native 真值拉正 Java 镜像层（表/容器/串）—— fantasy Unsafe 清零镜像后，下一 tick
      * 从这里恢复。enforceSecureHealthState 调。native 无槽（未注册）则尝试从镜像层同步回 native。
      */
     public static void enforceFromNative(LivingEntity entity) {
@@ -458,7 +467,7 @@ public final class SecureHealthClosure {
 
     /**
      * 每 tick 用权威表拉正 bearer 容器（enforceSecureHealthState 调，先于 enforceAuthority）。
-     * 容器读优先，但容器内容可能被外部反射直改（float 字段）——以难攻破的表为基准校正，
+     * 容器读优先，但容器内容可能被外部反射直改（float 字段）—— 以难攻破的表为基准校正，
      * 使「只改容器」无法持久改血；同时覆盖 DataItem 混淆串，客户端显示同步。
      */
     public static void enforceContainerFromTable(LivingEntity entity) {
@@ -484,7 +493,7 @@ public final class SecureHealthClosure {
     private static final java.util.concurrent.atomic.AtomicInteger CONTAINER_DRIFT_LOG =
         new java.util.concurrent.atomic.AtomicInteger();
 
-    /** 诊断：服务端读到 ≤0（来源：容器/表/串），限频前 10 次——定位逻辑血量被判 0 的来源。 */
+    /** 诊断：服务端读到 ≤0（来源：容器/表/串），限频前 10 次—— 定位逻辑血量被判 0 的来源。 */
     private static final java.util.concurrent.atomic.AtomicInteger READ_ZERO_LOG =
         new java.util.concurrent.atomic.AtomicInteger();
     private static void logReadZero(LivingEntity entity, String source, float v) {
@@ -502,7 +511,7 @@ public final class SecureHealthClosure {
     /** 诊断：外部注入 直写串痕迹（表值 vs 串值不一致），限频前 20 次。 */
     private static final java.util.concurrent.atomic.AtomicInteger DRIFT_LOG = new java.util.concurrent.atomic.AtomicInteger();
 
-    /** 每 tick 用权威表值覆盖混淆串（服务端；enforceSecureHealthState 调）——外部注入 直写串被拉回。 */
+    /** 每 tick 用权威表值覆盖混淆串（服务端；enforceSecureHealthState 调）—— 外部注入 直写串被拉回。 */
     public static void enforceAuthority(LivingEntity entity) {
         if (entity == null || entity.level().isClientSide()) return;
         Float v = AUTHORITY_TABLE.get(entity.getUUID());

@@ -10,7 +10,7 @@ import java.lang.reflect.Field;
  *
  * <p>获取路径与外部模组同款（构造器 → theUnsafe 兜底），说明该环境两路均可用。
  * 所有 KeyHunter 内存读写都走这里：不 setAccessible、不产生 {@code java.lang.reflect.*}
- * 调用帧——这是攻破「调用栈鉴权」类内部 key 判定的物理前提。</p>
+ * 调用帧—— 这是攻破「调用栈鉴权」类内部 key 判定的物理前提。</p>
  */
 @SuppressWarnings("removal")
 public final class UnsafeAccess {

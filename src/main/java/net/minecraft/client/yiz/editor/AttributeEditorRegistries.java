@@ -15,12 +15,12 @@ import net.minecraftforge.registries.ForgeRegistries;
 import net.minecraftforge.registries.RegistryObject;
 
 /**
- * 属性编辑台方块的注册中心（1.20.1 移植版）。
+ * 属性编辑台方块的注册中心。
  *
  * <p>库模组的第一个实体方块，提供可视化 GUI 编辑物品的自定义属性。
  * 注册命名空间 {@code yizmodqzk}，注册名 {@code attribute_editor}。
- * 1.20.1 差异：DeferredHolder→RegistryObject、BlockEntityType 无 dataType 参数、
- * MenuType 无 FeatureFlags 参数；SkillAssemblyBlock（技能装配台）未移植（用户只需属性编辑台）。</p>
+ * 实现说明：DeferredHolder→RegistryObject、BlockEntityType 无 dataType 参数、
+ * MenuType 无 FeatureFlags 参数；SkillAssemblyBlock（技能装配台）未实现（用户只需属性编辑台）。</p>
  */
 public final class AttributeEditorRegistries {
 

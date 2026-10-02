@@ -22,10 +22,10 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  *   at SynchedEntityData.define → Entity.&lt;init&gt;
  *   → Couldn't place player in world → lost connection: 无效的玩家数据
  * </pre>
- * <p>症状极易被误判为"玩家存档损坏/数据丢失"——实际是玩家实体根本构造不出来，登录被踢。</p>
+ * <p>症状极易被误判为"玩家存档损坏/数据丢失"—— 实际是玩家实体根本构造不出来，登录被踢。</p>
  *
  * <p><b>兜底</b>：在 {@code defineId} 返回处检查，凡拿到 id 0 的通道一律改分配到保留段
- * （{@link #RESERVED_ID_START} 起，远离自动分配范围——自动分配几乎不会爬到 200 以上，
+ * （{@link #RESERVED_ID_START} 起，远离自动分配范围—— 自动分配几乎不会爬到 200 以上，
  * 本模组 {@code HealthChannels} 占用 252-254）。这样无论哪个模组抢了 0，都不会再炸实体构造。</p>
  */
 @Mixin(SynchedEntityData.class)
@@ -91,7 +91,7 @@ public abstract class SynchedEntityDataDefineIdMixin {
     /**
      * 栈上第一个「非原版、非本模组、非 Mixin 框架」的调用方类名。
      *
-     * <p>用来判断这次 {@code defineId} 是原版自己调的，还是第三方替别的类调的——这是 id 0 撞车的
+     * <p>用来判断这次 {@code defineId} 是原版自己调的，还是第三方替别的类调的—— 这是 id 0 撞车的
      * 关键判据（第三方替 {@code Entity.class} 在 {@code Entity.<clinit>} 之前调，就会拿到 id 0，
      * 并把原版 8 个通道整体顶偏一位）。defineId 只在类初始化时调用，栈扫描成本可忽略。</p>
      */

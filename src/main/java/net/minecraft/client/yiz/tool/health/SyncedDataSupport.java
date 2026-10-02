@@ -58,7 +58,7 @@ public final class SyncedDataSupport {
      * 启动自检时记下的「声明类.字段名 → id@对象身份」快照。
      *
      * <p>用来抓 id 撞车的真凶：生产实测同一个类在<b>启动时通道 id 完全正常</b>（0..7、类池=7），
-     * 打到某场战斗中途却出现「两个通道同 id」——说明字段里装的 accessor <b>在会话中途被换掉/改掉了</b>。
+     * 打到某场战斗中途却出现「两个通道同 id」—— 说明字段里装的 accessor <b>在会话中途被换掉/改掉了</b>。
      * 冲突时把「启动时的 id/对象」与「现在的 id/对象」并排打出来，就能直接看出是哪条字段漂移、
      * 是换了对象还是改了 id。</p>
      */
@@ -252,7 +252,7 @@ public final class SyncedDataSupport {
             existingOwner == null ? "外来" : existingOwner,
             evict ? "驱逐占用者、保留本次定义" : "保留占用者、丢弃本次定义",
             entityPoolId());
-        // 调用栈点名「谁在给这个实体加通道」——定位第三方模组用
+        // 调用栈点名「谁在给这个实体加通道」—— 定位第三方模组用
         try {
             StackTraceElement[] st = new Throwable().getStackTrace();
             StringBuilder sb = new StringBuilder("[SynchedEntityData] 冲突调用栈:");
@@ -285,7 +285,7 @@ public final class SyncedDataSupport {
      * 诊断：把一个 accessor 描述成「字段名(id@身份)」，并与启动快照对比，漂移时并排打出启动值。
      *
      * <p>这是定位「谁在会话中途换掉了通道」的关键证据：只看当前 id 无法区分
-     * 「字段被换成别的 accessor」和「同一个 accessor 的 id 被改」——把启动时的
+     * 「字段被换成别的 accessor」和「同一个 accessor 的 id 被改」—— 把启动时的
      * {@code id@identityHashCode} 一起打出来就一目了然。</p>
      */
     private static String describeAccessor(Class<?> entityClass, EntityDataAccessor<?> accessor) {
@@ -373,7 +373,7 @@ public final class SyncedDataSupport {
      * 周期性漂移检测：把 {@code Entity} 各通道的「id@对象身份」与启动快照比对，一有变化立刻 ERROR。
      *
      * <p>生产实测：启动自检时通道 id 完全正常（0..7、类池=7），打到战斗中途才出现「两个通道同 id」。
-     * 说明漂移是<b>会话中途事件</b>而不是启动顺序问题——这个方法就是给那一刻打时间戳，
+     * 说明漂移是<b>会话中途事件</b>而不是启动顺序问题—— 这个方法就是给那一刻打时间戳，
      * 好在日志里和 {@code [YizRestore]} 之类的类重定义事件对齐时间线。只读 8 个静态字段，成本可忽略，
      * 挂在藏血发现的后台 ticker（5 秒一次）上跑。</p>
      */
@@ -409,7 +409,7 @@ public final class SyncedDataSupport {
 
     /**
      * 值类型与序列化器不匹配时的兜底值；返回 {@code null} 表示"无需修复"（类型正常、或该序列化器
-     * 不认识——保守起见不动）。
+     * 不认识—— 保守起见不动）。
      *
      * <p><b>必须覆盖 1.20.1 全部原生序列化器</b>：漏一个就等于那个通道没有兜底。生产实测漏了
      * {@link EntityDataSerializers#POSE}：通道 id 撞车后 {@code DATA_POSE} 槽里是

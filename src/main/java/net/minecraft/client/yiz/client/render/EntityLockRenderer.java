@@ -20,7 +20,7 @@ import net.minecraftforge.client.event.RenderLevelStageEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 
 /**
- * 锁定框渲染器（1.21.1 移植版，1.20.1 渲染 API 适配）。
+ * 锁定框渲染器（1.20.1 渲染 API 适配）。
  * 从 {@link TargetFrameManager} 读取最佳供应者并渲染四角锁定框（充能进度=透明度，满充能冻结旋转角）。
  */
 public final class EntityLockRenderer {

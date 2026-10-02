@@ -13,13 +13,13 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import java.util.WeakHashMap;
 
 /**
- * 多段跳客户端分发 Mixin — 消费 {@code YizAttributes.JUMP_COUNT}（仅本地玩家，1.21.1 移植版）。
+ * 多段跳客户端分发 Mixin — 消费 {@code YizAttributes.JUMP_COUNT}（仅本地玩家）。
  *
  * <p>注入 {@link LocalPlayer#aiStep} HEAD：每次物理按下跳跃键（{@code keyJump.consumeClick()}），
  * 若玩家在空中且还有多段跳次数 → 消耗一次，用 JUMP_HEIGHT 反解 Y 初速设置 deltaMovement，
  * 发 C2S 请求服务端权威消耗。</p>
  *
- * <p>1.20.1 差异：无 PlayerDataAPI S2C 同步，客户端本地维护剩余次数（乐观）——
+ * <p>实现说明：无 PlayerDataAPI S2C 同步，客户端本地维护剩余次数（乐观）——
  * 落地（onGround 上升沿）recharge 到满值、每次跳 -1、内置 CD 防长按。服务端独立权威兜底。</p>
  */
 @Mixin(LocalPlayer.class)

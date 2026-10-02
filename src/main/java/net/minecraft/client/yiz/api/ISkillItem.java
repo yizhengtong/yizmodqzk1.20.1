@@ -31,7 +31,7 @@ public interface ISkillItem extends IEnhanceable {
 
     /** 冷却 tick 数（读物品 cooldown_value 属性，0=无冷却） */
     default int getCooldownTicks(ItemStack stack) {
-        // TODO(1.20.1-port): 依赖 attribute/YizAttributes.COOLDOWN_VALUE 注册（1.21.1 id "cooldown_value"）。
+        // TODO(待实现): 依赖 attribute/YizAttributes.COOLDOWN_VALUE 注册（id "cooldown_value"）。
         // 1.20.1 无 DataComponent（ATTRIBUTE_MODIFIERS），改用 getAttributeModifiers(EquipmentSlot)
         // 的 Multimap 遍历（每槽位累加同名属性修饰符）。
         double val = 0;
@@ -79,7 +79,7 @@ public interface ISkillItem extends IEnhanceable {
     /**
      * 「卸载」入口：技能从装配槽被移除时调用（服务端）。
      * <p>开关型等持有持续状态的技能应覆写此方法，关闭状态、清除 transient 标记。
-     * 默认空实现。由 {@code SkillConfigMenu.removed} 间接驱动——技能类在 onCast 产生效果时
+     * 默认空实现。由 {@code SkillConfigMenu.removed} 间接驱动—— 技能类在 onCast 产生效果时
      * 向 EffectRegistry 登记 onUnequip 等价清理回调。</p>
      */
     default void onUnequip(Player player, ItemStack stack) {}

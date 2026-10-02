@@ -14,7 +14,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * 编辑器/辖界者 setAttr 均走它）写 CONDUCTION_CAP 时登记权威值到此表。</p>
  *
  * <p>调用检测：{@link #checkAndRestore} 每 tick 由辖界者 {@code enforceSecureHealthState} 调用，
- * 对比属性当前值与权威表值——外部直接改属性（不走受信任 set）会不一致 → 判定篡改 →
+ * 对比属性当前值与权威表值—— 外部直接改属性（不走受信任 set）会不一致 → 判定篡改 →
  * 用权威值还原属性（受信任 set）+ 记日志。</p>
  *
  * <p>限伤计算（YizxianMob.conductionCap / ConductionDamageLimiter）读本表权威值，不读属性：

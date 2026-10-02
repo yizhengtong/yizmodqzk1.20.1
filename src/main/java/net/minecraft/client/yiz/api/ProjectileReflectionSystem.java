@@ -15,7 +15,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * 投射物返还系统（1.21.1 移植版）。
+ * 投射物返还系统。
  *
  * <p>下游注册反射条件，前置自动检测范围内的投射物并处理：
  * 无主人 → 移除，有主人 → 转移所有权并追踪原主人。</p>

@@ -31,16 +31,16 @@ import java.util.UUID;
  *     });
  * }</pre>
  *
- * <p>1.20.1 移植说明：
+ * <p>实现说明：
  * <ul>
- *   <li>框架层（TagContext/TagDef/注册/查询/执行）逐行照搬 1.21.1。</li>
+ *   <li>框架层（TagContext/TagDef/注册/查询/执行）</li>
  *   <li>{@link AttributeModifier} id 用 {@link UUID}（由原 ResourceLocation key 派生，与
  *       EntityAttributeGate 的 {@code nameUUIDFromBytes} 约定一致）；1.21.1 的
  *       {@code ADD_VALUE} 对应 1.20.1 的 {@link AttributeModifier.Operation#ADDITION}。</li>
  *   <li>属性引用 {@link YizAttributes} 字段为 {@code RegistryObject<Attribute>}，访问加 {@code .get()}。</li>
- *   <li>内置标签引用的技能子系统尚未移植，本次"保持结构 + TODO 占位"（父任务要求），
- *       待下列依赖移植后本文件自动编译可用：</li>
- *   <li>TODO(1.20.1-port) 缺失依赖清单：
+ *   <li>内置标签引用的技能子系统尚未实现，本次"保持结构 + TODO 占位"（父任务要求），
+ *       待下列依赖实现后本文件自动编译可用：</li>
+ *   <li>TODO(待实现) 缺失依赖清单：
  *       api/IEnhanceable、api/ISkillItem、api/SkillTriggerType、api/SkillCastMode、api/EffectSources、
  *       editor/EnhanceEntry、editor/SkillConfigStorage、handler/LastCastSlotTracker、
  *       handler/SkillChargeManager、tool/skill/SkillRanges、tool/skill/SkillIntervals、
@@ -125,7 +125,7 @@ public final class EnhanceTagRegistry {
                                          net.minecraft.world.entity.LivingEntity target) {
         // 重入守卫：标签效果可能回调 onCast→onActivate 再次进入此处（如 double_cast），直接跳过防递归。
         if (DISPATCHING.get()) return;
-        // TODO(1.20.1-port): 依赖 api/IEnhanceable、editor/SkillConfigStorage、editor/EnhanceEntry
+        // TODO(待实现): 依赖 api/IEnhanceable、editor/SkillConfigStorage、editor/EnhanceEntry
         if (!(skillItem.getItem() instanceof IEnhanceable e)) return;
         var entries = e.getEnhanceEntries(skillItem, player);
         int[] levels = SkillConfigStorage.getEnhanceLevels(skillItem);
@@ -146,9 +146,9 @@ public final class EnhanceTagRegistry {
         }
     }
 
-    // 
+    //
     //  内置标签注册
-    // 
+    //
 
     static {
         registerExistingTags();
@@ -157,7 +157,7 @@ public final class EnhanceTagRegistry {
     private static void registerExistingTags() {
         register("double_cast", "双重施法",
             "技能释放时额外再执行一次",
-            // TODO(1.20.1-port): 依赖 api/ISkillItem、handler/LastCastSlotTracker
+            // TODO(待实现): 依赖 api/ISkillItem、handler/LastCastSlotTracker
             ctx -> {
                 ItemStack item = ctx.skillItem();
                 if (item.getItem() instanceof ISkillItem si) {
@@ -169,12 +169,12 @@ public final class EnhanceTagRegistry {
 
         register("refresh_cooldowns", "刷新冷却",
             "释放后重置全部技能充能至最大值",
-            // TODO(1.20.1-port): 依赖 handler/SkillChargeManager
+            // TODO(待实现): 依赖 handler/SkillChargeManager
             ctx -> net.minecraft.client.yiz.handler.SkillChargeManager.grantTempBuff(ctx.player()));
 
         register("double_with_refresh", "被动A触发",
             "双重施法 + 刷新全部冷却",
-            // TODO(1.20.1-port): 依赖 api/ISkillItem、handler/LastCastSlotTracker、handler/SkillChargeManager
+            // TODO(待实现): 依赖 api/ISkillItem、handler/LastCastSlotTracker、handler/SkillChargeManager
             ctx -> {
                 ItemStack item = ctx.skillItem();
                 if (item.getItem() instanceof ISkillItem si) {
@@ -189,25 +189,25 @@ public final class EnhanceTagRegistry {
 
         register("wuyingji", "无影击",
             "获得100%攻击速度，4次攻击后移除",
-            // TODO(1.20.1-port): 依赖 attribute/YizAttributes.COOLDOWN_REDUCTION（1.21.1 注册 id "cooldown_reduction"）
+            // TODO(待实现): 依赖 attribute/YizAttributes.COOLDOWN_REDUCTION（id "cooldown_reduction"）
             ctx -> addAttackModifier(ctx.player(), "yiz:wuyingji",
                 net.minecraft.client.yiz.attribute.YizAttributes.COOLDOWN_REDUCTION, 100.0, 4));
 
         register("gandian", "感电",
             "使用技能后减少20%的技能冷却时间",
-            // TODO(1.20.1-port): 依赖 handler/SkillChargeManager
+            // TODO(待实现): 依赖 handler/SkillChargeManager
             ctx -> net.minecraft.client.yiz.handler.SkillChargeManager.reduceCooldown(ctx.player(), ctx.slot(), 0.20f));
 
         register("leizhenqianli", "雷震千里",
             "按键型技能释放时创建1秒击退窗口；开关型技能每次伤害时形成屏障（范围内实体动量归零）",
-            // TODO(1.20.1-port): 依赖 api/SkillTriggerType、api/SkillCastMode、api/ISkillItem、
+            // TODO(待实现): 依赖 api/SkillTriggerType、api/SkillCastMode、api/ISkillItem、
             //   tool/skill/SkillRanges
             java.util.EnumSet.of(net.minecraft.client.yiz.api.SkillTriggerType.ACTIVATE,
                                  net.minecraft.client.yiz.api.SkillTriggerType.TRIGGER),
             ctx -> {
                 var player = ctx.player();
                 if (ctx.triggerType() == net.minecraft.client.yiz.api.SkillTriggerType.TRIGGER) {
-                    // 开关型：周期性屏障——把范围内实体的全部动量归零（setDeltaMovement(0,0,0)）。
+                    // 开关型：周期性屏障—— 把范围内实体的全部动量归零（setDeltaMovement(0,0,0)）。
                     // 不建窗口、不持久化，每次伤害当场执行。
                     double r = net.minecraft.client.yiz.tool.skill.SkillRanges.get(player, 4.0, "knockback");
                     var pos = player.position();
@@ -221,7 +221,7 @@ public final class EnhanceTagRegistry {
                         }
                     }
                 } else {
-                    // 开关型（TOGGLE）不建击退窗口——其 TRIGGER 分支负责动量归零。
+                    // 开关型（TOGGLE）不建击退窗口—— 其 TRIGGER 分支负责动量归零。
                     // 若同时建窗口，tickLeizhenqianli 的外推会覆盖 TRIGGER 的归零，
                     // 导致只看到击退看不到"走一步被归0卡一下"。
                     if (ctx.skillItem().getItem() instanceof ISkillItem si
@@ -238,7 +238,7 @@ public final class EnhanceTagRegistry {
 
         register("benleixi", "奔雷袭",
             "按键型技能释放时创建0.8秒AoE窗口；开关型技能每次伤害时续期5秒窗口（持续AoE，每敌仅伤一次）",
-            // TODO(1.20.1-port): 依赖 api/SkillTriggerType、api/SkillCastMode、api/ISkillItem、
+            // TODO(待实现): 依赖 api/SkillTriggerType、api/SkillCastMode、api/ISkillItem、
             //   network/S2CBenleixiWindowPayload
             java.util.EnumSet.of(net.minecraft.client.yiz.api.SkillTriggerType.ACTIVATE,
                                  net.minecraft.client.yiz.api.SkillTriggerType.TRIGGER),
@@ -267,7 +267,7 @@ public final class EnhanceTagRegistry {
 
         register("leixiaoshan", "雷啸闪",
             "获得20%攻击速度持续5秒，可叠加3层至60%延至15秒",
-            // TODO(1.20.1-port): 依赖 attribute/YizAttributes.COOLDOWN_REDUCTION（见 applyLeixiaoshan）
+            // TODO(待实现): 依赖 attribute/YizAttributes.COOLDOWN_REDUCTION（见 applyLeixiaoshan）
             ctx -> addLeixiaoshan(ctx.player()));
 
         register("pozhenjinshen", "破阵金身",
@@ -282,13 +282,13 @@ public final class EnhanceTagRegistry {
             });
     }
 
-    // 
+    //
     //  辅助：计时攻击修饰器（无影击/霹雳通用）
-    // 
+    //
 
     /**
      * 给玩家添加一个持续 N 次攻击的属性修饰器。
-     * <p>1.20.1 差异：修饰符 id 用 {@link UUID}（由 key 派生确定性 UUID），
+     * <p>实现说明：修饰符 id 用 {@link UUID}（由 key 派生确定性 UUID），
      * 属性以 {@code RegistryObject<Attribute>} 传入，内部 {@code .get()} 取值
      * （与 EntityAttributeGate 约定一致）。</p>
      */
@@ -320,9 +320,9 @@ public final class EnhanceTagRegistry {
         }
     }
 
-    // 
+    //
     //  雷啸闪：叠加 + 计时衰减
-    // 
+    //
 
     private static void addLeixiaoshan(ServerPlayer player) {
         var pd = player.getPersistentData();
@@ -356,7 +356,7 @@ public final class EnhanceTagRegistry {
     private static void applyLeixiaoshan(ServerPlayer player) {
         int stacks = player.getPersistentData().getInt("yiz:leixiaoshan_s");
         double cdr = stacks * 20.0; // 20/40/60% 攻击速度
-        // TODO(1.20.1-port): 依赖 attribute/YizAttributes.COOLDOWN_REDUCTION（1.21.1 注册 id "cooldown_reduction"）
+        // TODO(待实现): 依赖 attribute/YizAttributes.COOLDOWN_REDUCTION（id "cooldown_reduction"）
         var inst = player.getAttribute(net.minecraft.client.yiz.attribute.YizAttributes.COOLDOWN_REDUCTION.get());
         if (inst == null) return;
         UUID id = UUID.nameUUIDFromBytes("yiz:leixiaoshan".getBytes(StandardCharsets.UTF_8));
@@ -365,14 +365,14 @@ public final class EnhanceTagRegistry {
             id, "yiz:leixiaoshan", cdr, net.minecraft.world.entity.ai.attributes.AttributeModifier.Operation.ADDITION));
     }
 
-    // 
+    //
     //  攻击后处理（由 LivingEntityMixin 调用）
-    // 
+    //
 
     public static void onPlayerAttack(ServerPlayer player) {
         var pd = player.getPersistentData();
         // 无影击：CR 修饰器 + 攻击计数消费
-        // TODO(1.20.1-port): 依赖 attribute/YizAttributes.COOLDOWN_REDUCTION
+        // TODO(待实现): 依赖 attribute/YizAttributes.COOLDOWN_REDUCTION
         tickAttackModifier(player, "yiz:wuyingji", net.minecraft.client.yiz.attribute.YizAttributes.COOLDOWN_REDUCTION);
         // 霹雳：CRIT_RATE 修饰器 + 暴击标记（供 LivingEntityMixin 伤害阶段读取）
         tickAttackModifier(player, "yiz:pili", net.minecraft.client.yiz.attribute.YizAttributes.CRIT_RATE);
@@ -380,19 +380,19 @@ public final class EnhanceTagRegistry {
         if (pd.getInt("yiz:pili_n") > 0) pd.putBoolean("yiz:pili_crit", true);
     }
 
-    // 
+    //
     //  奔雷袭：持续 AoE（每 tick 检测新敌人）
-    // 
+    //
 
     public static void tickBenleixi(ServerPlayer player) {
         var pd = player.getPersistentData();
         if (!pd.contains("yiz:benleixi_t")) return;
         // 兜底：标签来源（技能）已卸载 → 立即清 AoE 窗口，防止残留伤害
-        // TODO(1.20.1-port): 依赖 api/EffectSources.tagActive
+        // TODO(待实现): 依赖 api/EffectSources.tagActive
         if (!net.minecraft.client.yiz.api.EffectSources.tagActive(player, "benleixi")) {
             pd.remove("yiz:benleixi_t");
             pd.remove("yiz:benleixi_d");
-            // TODO(1.20.1-port): 依赖 network/S2CBenleixiWindowPayload.sendWindowEnd
+            // TODO(待实现): 依赖 network/S2CBenleixiWindowPayload.sendWindowEnd
             net.minecraft.client.yiz.network.S2CBenleixiWindowPayload.sendWindowEnd(player);
             return;
         }
@@ -401,7 +401,7 @@ public final class EnhanceTagRegistry {
         if (now > end) {
             pd.remove("yiz:benleixi_t");
             pd.remove("yiz:benleixi_d");
-            // TODO(1.20.1-port): 依赖 network/S2CBenleixiWindowPayload.sendWindowEnd
+            // TODO(待实现): 依赖 network/S2CBenleixiWindowPayload.sendWindowEnd
             net.minecraft.client.yiz.network.S2CBenleixiWindowPayload.sendWindowEnd(player);
             return;
         }
@@ -429,9 +429,9 @@ public final class EnhanceTagRegistry {
         if (heal > 0) player.heal(heal);
     }
 
-    // 
+    //
     //  雷震千里：1秒击退窗口（标签侧实例，由 onPlayerTick 驱动）
-    // 
+    //
 
     /**
      * 雷震千里击退窗口：ACTIVATE 触发后写入 1 秒时间戳，此方法每 tick 调用。
@@ -442,7 +442,7 @@ public final class EnhanceTagRegistry {
         var pd = player.getPersistentData();
         if (!pd.contains("yiz:lzqll_kb_t")) return;
         // 兜底：标签来源（技能）已卸载 → 立即清窗口，防止残留击退
-        // TODO(1.20.1-port): 依赖 api/EffectSources.tagActive
+        // TODO(待实现): 依赖 api/EffectSources.tagActive
         if (!net.minecraft.client.yiz.api.EffectSources.tagActive(player, "leizhenqianli")) {
             pd.remove("yiz:lzqll_kb_t");
             pd.remove("yiz:lzqll_kb_d");
@@ -457,12 +457,12 @@ public final class EnhanceTagRegistry {
         }
         // 间隔：基础 2tick，受 SKILL_INTERVAL 加速率影响（用窗口起始时间算 elapsed）
         long start = end - 20;
-        // TODO(1.20.1-port): 依赖 tool/skill/SkillIntervals.get
+        // TODO(待实现): 依赖 tool/skill/SkillIntervals.get
         double interval = net.minecraft.client.yiz.tool.skill.SkillIntervals.get(player, 2, "knockback");
         long elapsed = now - start;
         if (elapsed % Math.max(1, (long) interval) != 0) return;
 
-        // TODO(1.20.1-port): 依赖 tool/skill/SkillRanges.get
+        // TODO(待实现): 依赖 tool/skill/SkillRanges.get
         double r = net.minecraft.client.yiz.tool.skill.SkillRanges.get(player, 6.0, "knockback");
         var level = player.level();
         var pos = player.position();
@@ -488,14 +488,14 @@ public final class EnhanceTagRegistry {
         pd.putString("yiz:lzqll_kb_d", String.join(",", set));
     }
 
-    // 
+    //
     //  破阵金身：ACTIVATE 时挂 transient 标记 yiz:pozhenjinshen，
     //  由雷鸣电甲 onTick 护盾段读取决定 interval（4→2tick）。
-    //  原错误的 tickMingyin（每tick回满）已删除——那从不是设计意图。
-    // 
+    //  原错误的 tickMingyin（每tick回满）已删除—— 那从不是设计意图。
+    //
 
     public static boolean isTagActive(ServerPlayer player, String tagKey) {
-        // TODO(1.20.1-port): 依赖 editor/SkillConfigStorage、api/IEnhanceable、editor/EnhanceEntry
+        // TODO(待实现): 依赖 editor/SkillConfigStorage、api/IEnhanceable、editor/EnhanceEntry
         var data = SkillConfigStorage.get(player.getUUID());
         if (data == null) return false;
         ItemStack[] skills = { data.bigLoad().getItem(0),

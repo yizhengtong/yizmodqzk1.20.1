@@ -3,7 +3,7 @@ package net.minecraft.client.yiz.tool;
 import java.util.Set;
 
 /**
- * 外部调用判定工具 — 全栈区段白名单检查。1.20.1 移植版（引擎前缀改 net.minecraftforge）。
+ * 外部调用判定工具 — 全栈区段白名单检查。1.20.1（引擎前缀改 net.minecraftforge）。
  */
 public final class ExternalCallGuard {
 

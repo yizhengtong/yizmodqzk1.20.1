@@ -17,18 +17,18 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 实体伤害/血量通用工具（1.20.1 完整移植版）。
+ * 实体伤害/血量通用工具（1.20.1 完整版）。
  *
- * <p>完整移植 1.21.1 的涨跌多空伤害体系：
+ * <p>完整实现 1.21.1 的涨跌多空伤害体系：
  * {@link #applyDreamDamage}（绕过目标 hurt 真实扣血）+ {@link #modifyHealth}（三层系统）
  * + {@link #addDelta}（Delta + Float 通道 + DirectHealthFallback 保底）+ 死亡触发。</p>
  *
- * <p> 2026-08-12 攻击线加强：新增 {@link #applyProportionalDreamDamage}（等比软压血——delta 换算为
+ * <p> 2026-08-12 攻击线加强：新增 {@link #applyProportionalDreamDamage}（等比软压血—— delta 换算为
  * {@code -maxHp×累积}，使目标 getHealth 被钳为 {@code min(health, maxHp×(1-累积))}，对超高血量/
  * Infinity/免改血实体等比压缩有效血量，累积到 1 触发 {@link #dreamDeathblow}）；{@link #dreamDeathblow}
  * 补全完整死亡链（recordDamage + die + 清 goals/brain + kill() 兜底）。</p>
  *
- * <p> 1.20.1 差异（注释修正）：LivingEntityMixin 已实现 HealthDataBridge 并在 defineSynchedData
+ * <p> 1.20.1 实现说明（注释修正）：LivingEntityMixin 已实现 HealthDataBridge 并在 defineSynchedData
  * TAIL 为全实体 define delta 通道（yizmodqzk$HEALTH_DELTA），getHealth/isAlive/isDeadOrDying
  * 均已 RETURN 注入 delta 截断 → delta 通道对全实体生效（旧注释"非桥接实体 delta 恒 0"已过时）。</p>
  */
@@ -94,13 +94,20 @@ public final class EntityASMUtil {
         return PROTECTED_IDS.contains(id) && !isForceRemoving(id);
     }
 
-    private static volatile boolean deathTriggerEnabled = true;
-    public static boolean isDeathTriggerEnabled() { return deathTriggerEnabled; }
-    public static void setDeathTriggerEnabled(boolean enabled) { deathTriggerEnabled = enabled; }
+    // 开关统一走配置（config/yizmodqzk-common.toml / /yiz config）；保留原方法签名以便旧调用点不改。
+    public static boolean isDeathTriggerEnabled() {
+        return net.minecraft.client.yiz.core.YizConfig.bool("health.death_trigger");
+    }
+    public static void setDeathTriggerEnabled(boolean enabled) {
+        net.minecraft.client.yiz.core.YizConfig.setSession("health.death_trigger", String.valueOf(enabled));
+    }
 
-    private static volatile boolean damageEffectsEnabled = false;
-    public static boolean isDamageEffectsEnabled() { return damageEffectsEnabled; }
-    public static void setDamageEffectsEnabled(boolean enabled) { damageEffectsEnabled = enabled; }
+    public static boolean isDamageEffectsEnabled() {
+        return net.minecraft.client.yiz.core.YizConfig.bool("health.damage_effects");
+    }
+    public static void setDamageEffectsEnabled(boolean enabled) {
+        net.minecraft.client.yiz.core.YizConfig.setSession("health.damage_effects", String.valueOf(enabled));
+    }
 
     // ==================== Delta 管理 ====================
 
@@ -128,7 +135,7 @@ public final class EntityASMUtil {
     public static void addDelta(LivingEntity entity, float amount) {
         if (entity.level().isClientSide()) return;
 
-        if (amount < 0 && damageEffectsEnabled) {
+        if (amount < 0 && isDamageEffectsEnabled()) {
             entity.hurtTime = 10;
             entity.hurtDuration = 10;
             entity.level().broadcastEntityEvent(entity, (byte) 2);
@@ -219,7 +226,7 @@ public final class EntityASMUtil {
 
     /** 当 DELTA 伤害导致实体有效血量 ≤ 0 时，通过反射调用 die()。 */
     private static void triggerDeathIfDead(LivingEntity entity) {
-        if (!deathTriggerEnabled) return;
+        if (!isDeathTriggerEnabled()) return;
         float delta = getHealthDelta(entity);
         if (delta >= 0) return;
         if (entity.getMaxHealth() + delta > 0.0F) return;
@@ -318,10 +325,13 @@ public final class EntityASMUtil {
 
     //  涨跌多空激进增强（-inf 判定死亡 + 等比软压 + 深层直删）
 
-    /** 深层结构直删兜底开关（风险最高，默认激进完整版开启）。 */
-    private static volatile boolean deepRemoveEnabled = true;
-    public static void setDeepRemoveEnabled(boolean enabled) { deepRemoveEnabled = enabled; }
-    public static boolean isDeepRemoveEnabled() { return deepRemoveEnabled; }
+    /** 深层结构直删兜底开关（风险最高，默认激进完整版开启）—— 走配置。 */
+    public static void setDeepRemoveEnabled(boolean enabled) {
+        net.minecraft.client.yiz.core.YizConfig.setSession("health.deep_remove", String.valueOf(enabled));
+    }
+    public static boolean isDeepRemoveEnabled() {
+        return net.minecraft.client.yiz.core.YizConfig.bool("health.deep_remove");
+    }
 
     /**
      * 底层遍历世界实体：走 {@code Level.getEntities()} 内部 {@code LevelEntityGetter} 直接扫实体集合，
@@ -341,17 +351,20 @@ public final class EntityASMUtil {
 
     // ==================== 后门白名单 ====================
 
-    /** 后门白名单开关：默认开启。作用于玩家时豁免创造/旁观模式（攻击线不生效）。 */
-    private static volatile boolean backdoorWhitelistEnabled = true;
-    public static void setBackdoorWhitelistEnabled(boolean enabled) { backdoorWhitelistEnabled = enabled; }
-    public static boolean isBackdoorWhitelistEnabled() { return backdoorWhitelistEnabled; }
+    /** 后门白名单开关：默认开启。作用于玩家时豁免创造/旁观模式（攻击线不生效）—— 走配置。 */
+    public static void setBackdoorWhitelistEnabled(boolean enabled) {
+        net.minecraft.client.yiz.core.YizConfig.setSession("health.backdoor_whitelist", String.valueOf(enabled));
+    }
+    public static boolean isBackdoorWhitelistEnabled() {
+        return net.minecraft.client.yiz.core.YizConfig.bool("health.backdoor_whitelist");
+    }
 
     /**
      * 后门白名单豁免判定：目标为玩家且处于创造/旁观模式 → 豁免（涨跌多空攻击线全部不生效）。
      * 白名单开关关闭时一律不豁免。
      */
     public static boolean isBackdoorExempt(LivingEntity target) {
-        if (!backdoorWhitelistEnabled) return false;
+        if (!isBackdoorWhitelistEnabled()) return false;
         if (target instanceof Player p) {
             return p.isCreative() || p.isSpectator();
         }
@@ -441,7 +454,7 @@ public final class EntityASMUtil {
      *
      * <p>攻击者每次命中： 真实血量槽直改优先（直接扣真实血 + 永久禁疗）； 定位失败 →
      * 等比累积 {@code accum += dream/maxHp}，软压 delta {@code = -maxHp×min(accum,1)}，目标所有
-     * getHealth 读取被钳为 {@code min(health, maxHp×(1-min(accum,1)))}——对超高血量/Infinity/免改血
+     * getHealth 读取被钳为 {@code min(health, maxHp×(1-min(accum,1)))}—— 对超高血量/Infinity/免改血
      * 实体也等比压缩有效血量； 跨阈值：累积跨过 1 → {@link #dreamDeathblow} 完整死亡链；
      * 跨过 10 → {@link #dreamDeepRemove} 深层结构直删。</p>
      */
@@ -449,13 +462,19 @@ public final class EntityASMUtil {
         if (attacker == null || target == null || dream <= 0) return;
         if (attacker.level().isClientSide()) return;
         if (isBackdoorExempt(target)) return; // 后门白名单：创造/旁观玩家豁免
-        // ⚠️ 玩家只走「普通伤害」轨：改血线（直改真实血量 / 无视护甲与无敌帧 / 100% 禁疗 /
+        // ⚠️ 玩家默认只走「普通伤害」轨：改血线（直改真实血量 / 无视护甲与无敌帧 / 100% 禁疗 /
         //    门控击穿 / 判死标记 / 跨阈值死亡链）一律不对玩家生效。
-        //    原先只有创造/旁观豁免，生存玩家仍会被改血线命中：掉血绕过护甲、且被挂上 100% 禁疗
-        //    （治不回来），表现就是「铁斗士（或玩家的涨跌多空攻击）误伤玩家」。
-        //    这是整条改血线唯一的公共入口（Tiedoushi / 辖界者 / C2S 攻击包都汇到这里），
-        //    所以闸门放在这里，调用点各自的门只是省掉无谓的范围扫描。
-        if (target instanceof Player) return;
+        //    是否放开由「危险开关」决定（默认全关，见 config/yizmodqzk-common.toml 的 [danger]）：
+        //      · 攻击者是玩家 → 需要 danger.player_attr_on_player（服主级，允许多空属性互改）
+        //      · 攻击者是生物 → 需要 danger.mob_health_on_player（服主级）+ 目标不在个体豁免名单
+        //    这是整条改血线唯一的公共入口（各生物 / C2S 攻击包都汇到这里），所以闸门放在这里。
+        if (target instanceof Player p) {
+            boolean fromPlayer = attacker instanceof Player;
+            boolean allowed = fromPlayer
+                ? net.minecraft.client.yiz.core.YizConfig.playerAttrMayModifyPlayer()
+                : net.minecraft.client.yiz.core.YizConfig.mobMayModifyPlayer(p);
+            if (!allowed) return;
+        }
         // 反射设置 lastHurtByPlayer（vanilla die 掉落/经验归属攻击者）
         setLastHurtByPlayerReflect(target, attacker);
         // 0. 全量直改（P0.5）：一次性扫描目标全部内存表征 → 同步改写 → 门控击穿 → 正常死亡流程。
@@ -553,6 +572,31 @@ public final class EntityASMUtil {
     /** 死亡链补受击的防递归标记（受击可能触发连击→再攻击→再入死亡链）。 */
     private static final ThreadLocal<Boolean> DEATHBLOW_HURT = ThreadLocal.withInitial(() -> false);
 
+    /**
+     * 玩家专用：走原版 {@code die()}（尊重原版死亡界面/掉落/保留物品规则），不做任何门控击穿。
+     *
+     * <p>玩家的血量已经被危险开关允许的改血线写到 0，这里只负责让原版把死亡流程跑完，
+     * 避免出现「血 0 但人还站着」的状态。</p>
+     */
+    public static void vanillaDie(LivingEntity attacker, LivingEntity target) {
+        if (target == null) return;
+        try {
+            java.lang.reflect.Method m;
+            try {
+                m = net.minecraft.world.entity.LivingEntity.class.getDeclaredMethod(
+                    "die", net.minecraft.world.damagesource.DamageSource.class);
+            } catch (NoSuchMethodException e) {
+                m = net.minecraft.world.entity.LivingEntity.class.getDeclaredMethod(
+                    "m_6667_", net.minecraft.world.damagesource.DamageSource.class);
+            }
+            m.setAccessible(true);
+            net.minecraft.world.damagesource.DamageSource src = attacker != null
+                ? target.damageSources().mobAttack(attacker)
+                : target.damageSources().genericKill();
+            m.invoke(target, src);
+        } catch (Throwable ignored) {}
+    }
+
     /** 是否本模组自研实体（yizxian 包）。死亡链的全量通道清零 / 深层移除仅对其执行——
      *  第三方实体的 Float/INT/LONG 通道含技能/阶段/攻击间隔等非血量数据，无差别清零会破坏其状态机，
      *  forceRemoveDeep 会从世界存储深层移除破坏其关联（召唤物/BossEvent/区块）→ 维度切换/存档异常
@@ -622,7 +666,7 @@ public final class EntityASMUtil {
         } catch (Throwable ignored) {}
         // 倒地动画（vanilla tickDeath 约 20 tick）后，若 override remove 拦截导致仍未移除，
         // 延迟强制深层反注册兜底（学 Trial onSoulRemove 绕过 override）。不立即反注册，保留倒地动画。
-        // 仅对自研实体或明确标记允许（复活型/拒死型）的实体执行——第三方不深层移除（vanilla die+掉落已够）。
+        // 仅对自研实体或明确标记允许（复活型/拒死型）的实体执行—— 第三方不深层移除（vanilla die+掉落已够）。
         try {
             if (!isSelfMob(target) && !isForceRemoveAllowed(target.getId())) return;
             HealthModificationScheduler.schedule(target,
@@ -849,7 +893,7 @@ public final class EntityASMUtil {
     // ==================== 强制双 tick（受保护实体每 tick 跑两次）====================
 
     /** 需要强制双 tick 的实体：受保护血量实体（辖界者等）。
-     *  排除死亡实体（表值≤0）——否则 guardEntityTick cancel 会让 tickDeath 卡住不递增、不触发移除（残留）。 */
+     *  排除死亡实体（表值≤0）—— 否则 guardEntityTick cancel 会让 tickDeath 卡住不递增、不触发移除（残留）。 */
     public static boolean shouldOverrideTick(net.minecraft.world.entity.Entity entity) {
         return entity instanceof net.minecraft.world.entity.LivingEntity le
                 && SecureHealthClosure.hasObf(le)

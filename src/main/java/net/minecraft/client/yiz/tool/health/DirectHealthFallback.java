@@ -11,16 +11,16 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 直接数据访问保底方案（1.20.1 移植版）。
+ * 直接数据访问保底方案。
  *
  * <p>通过反射直接访问 {@link SynchedEntityData} 内部的 DataItem 集合，
  * 绕过所有实体方法覆盖、事件系统、以及 {@code getHealth()} 重写。</p>
  *
- * <p> 1.20.1 差异：
+ * <p> 实现说明：
  * <ul>
- *   <li>{@link EntityDataAccessor} 用 {@code getSerializer()}/{@code getId()}（1.21.1 是 record）。</li>
+ *   <li>{@link EntityDataAccessor} 用 {@code getSerializer()}/{@code getId()}。</li>
  *   <li>{@code SynchedEntityData.itemsById} 在 <b>1.21.1 是 {@code DataItem[]} 数组</b>，
- *       <b>1.20.1 是 {@code Int2ObjectMap<DataItem<?>>}（fastutil Map）</b>——1.21.1 移植的数组强转
+ *       <b>1.20.1 是 {@code Int2ObjectMap<DataItem<?>>}（fastutil Map）</b>—— 1.21.1 实现的数组强转
  *       在 1.20.1 抛 ClassCastException 被静默吞掉，导致保底层完全失效。本版按 Map 遍历（兼容数组）。</li>
  *   <li>delta 通道字段（yizmodqzk$HEALTH_DELTA）由 LivingEntityMixin 在 defineSynchedData TAIL 注入，
  *       DELTA_ACCESSOR_ID 有效；遍历时跳过 delta 通道防误伤。</li>
@@ -44,7 +44,7 @@ public final class DirectHealthFallback {
 
     private static volatile EntityDataAccessor<Integer> airSupplyAccessor;
 
-    /** vanilla AIR_SUPPLY 通道（Entity 池 id=1，INT）——明确非血量。任何数值遍历/兜底一律跳过，
+    /** vanilla AIR_SUPPLY 通道（Entity 池 id=1，INT）—— 明确非血量。任何数值遍历/兜底一律跳过，
      *  防误改其他模组数据 / 参与 coerce 传播写坏类型。反射按「INT 序列化器 + id==1」定位，
      *  不依赖字段名（生产 SRG 字段名 f_XXXX_ 与 official 不同）。 */
     public static EntityDataAccessor<Integer> airSupplyAccessor() {
@@ -241,13 +241,21 @@ public final class DirectHealthFallback {
     public static boolean setFloatChannelValue(LivingEntity entity, EntityDataAccessor<Float> accessor, float value, boolean markDirty) {
         if (!AVAILABLE || accessor == null) return false;
         boolean[] found = {false};
+        boolean[] changed = {false};
         forEachFloatItem(entity, (acc, cur, item) -> {
             if (acc == accessor) {
+                if (cur != value) changed[0] = true;   //  先比再写：值没变就不发包
                 item.setValue(value);
                 if (markDirty) item.setDirty(true);
                 found[0] = true;
             }
         });
+        //  DataItem 的脏位<b>单独</b>置位不会发包：packDirty() 先看容器自己的 isDirty。
+        //  同文件的数值/字符串/布尔通道写入都调了 markEntityDataDirty，只有 Float 漏了 →
+        //  "每 tick 回写对外血量"与"受击回写"对网络不可见（只是搭 setHealth 写混淆串那趟车）。
+        if (found[0] && changed[0] && markDirty) {
+            markEntityDataDirty(entity);
+        }
         return found[0];
     }
 

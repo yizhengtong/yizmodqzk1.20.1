@@ -7,7 +7,7 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 
 /**
- * 前置库对外 API 门面（1.20.1 最小版，从 1.21.1 移植）。
+ * 前置库对外 API 门面（1.20.1 最小版）。
  *
  * <p>1.21.1 中该类的完整版含自定义 {@code DamageEvent}（NeoForge.EVENT_BUS 派发）与
  * {@code DamageResult} 返回值。1.20.1 最小版简化：穿透伤害直接实现（无自定义事件派发），

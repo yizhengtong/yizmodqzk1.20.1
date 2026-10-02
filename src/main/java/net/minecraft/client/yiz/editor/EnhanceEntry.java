@@ -8,8 +8,8 @@ import java.util.function.ToDoubleFunction;
  * 强化条目 — 属性型或标签型。
  * <p>每个技能/被动物品最多提供 6 个条目，对应 GUI 中 6 个加强槽。</p>
  *
- * <p>1.20.1 移植：{@link Attribute} 原持有 {@code editor/EditableAttribute}（1.21.1 定义，未移植），
- * 当前以解析后的 (id, displayName, getter) 三元组占位，结构等价。待 EditableAttribute 移植后
+ * <p>1.20.1：{@link Attribute} 原持有 {@code editor/EditableAttribute}（未实现），
+ * 当前以解析后的 (id, displayName, getter) 三元组占位，结构等价。待 EditableAttribute 实现后
  * 改回 {@code record Attribute(EditableAttribute attr)}（key()→attr.id() 等，见各方法注释）。</p>
  */
 public sealed interface EnhanceEntry {

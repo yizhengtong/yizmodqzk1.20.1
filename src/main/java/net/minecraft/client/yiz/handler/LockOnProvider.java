@@ -16,7 +16,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 属性驱动锁定目标供应者（1.21.1 移植版）— 由 会心(HUIXIN)/渴攻(KEGONG) 属性驱动。
+ * 属性驱动锁定目标供应者— 由 会心(HUIXIN)/渴攻(KEGONG) 属性驱动。
  * 客户端独立充能，视线射线命中第一个实体（穿墙），范围/充能时间来自玩家实体属性。
  *
  * <h3>默认互补值</h3>

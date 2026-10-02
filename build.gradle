@@ -135,11 +135,11 @@ repositories {
     // Put repositories for dependencies here
     // ForgeGradle automatically adds the Forge maven and Maven Central for you
 
-    // If you have mod jar dependencies in ./libs, you can declare them as a repository like so.
-    // See https://docs.gradle.org/current/userguide/declaring_repositories.html#sub:flat_dir_resolver
-    // flatDir {
-    //     dir 'libs'
-    // }
+    // libs/ 内的第三方前置 jar（Curios）：必须走 flatDir 的“模块依赖”，fg.deobf 才能反映射。
+    // 用 fg.deobf(files("libs/xxx.jar")) 不行 —— ForgeGradle 会警告
+    // "files(...) dependencies are not deobfuscated ... using obfuscated version!"，
+    // 于是 dev 环境拿到的是 SRG jar，runClient 直接 NoSuchMethodError。
+    flatDir { dir 'libs' }
 }
 
 dependencies {
@@ -153,8 +153,12 @@ dependencies {
     // ASM 字节码分析（EntityHealthLocator.getHealth 字节码探测用）
     implementation "org.ow2.asm:asm:9.8"
 
-    // Curios API（饰品槽位检测；生产环境需装 curios mod，libs/curios-forge-5.14.1+1.20.1.jar）
-    compileOnly fg.deobf(files("libs/curios-forge-5.14.1+1.20.1.jar"))
+    // Curios API 前置（饰品槽位检测 / ICurioItem 探测；libs 内本地 jar，flatDir 组名被忽略）。
+    // fg.deobf 把它反映射成 official：编译期可用，dev 运行时（runClient）也会作为模组加载，
+    // 这样 CuriosBridge / CuriosEquipHandler / CuriosAttributeHandler 在 dev 里才真正生效。
+    // 生产环境不内嵌 Curios（本库把它当可选前置，未装时 isLoaded() 守卫会安全跳过），
+    // 实际由内容模组 yizxianmod 的 Jar-in-Jar 内嵌提供。
+    implementation fg.deobf("blank:curios-forge:${curios_version}")
 
     // Example mod dependency with JEI - using fg.deobf() ensures the dependency is remapped to your development mappings
     // The JEI API is declared for compile time use, while the full JEI artifact is used at runtime

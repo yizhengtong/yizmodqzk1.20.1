@@ -26,9 +26,9 @@ public interface IEnhanceable {
 
     /** 无需覆写：自动检测物品上所有非零的可编辑属性 */
     default List<EnhanceEntry.Attribute> getEnhanceableAttributes(ItemStack stack) {
-        // TODO(1.20.1-port): 依赖 editor/EditableAttribute（1.21.1 可编辑属性定义，未移植）。
+        // TODO(待实现): 依赖 editor/EditableAttribute（可编辑属性定义，未实现）。
         // 原逻辑：遍历 EditableAttribute.getAll()，收集 |attr.getter().apply(stack)| > 0.001 的属性，
-        // 构造 new EnhanceEntry.Attribute(attr)。待 EditableAttribute 移植后恢复本方法。
+        // 构造 new EnhanceEntry.Attribute(attr)。待 EditableAttribute 实现后恢复本方法。
         return new ArrayList<>();
     }
 
@@ -41,10 +41,10 @@ public interface IEnhanceable {
     /**
      * 获取此物品可用作强化的全部条目（属性 + 标签）。
      * <p>优先级：{@code SkillEnhanceConfig} 预定义映射 > 自动检测属性 + 被动标签。</p>
-     * <p>1.20.1 移植：SkillEnhanceConfig 未移植，配置分支暂跳过（见 TODO）。</p>
+     * <p>1.20.1：SkillEnhanceConfig 未实现，配置分支暂跳过（见 TODO）。</p>
      */
     default List<EnhanceEntry> getEnhanceEntries(ItemStack stack, Player player) {
-        // TODO(1.20.1-port): 依赖 editor/SkillEnhanceConfig（1.21.1 用户配置映射，未移植）。
+        // TODO(待实现): 依赖 editor/SkillEnhanceConfig（用户配置映射，未实现）。
         // 原逻辑：var configEntries = SkillEnhanceConfig.getEnhancementsFor(stack);
         //         if (!configEntries.isEmpty()) return configEntries;
         // —— 当前跳过配置分支，直接走「自动检测属性 + 被动标签」回退。

@@ -132,7 +132,7 @@ public final class CreatureProfileRegistry {
     }
 
     /**
-     * 原型里的布尔效果组件（{@code effects} 列表）——供 {@link InstanceEffectState} 的判定使用。
+     * 原型里的布尔效果组件（{@code effects} 列表）—— 供 {@link InstanceEffectState} 的判定使用。
      *
      * <p><b>热路径安全</b>：只做「类 → 原型 id」与「id → 已合并组件集合」两次查表 + 一次组件读，
      * 不合并、不分配（{@link #componentsOf} 会应用实例补丁并新建集合，不适合每 tick 调用）。</p>

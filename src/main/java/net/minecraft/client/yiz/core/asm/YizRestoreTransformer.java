@@ -18,14 +18,14 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <p>对受保护的本模组类，<b>每次 transform pass 直接返回 jar 里的原始字节</b>，盖掉任何外部注入
  * （coremod/agent 对本模组实体类的字节改写）。1.20.1 实战对象：fantasy(FantasyEndingCore) 的
  * SoftGetHealthClassVisitor 对<b>所有 super 链含 LivingEntity 的类</b>在类加载期改写
- * {@code getHealth()/isAlive()/isDeadOrDying()}——我们 YizxianMob 全中招，运行时字节≠源码。
+ * {@code getHealth()/isAlive()/isDeadOrDying()}—— 我们 YizxianMob 全中招，运行时字节≠源码。
  * 本 transformer 在 agent 已 attach（晚于外部 coremod）后注册（canRetransform=true）→ transform 链里
  * 本 transformer 最后执行 → 对受保护类返回 jar 字节即终态，外部怎么改都被还原。</p>
  *
  * <p><b>jar 字节来源</b>：transform 传入的 loader（定义类加载器）{@code getResourceAsStream(internal+".class")}
  * 读 jar 打包的原始 class（transformer 只改 define 时字节，不改 jar 资源）。缓存防重复 IO。</p>
  *
- * <p><b>限制</b>：redefine/retransform 不能增删方法/字段/改签名——只适配"外部改方法体"场景（当前 fantasy
+ * <p><b>限制</b>：redefine/retransform 不能增删方法/字段/改签名—— 只适配"外部改方法体"场景（当前 fantasy
  * 正是仅改方法体）。若外部改结构（加方法/字段）retransform 会失败，register 侧逐个降级并记日志。</p>
  *
  * <p><b>线程安全</b>：transform 可能在任意加载线程执行，只引用已加载的 JVM 类与静态日志，不触发加载

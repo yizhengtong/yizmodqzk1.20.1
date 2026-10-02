@@ -20,7 +20,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
  * 流体真正破坏 Mixin — 消费 {@link YizAttributes#MINING_ALL} ≥ 1
- * + {@link YizAttributes#MINING_LEVEL} ≥ 10（1.21.1 移植版）。
+ * + {@link YizAttributes#MINING_LEVEL} ≥ 10。
  *
  * <p>注入 {@code ServerPlayerGameMode#removeBlock} HEAD：
  * 原版 {@code onDestroyedByPlayer} 对流体用 {@code createLegacyBlock()} 重置方块（=原地复活）。

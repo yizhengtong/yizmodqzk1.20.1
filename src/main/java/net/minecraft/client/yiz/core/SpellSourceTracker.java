@@ -6,7 +6,7 @@ package net.minecraft.client.yiz.core;
  * <p>出伤前调用 {@link #set(String)} 设标签（如 {@code "ludens_echo"}），
  * 管线内任意位置 {@link #get()} 读取，出伤后 {@link #restore(String)} 还原。</p>
  *
- * <p>1.20.1 移植版：纯 JDK 依赖，逐行照搬 1.21.1。</p>
+ * <p>1.20.1：纯 JDK 依赖</p>
  */
 public final class SpellSourceTracker {
 

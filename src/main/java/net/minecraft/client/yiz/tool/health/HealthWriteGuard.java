@@ -10,7 +10,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * 健康值字段写入守卫（1.20.1 精简版）。
  *
  * <p>辖界者走 {@link SecureHealthClosure} 外部表血量（getHealth 读表），vanilla {@code health}
- * 字段不参与逻辑血量——外部模组反射直写该字段不影响 getHealth。本守卫的职责简化为：
+ * 字段不参与逻辑血量—— 外部模组反射直写该字段不影响 getHealth。本守卫的职责简化为：
  * 每 tick 用 {@link EntityActuallyHurt#catchSetTrueHealth} 把 vanilla health 字段/DataParameter
  * 纠正回外部表真值（防外部模组读 DataParameter 得到假 0 触发死亡判定）。</p>
  */

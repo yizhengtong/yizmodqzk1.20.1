@@ -47,7 +47,7 @@ public final class SkillIntervals {
             clearOffset(player, purpose);
             offset = 0;
         }
-        // TODO(1.20.1-port): 依赖 attribute/YizAttributes.SKILL_INTERVAL 注册（1.21.1 id "skill_interval"）。
+        // TODO(待实现): 依赖 attribute/YizAttributes.SKILL_INTERVAL 注册（id "skill_interval"）。
         double accel = player.getAttributeValue(YizAttributes.SKILL_INTERVAL.get());
         return Math.max(0, (base + offset) * (1 - accel / 100.0));
     }

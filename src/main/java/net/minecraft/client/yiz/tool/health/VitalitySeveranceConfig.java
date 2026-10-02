@@ -7,7 +7,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 禁疗配置（百分比 + 固定值）（1.20.1 移植版）。
+ * 禁疗配置（百分比 + 固定值）。
  *
  * <p>从健康值根本禁止治疗。先百分比削减，再减固定值。</p>
  */

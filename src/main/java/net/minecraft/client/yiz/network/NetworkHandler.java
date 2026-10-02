@@ -6,7 +6,7 @@ import net.minecraftforge.network.NetworkRegistry;
 import net.minecraftforge.network.simple.SimpleChannel;
 
 /**
- * 前置库 SimpleChannel 网络（1.20.1 移植版，参照下游 yizxianmod 模式）。
+ * 前置库 SimpleChannel 网络（参照下游 yizxianmod 模式）。
  */
 public final class NetworkHandler {
 

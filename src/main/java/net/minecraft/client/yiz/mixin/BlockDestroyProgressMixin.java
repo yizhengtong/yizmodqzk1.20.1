@@ -17,7 +17,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
  * 无敌方块 + 流体破坏进度 Mixin — 消费 {@link YizAttributes#MINING_LEVEL} ≥ 10
- * + {@link YizAttributes#MINING_ALL} ≥ 1（1.21.1 移植版）。
+ * + {@link YizAttributes#MINING_ALL} ≥ 1。
  *
  * <h3>无敌方块（基岩/屏障等，progress=0）</h3>
  * <p>基础时间 10 秒（200 tick），受挖掘效率加速。</p>

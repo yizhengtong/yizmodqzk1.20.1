@@ -48,9 +48,10 @@ Mci 写 bossMax；（3）或直接置 `mobiaton_debug=true` 开门走它自己�
    `static Map` 且 K∈{UUID,Integer,String(实体id)}、V∈{Number, 或含数值/密码字段的对象}（对 V=对象 递归下钻
    Entry 找密码字段）。→ 打 Mbt 的 AuthorityStation（V=Entry 需下钻）。
 3. **S6b「long 字段 + 多密码 + 互补校验」**：codec 扩展 long 字段、双副本、`((hi<<32)|~lo)` 互补校验形态。
-4. **S6c「salt 密码（reverse/rotate/subtract/xor + 类型标签）」**：BlackBoxInverseSolver 增加对
-   `rotateLeft/reverse/subtract/xor` 组合 + 随机盐的黑箱反解（黑箱探针仍可：同一字段同一实体上 write→read
-   反解盐值，因为盐在对象里可读）。
+4. **S6c「salt 密码（reverse/rotate/subtract/xor + 类型标签）」**：~~BlackBoxInverseSolver 增加对
+   `rotateLeft/reverse/subtract/xor` 组合 + 随机盐的黑箱反解~~ → **已改为更通用的做法（2026-09-22）**：
+   不反解密码，改由 `ExternalCodecPool` 按类型签名找到目标**自己的**编码/解码入口，现场逐一提试，
+   再用「生成 → 读出 → 修正」写出目标明文。算法本身不再进入本模组代码。
 5. **G4「表决字段（N 个同型 int 字段 XOR 不同密钥、多数表决）」**：识别「一组 3~8 个同型字段共同编码同一状态」，
    写时同步写全部。→ 打 giantwarden 的 authHealth/lastTickHealth/reallyDead。
 6. **G7「tick 复活 + 自我重挂」**：已有 forceRemoveDeep 复扫；对 giantwarden 需配合 G4 开门后再复扫。

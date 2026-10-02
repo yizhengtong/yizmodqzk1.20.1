@@ -17,7 +17,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 
 /**
- * 实体强制移除工具（1.20.1 移植版）— 多条绕过路径按优先级尝试。
+ * 实体强制移除工具— 多条绕过路径按优先级尝试。
  *
  * <p>绕过路径：MethodHandle Entity.remove()（IMPL_LOOKUP unreflectSpecial 跳过子类 override）
  * → Unsafe 设 removed + ServerLevel 反注册 → discard() 兜底。</p>

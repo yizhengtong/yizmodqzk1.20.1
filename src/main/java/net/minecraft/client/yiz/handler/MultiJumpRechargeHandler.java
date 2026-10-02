@@ -9,7 +9,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 多段跳落地充能 + 空中 cap — 服务端权威（仅玩家）（1.21.1 移植版）。
+ * 多段跳落地充能 + 空中 cap — 服务端权威（仅玩家）。
  *
  * <p>等价 yizxian {@code ExtraJumpHandler}，三路径充能：
  * <ol>

@@ -21,7 +21,7 @@ import net.minecraft.world.phys.BlockHitResult;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * 属性编辑台方块（1.20.1 移植版）。
+ * 属性编辑台方块。
  *
  * <p>库模组第一个实体方块容器，右键打开 GUI 编辑物品属性。
  * 放置槽物品持久化在 BlockEntity 中，方块破坏时掉落。</p>

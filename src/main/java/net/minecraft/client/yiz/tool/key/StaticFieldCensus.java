@@ -44,7 +44,7 @@ public final class StaticFieldCensus {
     }
 
     /** 调用栈鉴权闸门（静态 StackWalker 字段）。StackWalker 为 final 类，运行时不可置换
-     *  实例——只做检测报告，walk/getCallerClass 型判定的中和走字节码层调用点改写。 */
+     *  实例—— 只做检测报告，walk/getCallerClass 型判定的中和走字节码层调用点改写。 */
     public record GateField(FieldHandle handle, Object currentWalker) {}
 
     /** 包前缀白名单数组候选。 */

@@ -5,7 +5,7 @@ import net.minecraft.world.entity.player.Player;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * 锁定框管理者（1.21.1 移植版）— 客户端渲染前调用，选出最高优先级的活跃供应者。
+ * 锁定框管理者— 客户端渲染前调用，选出最高优先级的活跃供应者。
  */
 public final class TargetFrameManager {
 

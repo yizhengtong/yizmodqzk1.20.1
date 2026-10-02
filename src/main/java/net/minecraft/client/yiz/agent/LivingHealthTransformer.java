@@ -14,14 +14,14 @@ import java.security.ProtectionDomain;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * ASM ClassFileTransformer（1.20.1 移植版）。
+ * ASM ClassFileTransformer。
  *
  * <p>两层注入（返回值包装 + 调用点包装，均零递归）：
  * <ul>
  *   <li><b>方法自身返回值包装</b>：对 LivingEntity 及其子类的 getHealth/isAlive/isDeadOrDying/getMaxHealth，
  *       每个 return 前包装 special*（secure 读表 / delta 截断）。</li>
  *   <li><b>调用点包装</b>：对<b>所有类</b>的方法内 INVOKEVIRTUAL/INVOKEINTERFACE 调用
- *       getHealth/isAlive/isDeadOrDying 处插 DUP/SWAP/INVOKESTATIC 裁决——连"第三方调用血量"也被拦截。</li>
+ *       getHealth/isAlive/isDeadOrDying 处插 DUP/SWAP/INVOKESTATIC 裁决—— 连"第三方调用血量"也被拦截。</li>
  * </ul>
  * 方法名同时认 official 名与 SRG 名（生产环境是 m_21223_ 等）。</p>
  */
@@ -110,7 +110,7 @@ public class LivingHealthTransformer implements ClassFileTransformer {
 
     /**
      * owner（INVOKEVIRTUAL/INVOKEINTERFACE 的静态接收者类型）是否为 LivingEntity 子类。
-     * 调用点包装不能只看 {@code owner == LivingEntity}——真实字节码里血量调用的静态接收者
+     * 调用点包装不能只看 {@code owner == LivingEntity}—— 真实字节码里血量调用的静态接收者
      * 常是 Mob/Monster/Animal/Player/各模组实体子类（如 {@code this.getHealth()} 的 owner
      * 就是当前类），只看 LivingEntity 会漏掉这些调用点。Trial 用 isSubclass 走类层次，此处对齐。
      */

@@ -10,7 +10,7 @@ import net.minecraft.world.item.ItemStack;
  * transient 效果的「来源校验」工具（主动兜底层）。
  *
  * <p>用于在 transient 效果 tick/生效时，校验其来源（被动/技能/标签）是否仍在装配槽。
- * 若来源已不在（被卸载、死亡掉落、物品销毁），效果应自清——这是 {@code EffectRegistry}
+ * 若来源已不在（被卸载、死亡掉落、物品销毁），效果应自清—— 这是 {@code EffectRegistry}
  * 钩子清理之外的兜底，覆盖非界面卸载路径。</p>
  *
  * <p>注册名比较用 {@code namespace:path} 全串（如 {@code yizxianmod:tianleiyin}）。</p>

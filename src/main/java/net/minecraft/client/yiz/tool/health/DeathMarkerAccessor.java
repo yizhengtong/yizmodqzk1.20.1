@@ -21,7 +21,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>本类用<b>纯行为验证</b>识别（不依赖字段名/类名）：枚举实体所有 Boolean DataParameter，
  * 逐个「设 true → 看 isAlive 是否变 false → 还原」，命中即该 Boolean 是强制判死标记。</p>
- * <p>篡改就是直接设 true——绕过目标一切保护，强制判死。</p>
+ * <p>篡改就是直接设 true—— 绕过目标一切保护，强制判死。</p>
  */
 public final class DeathMarkerAccessor {
 

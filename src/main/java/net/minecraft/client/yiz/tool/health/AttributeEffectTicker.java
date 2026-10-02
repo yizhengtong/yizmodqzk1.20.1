@@ -6,7 +6,7 @@ import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.ai.attributes.AttributeInstance;
 
 /**
- * 周期性属性效果应用器 — 消费需要每 tick 推动的 yizmodqzk 属性（1.21.1 移植版）。
+ * 周期性属性效果应用器 — 消费需要每 tick 推动的 yizmodqzk 属性。
  *
  * <p>由 {@code tizMod.onPlayerTick} 每 tick 调用 {@link #tick}。仿 {@link ManaTracker#tickRegen}
  * 范本。当前处理：

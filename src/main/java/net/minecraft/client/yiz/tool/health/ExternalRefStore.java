@@ -43,7 +43,7 @@ public final class ExternalRefStore {
      * 本次调用要匹配的实体身份快照（UUID 串/UUID/id/坐标/最大血）。
      *
      * <p>这些东西在旧实现里是<b>每个候选存储对象都重算一遍</b>的（{@code getStringUUID()} 造串、
-     * {@code position()} 造 Vec3、{@code getMaxHealth()} 查属性）——候选对象动辄成千上万，
+     * {@code position()} 造 Vec3、{@code getMaxHealth()} 查属性）—— 候选对象动辄成千上万，
      * 于是每次攻击就是几万次多余分配。同一次调用内实体不会变，跑一次即可，匹配语义完全不变。</p>
      */
     private static final class Target {

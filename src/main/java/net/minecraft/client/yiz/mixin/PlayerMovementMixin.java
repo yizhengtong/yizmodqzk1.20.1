@@ -16,7 +16,7 @@ import java.util.WeakHashMap;
 
 /**
  * 移动属性 Mixin — 消费 {@link YizAttributes#MOVE_SPEED} / {@link YizAttributes#MAX_RUN_SPEED}
- * / {@link YizAttributes#AIR_SPEED}（1.21.1 移植版）。
+ * / {@link YizAttributes#AIR_SPEED}。
  *
  * <p>语义与 yizxian {@code MixinMovementAttributes} 完全对齐，数据源从 EffectTag 改为
  * yizmodqzk 原生属性：

@@ -34,7 +34,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
- * LivingEntity Mixin（1.20.1 移植版）
+ * LivingEntity Mixin
  * 健康值 Delta 系统 + 禁疗 + 无敌帧 + 减伤 + 传导限伤 + 各种属性驱动的受击/攻击处理。
  *
  * <p>与 1.21.1 差异：defineSynchedData 用无参（1.20.1）+ this.entityData.define；
@@ -47,7 +47,7 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
     // delta 通道：定义在 tool/health/HealthChannels.getDeltaHealth()（独立 holder，vanilla 字段引用由
     // 本模组 reobf 正确映射）。
     //  ⚠️ 不能写成静态字段 = HealthChannels.getDeltaHealth()：@Unique 静态字段初始化会合并进目标类
-    // LivingEntity.<clinit>，在 mixin 应用期（类加载早期）触发 HealthChannels defineId——若此时
+    // LivingEntity.<clinit>，在 mixin 应用期（类加载早期）触发 HealthChannels defineId—— 若此时
     // vanilla LivingEntity 类尚未完成 <clinit>（LivingEntity 池未初始化），HealthChannels 通道会从
     // id 0 开始分配，与 vanilla Entity 的 DATA_SHARED_FLAGS_ID(id 0) 冲突 → 实体构造 Duplicate id 0 崩溃。
     // 改为运行时方法：defineSynchedData（实体构造，vanilla 类已加载）才首次触发，id 从继承池 max+1 分配。
@@ -58,7 +58,7 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
         return net.minecraft.client.yiz.tool.health.HealthChannels.getDeltaHealth();
     }
 
-    /** SPELL 伤害类型——临时卸下的抗性效果（hurt 后恢复） */
+    /** SPELL 伤害类型—— 临时卸下的抗性效果（hurt 后恢复） */
     @Unique
     private static final java.util.Map<LivingEntity, net.minecraft.world.effect.MobEffectInstance>
             yizmodqzk$SPELL_RES_BACKUP = new java.util.concurrent.ConcurrentHashMap<>();
@@ -112,7 +112,7 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
     // ==================== getHealth / isAlive / isDeadOrDying 改写 ====================
 
     // HEAD 守卫（方法开头提前返回，原方法体不执行）：混淆血量实体 getHealth 直接返回表值。
-    // 抗外部对方法体的注入/覆盖——外部字节码包装的 FRETURN 只作用于原方法体，HEAD 已提前返回。
+    // 抗外部对方法体的注入/覆盖—— 外部字节码包装的 FRETURN 只作用于原方法体，HEAD 已提前返回。
     @Inject(method = "getHealth", at = @At("HEAD"), cancellable = true)
     private void yizmodqzk$guardGetHealth(CallbackInfoReturnable<Float> cir) {
         LivingEntity self = (LivingEntity) (Object) this;
@@ -287,7 +287,7 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
             if (!net.minecraft.client.yiz.core.StatusEffectDispatcher.DISPATCHING.get()) {
                 if (attacker instanceof net.minecraft.world.entity.player.Player pl) {
                     boolean vanillaCrit = net.minecraft.client.yiz.api.CritTracker.consume(pl);
-                    // 霹雳标签：NBT 标记强制暴击（CRIT_DAMAGE 固定附加伤害 + 粒子），对齐 1.21.1
+                    // 霹雳标签：NBT 标记强制暴击（CRIT_DAMAGE 固定附加伤害 + 粒子）
                     var pd = pl.getPersistentData();
                     if (pd.getBoolean("yiz:pili_crit")) {
                         pd.remove("yiz:pili_crit"); // 只生效一次
@@ -295,7 +295,7 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
                         if (critBonus > 0) amount += (float) critBonus;
                         spawnCritParticles(self);
                     }
-                    // 暴击判定：近战（直接命中）按 CRIT_RATE 直接暴击（无需精准，对齐 1.21.1）；
+                    // 暴击判定：近战（直接命中）按 CRIT_RATE 直接暴击（无需精准）；
                     // 非近战（投射/法术/溅射）需 PRECISION 精准才按 CRIT_RATE 暴击。倍率 1.5 + CRIT_DAMAGE/100。
                     boolean meleeHit = source.getDirectEntity() instanceof net.minecraft.world.entity.LivingEntity
                             && source.getDirectEntity() == source.getEntity();
@@ -414,7 +414,7 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
         return Math.max(0, amount);
     }
 
-    /** 暴击粒子（服务端发 CRIT 粒子，对齐 1.21.1）。 */
+    /** 暴击粒子（服务端发 CRIT 粒子）。 */
     private static void spawnCritParticles(net.minecraft.world.entity.LivingEntity entity) {
         if (entity == null || entity.level().isClientSide()) return;
         if (entity.level() instanceof net.minecraft.server.level.ServerLevel sl) {
@@ -437,7 +437,7 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
         if (SecureHealthClosure.isSecure(self)) {
             //  本模组混淆血量实体（SECURE_PULSE>0）：setHealth 由基类 override 处理
             // （治疗方向写混淆串、扣血方向丢弃；只有 hurt() 传导链能扣）。外部 INVOKESPECIAL 直达
-            // vanilla setHealth 在这里直接放行不写串——若走 limitSetHealth+setHealth 会把外部扣血
+            // vanilla setHealth 在这里直接放行不写串—— 若走 limitSetHealth+setHealth 会把外部扣血
             // "落实"进我们的混淆串（实测成为隐藏扣表来源：外部 setHealth(0) ×38 次每次 -3 = -112）。
             return newHealth;
         }
@@ -656,7 +656,7 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
         }
     }
 
-    // ==================== 不死（UNDYING，1.21.1 移植）====================
+    // ==================== 不死（UNDYING）====================
 
     /** 注入图腾复活检查：UNDYING 属性驱动的不死复活（次数 = UNDYING 值）。 */
     @Inject(method = "checkTotemDeathProtection", at = @At("RETURN"), cancellable = true)

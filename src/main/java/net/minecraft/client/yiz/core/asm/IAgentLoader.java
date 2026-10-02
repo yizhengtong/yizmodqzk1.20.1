@@ -1,7 +1,7 @@
 package net.minecraft.client.yiz.core.asm;
 
 /**
- * Agent 加载器接口（1.20.1 移植版，参考 yiz-main 同进程 self-attach 方案）。
+ * Agent 加载器接口（参考 yiz-main 同进程 self-attach 方案）。
  */
 public interface IAgentLoader {
 

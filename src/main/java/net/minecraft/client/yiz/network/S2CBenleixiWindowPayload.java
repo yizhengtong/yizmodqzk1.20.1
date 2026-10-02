@@ -12,7 +12,7 @@ import java.util.function.Supplier;
  * 服务端 tickBenleixi 创建/续期窗口时发送，客户端收到后本地计时，
  * AutoAttackMixin 在窗口期内自动蓄力攻击。
  *
- * <p>1.20.1 移植：1.21.1 原为 {@code CustomPacketPayload}（record + StreamCodec + PacketDistributor）。
+ * <p>1.20.1：1.21.1 原为 {@code CustomPacketPayload}（record + StreamCodec + PacketDistributor）。
  * 1.20.1 Forge 无 Payload 系统，改为 {@code SimpleChannel#registerMessage} 风格 POJO：
  * {@link #toBytes}（encoder）/ {@link #fromBytes}（decoder）/ {@link #handle}（consumer）。</p>
  *
@@ -59,7 +59,7 @@ public class S2CBenleixiWindowPayload {
         ctx.enqueueWork(() -> {
             var player = Minecraft.getInstance().player;
             if (player == null) return;
-            // TODO(1.20.1-port): 依赖 network/BenleixiWindowClientTracker（1.21.1，未移植）。
+            // TODO(待实现): 依赖 network/BenleixiWindowClientTracker（未实现）。
             // 原逻辑：BenleixiWindowClientTracker.set(player, active, durationTicks);
         });
         ctx.setPacketHandled(true);
@@ -69,13 +69,13 @@ public class S2CBenleixiWindowPayload {
 
     /** 窗口激活时发送 */
     public static void sendWindowStart(ServerPlayer player, int durationTicks) {
-        // TODO(1.20.1-port): 1.20.1 网络层未接入 SimpleChannel。待下游注册通道后：
+        // TODO(待实现): 1.20.1 网络层未接入 SimpleChannel。待下游注册通道后：
         // CHANNEL.send(PacketDistributor.PLAYER.with(() -> player),
         //              new S2CBenleixiWindowPayload(true, durationTicks));
     }
 
     /** 窗口结束时发送 */
     public static void sendWindowEnd(ServerPlayer player) {
-        // TODO(1.20.1-port): 同上，包体 new S2CBenleixiWindowPayload(false, 0)。
+        // TODO(待实现): 同上，包体 new S2CBenleixiWindowPayload(false, 0)。
     }
 }

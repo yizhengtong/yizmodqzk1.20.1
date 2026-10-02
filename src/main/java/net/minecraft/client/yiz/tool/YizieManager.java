@@ -4,7 +4,7 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 
 /**
- * Yiz 实体管理器 — 通用实体生命周期管理入口（1.20.1 移植版）。
+ * Yiz 实体管理器 — 通用实体生命周期管理入口。
  */
 public final class YizieManager {
 

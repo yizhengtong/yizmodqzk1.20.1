@@ -7,7 +7,7 @@ import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 
 /**
- * 锁定系统客户端事件注册（1.21.1 移植）：
+ * 锁定系统客户端事件注册：
  * <ul>
  *   <li>注册 {@link LockOnProvider} 到 TargetFrameManager（锁定目标 + 充能供应）；</li>
  *   <li>客户端每 tick 聚合本地玩家 NBT 属性（HUIXIN/KEGONG 供 LockOnProvider 渲染读取）；</li>

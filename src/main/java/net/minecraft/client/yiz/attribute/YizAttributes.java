@@ -7,11 +7,11 @@ import net.minecraftforge.registries.ForgeRegistries;
 import net.minecraftforge.registries.RegistryObject;
 
 /**
- * 前置库自定义属性注册中心（1.20.1 Forge 移植版）。
+ * 前置库自定义属性注册中心（1.20.1 Forge）。
  *
- * <p>仅注册辖界者等自研实体所需的 17 个属性。原 1.21.1 有 90+ 属性，后续按需补。</p>
+ * <p>仅注册辖界者等自研实体所需的 17 个属性。后续按需扩充。</p>
  *
- * <p>1.20.1 差异：用 {@link ForgeRegistries#ATTRIBUTES} + {@link RegistryObject}；
+ * <p>实现说明：用 {@link ForgeRegistries#ATTRIBUTES} + {@link RegistryObject}；
  * 属性同步走 {@link Attribute#setSyncable(boolean)}（1.20.1 的 RangedAttribute 继承自 Attribute，
  * 无 setSyncable 返回 RangedAttribute 的重载，链式调用后为 Attribute 类型，赋值给
  * {@code Supplier<Attribute>} 无碍）。</p>
@@ -244,26 +244,26 @@ public final class YizAttributes {
         ATTRIBUTES.register("heal_hp_coeff",
             () -> new RangedAttribute("attribute.yizmodqzk.heal_hp_coeff", 0.0, 0.0, 100.0).setSyncable(true));
 
-    //  1.21.1 移植属性（2026-08-26）：组A 死属性 7 + 组B 玩家向独立 24
+    //  属性注册（2026-08-26）：组A 死属性 7 + 组B 玩家向独立 24
 
-    //  === 组A 死属性（1.21.1 中为注册未接线的预留属性，只注册+挂载）===
+    //  === 组A 死属性（预留属性：只注册 + 挂载，暂未接线）===
 
-    /** 护盾值 — 值域 ≥0。护盾实际由 ShieldTracker 系统承担，属性本身 1.21.1 无消费。 */
+    /** 护盾值 — 值域 ≥0。护盾实际由 ShieldTracker 系统承担，属性本身无消费。 */
     public static final RegistryObject<Attribute> SHIELD_VALUE =
         ATTRIBUTES.register("shield_value",
             () -> new RangedAttribute("attribute.yizmodqzk.shield_value", 0.0, 0.0, Double.MAX_VALUE).setSyncable(true));
 
-    /** 治疗攻击系数(%) — 值域 0~100。1.21.1 未挂载未消费，死属性。 */
+    /** 治疗攻击系数(%) — 值域 0~100。当前未挂载、未消费，死属性。 */
     public static final RegistryObject<Attribute> HEAL_ATK_COEFF =
         ATTRIBUTES.register("heal_atk_coeff",
             () -> new RangedAttribute("attribute.yizmodqzk.heal_atk_coeff", 0.0, 0.0, 100.0).setSyncable(true));
 
-    /** 治疗法强系数(%) — 值域 0~100。1.21.1 未挂载未消费，死属性。 */
+    /** 治疗法强系数(%) — 值域 0~100。当前未挂载、未消费，死属性。 */
     public static final RegistryObject<Attribute> HEAL_SPELL_COEFF =
         ATTRIBUTES.register("heal_spell_coeff",
             () -> new RangedAttribute("attribute.yizmodqzk.heal_spell_coeff", 0.0, 0.0, 100.0).setSyncable(true));
 
-    /** 最大哨兵数 — 值域 ≥0。1.21.1 无任何哨兵实体读取，死属性。 */
+    /** 最大哨兵数 — 值域 ≥0。当前无任何哨兵实体读取，死属性。 */
     public static final RegistryObject<Attribute> MAX_SENTRIES =
         ATTRIBUTES.register("max_sentries",
             () -> new RangedAttribute("attribute.yizmodqzk.max_sentries", 0.0, 0.0, Double.MAX_VALUE).setSyncable(true));

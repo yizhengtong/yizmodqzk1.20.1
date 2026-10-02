@@ -12,7 +12,7 @@ import net.minecraft.world.damagesource.DamageType;
  * 不在任何物理 {@code DamageTypeTags} 中 → 自然路由 spell_defense，跳过 armor/damage_reduction/damage_block/盾牌。
  * 数据包定义：{@code data/yizmodqzk/damage_type/spell.json}</p>
  *
- * <p>1.20.1 差异：{@code ResourceLocation.fromNamespaceAndPath} 是 1.21 才有的 API，
+ * <p>实现说明：{@code ResourceLocation.fromNamespaceAndPath} 是 1.21 才有的 API，
  * 改用 {@code new ResourceLocation(ns, path)}。</p>
  */
 public final class YizDamageTypes {

@@ -47,7 +47,7 @@ public final class NbtAttributeAggregator {
             }
         }
 
-        // ATTACK_RANGE 镜像到原版触及距离（BLOCK_REACH/ENTITY_REACH）——服务端距离验证
+        // ATTACK_RANGE 镜像到原版触及距离（BLOCK_REACH/ENTITY_REACH）—— 服务端距离验证
         // （canReach 方块破坏 / canReachRaw 实体攻击）读这两个属性而非 ATTACK_RANGE，不镜像则无效。
         var atkRange = player.getAttribute(net.minecraft.client.yiz.attribute.YizAttributes.ATTACK_RANGE.get());
         double range = atkRange != null ? atkRange.getValue() : 0;

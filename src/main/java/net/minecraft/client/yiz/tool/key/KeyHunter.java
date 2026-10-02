@@ -149,7 +149,7 @@ public final class KeyHunter {
         // 第 4a 步：白名单扩展（让我们的直接调用帧合法）
         int whitelistsExtended = StackGateNeutralizer.extendWhitelists(census.whitelists());
 
-        // 第 3 步：夺取——合并「字段密钥候选」+「字节码层比较点捕获」
+        // 第 3 步：夺取—— 合并「字段密钥候选」+「字节码层比较点捕获」
         List<StaticFieldCensus.KeyCandidate> captured = new ArrayList<>();
         for (Map.Entry<String, byte[]> e : KeyDumpBridge.capturedBytes().entrySet()) {
             captured.add(new StaticFieldCensus.KeyCandidate(null, "byte[]", e.getValue(), null, 0,

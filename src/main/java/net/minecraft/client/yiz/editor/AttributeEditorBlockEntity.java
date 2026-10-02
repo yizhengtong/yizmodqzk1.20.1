@@ -16,7 +16,7 @@ import net.minecraft.world.level.block.state.BlockState;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * 属性编辑台的 BlockEntity，持久化存储放置槽物品（1.20.1 移植版）。
+ * 属性编辑台的 BlockEntity，持久化存储放置槽物品。
  *
  * <p>放置槽存 index 0（1 格），物品在方块破坏/替换时掉落。
  * saveAdditional/loadAdditional 保证退出重进世界后物品还在。</p>

@@ -11,8 +11,21 @@ import java.lang.management.ManagementFactory;
 import java.nio.file.Files;
 
 /**
- * Agent 加载器抽象基类（1.20.1 移植版，参考 yiz-main 同进程 self-attach 方案）。
+ * Agent 加载器抽象基类（参考 yiz-main 同进程 self-attach 方案）。
  * 封装不变点：提取 Agent JAR、获取 PID、清理临时文件；子类实现附加策略。
+ *
+ * <h3>备注：开发环境（runClient）必然降级 —— 属预期，不是回归</h3>
+ * <p>FG userdev 走的是<b>运行时 self-attach</b>：attach 发生在游戏类路径已就绪之后，此时主 mod jar 里的
+ * 同名类 {@code net.minecraft.client.yiz.agent.LivingHealthTransformer}（源码在
+ * {@code src/main/java/...}，是 agent 侧那份的精简副本、<b>没有</b> {@code BRIDGE_CLASS_REF} 字段）
+ * 已经占据 app classpath，会遮蔽 Agent JAR 内那份（{@code agent/src/...}，<b>有</b>该字段），
+ * 于是 attach 抛 {@code NoSuchFieldError: BRIDGE_CLASS_REF} → {@code AgentInitializationException}
+ * → 走到 {@link #handleDegradedMode}。</p>
+ * <p>生产环境用清单里的 {@code Launcher-Agent-Class}/{@code Premain-Class} 在启动早期加载，
+ * 不存在这个遮蔽，因此不降级。<b>所以 dev 日志里的「Agent 加载失败 / 进入降级模式」属正常现象</b>，
+ * 要判断实际能力请用 {@code /yiz agent}（{@code YizAgentCommand}），不要用这条日志。</p>
+ * <p>若以后想让 dev 也用上 agent：删掉主源码集里的那份冗余副本即可 —— 本类不引用它，
+ * agent 只从 JAR 内 {@code META-INF/jarjar/yizmodqzk-agent.jar} 提取后 attach。</p>
  */
 public abstract class AbstractAgentLoader implements IAgentLoader {
 
@@ -37,6 +50,7 @@ public abstract class AbstractAgentLoader implements IAgentLoader {
             loaded = true;
             LOGGER.info("成功注入字节码干预代理");
         } catch (Exception e) {
+            // 开发环境会走到这里（见类注释「开发环境必然降级」），排查前先确认是不是 dev
             LOGGER.error("Agent 加载失败: {}", e.getMessage(), e);
             handleDegradedMode(e);
         } finally {
@@ -73,7 +87,8 @@ public abstract class AbstractAgentLoader implements IAgentLoader {
     protected abstract void prepareAndAttach(String pid, String agentPath) throws Exception;
 
     protected void handleDegradedMode(Exception error) {
-        LOGGER.error("进入降级模式：Agent 干预不可用，系统将使用运行时反射扫描模式");
+        // 开发环境走这里属预期（self-attach 被主 jar 同名类遮蔽，见类注释）；生产环境走这里才是异常
+        LOGGER.error("进入降级模式：Agent 干预不可用，系统将使用运行时反射扫描模式（开发环境属预期）");
     }
 
     @Override

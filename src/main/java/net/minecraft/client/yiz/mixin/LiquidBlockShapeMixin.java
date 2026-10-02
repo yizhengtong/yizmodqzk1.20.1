@@ -18,7 +18,7 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
- * 流体方块形状 Mixin（仅客户端）— 条件性使水/岩浆可被准星选中（1.21.1 移植版）。
+ * 流体方块形状 Mixin（仅客户端）— 条件性使水/岩浆可被准星选中。
  *
  * <p>条件：挖掘类：全 ≥ 1 + 挖掘等级 ≥ 10 + 手持镐/斧/铲。
  * 不满足任一条件时保持原版 {@link Shapes#empty()}，流体不可选。</p>

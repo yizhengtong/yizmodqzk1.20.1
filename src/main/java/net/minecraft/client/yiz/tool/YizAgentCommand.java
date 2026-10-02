@@ -13,7 +13,7 @@ import net.minecraft.server.level.ServerPlayer;
  * /yiz agent — 完整诊断 Agent 动态加载状态。
  * <p>区分：attach 成功 ≠ agentmain 执行 ≠ transformer 注册 ≠ 实际注入。
  * 提供各环节状态 + transform 类数 + 最后错误 + 判定，避免误判（如"isLoaded=true 但注入未生效"）。</p>
- * 1.20.1 移植版。
+ * 1.20.1。
  */
 public final class YizAgentCommand {
 

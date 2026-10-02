@@ -205,7 +205,7 @@ public final class NativeHealthVault {
         for (int probe = 0; probe < capacity; probe++) {
             long slot = slotBase(idx);
             if (isSlotEmpty(slot)) {
-                // 先放 uuid，再放校验，最后放值——读侧先见 uuid 匹配后校验值一致性
+                // 先放 uuid，再放校验，最后放值—— 读侧先见 uuid 匹配后校验值一致性
                 U.putLong(slot + OFF_UUID_HI, hi);
                 U.putLong(slot + OFF_UUID_LO, lo);
                 int check = Float.floatToRawIntBits(value) ^ (int) seed ^ (int) lo;

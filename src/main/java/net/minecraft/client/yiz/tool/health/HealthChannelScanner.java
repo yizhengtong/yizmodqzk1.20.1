@@ -12,12 +12,12 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 实体健康通道扫描器（1.20.1 移植版）。
+ * 实体健康通道扫描器。
  *
  * <p>扫描实体类层级上的所有静态 {@link EntityDataAccessor}&lt;Float&gt; 字段，
  * 用于伤害时覆盖所有可能的血量 DataParameter。</p>
  *
- * <p> 1.20.1 差异：{@link EntityDataAccessor} 用 {@code getId()}/{@code getSerializer()}
+ * <p> 实现说明：{@link EntityDataAccessor} 用 {@code getId()}/{@code getSerializer()}
  * （1.21.1 是 {@code id()}/{@code serializer()}）。</p>
  */
 public final class HealthChannelScanner {

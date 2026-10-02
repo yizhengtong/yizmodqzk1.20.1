@@ -8,7 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * VTable 入口覆写式物品功能废除（1.20.1 移植版）。
+ * VTable 入口覆写式物品功能废除。
  *
  * <p>将指定 Item 子类的功能方法入口指针抄回 {@link Item} 基类的空实现，
  * 使该物品丧失对应行为（如 use/inventoryTick/onEquip），基础属性保留。</p>

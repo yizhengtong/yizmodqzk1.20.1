@@ -9,7 +9,7 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
- * 跳跃力度 Mixin — 消费 {@link YizAttributes#JUMP_STRENGTH}（仅玩家，1.21.1 移植版）。
+ * 跳跃力度 Mixin — 消费 {@link YizAttributes#JUMP_STRENGTH}（仅玩家）。
  *
  * <p>注入 {@link LivingEntity#getJumpPower()} RETURN：读 JUMP_STRENGTH 百分比加成，
  * {@code jumpPower × (1 + pct/100)}。</p>

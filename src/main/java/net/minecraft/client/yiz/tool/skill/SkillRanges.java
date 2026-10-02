@@ -54,7 +54,7 @@ public final class SkillRanges {
             clearOffset(player, purpose);
             offset = 0;
         }
-        // TODO(1.20.1-port): 依赖 attribute/YizAttributes.SKILL_RANGE 注册（1.21.1 id "skill_range"）。
+        // TODO(待实现): 依赖 attribute/YizAttributes.SKILL_RANGE 注册（id "skill_range"）。
         double mult = player.getAttributeValue(YizAttributes.SKILL_RANGE.get());
         return Math.max(0, (base + offset) * (1 + mult / 100.0));
     }

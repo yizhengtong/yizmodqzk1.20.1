@@ -3,7 +3,7 @@ package net.minecraft.client.yiz.editor;
 import net.minecraft.world.entity.player.Player;
 
 /**
- * 破时附魔 Agent 级绕过桥梁。1.20.1 移植版。
+ * 破时附魔 Agent 级绕过桥梁。1.20.1。
  */
 public final class PoshiBypassBridge {
 

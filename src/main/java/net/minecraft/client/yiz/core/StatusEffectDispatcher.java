@@ -21,7 +21,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 
 /**
- * 状态效果分发器 —— 控制效果 + 伤害的完整实现（1.21.1 全量版移植，D3：S2C 视觉段 no-op）。
+ * 状态效果分发器 —— 控制效果 + 伤害的完整实现（D3：S2C 视觉段 no-op）。
  *
  * <p>1.20.1 适配点：
  * <ul>
@@ -618,7 +618,7 @@ public final class StatusEffectDispatcher {
     }
 
     /**
-     * 是否有硬控（眩晕/冰冻）——需要完全冻结物理移动。
+     * 是否有硬控（眩晕/冰冻）—— 需要完全冻结物理移动。
      */
     public static boolean hasHardControl(LivingEntity entity) {
         var timers = CONTROL_TIMERS.get(entity.getUUID());

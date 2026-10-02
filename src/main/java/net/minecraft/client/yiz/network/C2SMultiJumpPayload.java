@@ -8,7 +8,7 @@ import net.minecraftforge.network.NetworkEvent;
 import java.util.function.Supplier;
 
 /**
- * C2S: 客户端请求消耗一次多段跳（空中再跳，1.21.1 移植版，SimpleChannel）。
+ * C2S: 客户端请求消耗一次多段跳（空中再跳，SimpleChannel）。
  * 服务端权威消耗剩余次数（内存 Map）。1.20.1 无 PlayerDataAPI S2C 同步，客户端乐观预测。
  */
 public class C2SMultiJumpPayload {

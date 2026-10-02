@@ -16,7 +16,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * 门控查询唯一入口（mixin 调用）+ per-player 语义功能激活缓存。
  *
  * <p>结构功能直接查 {@link ConfigRegistry}；语义功能（仇恨免疫/取消受击/增伤）由
- * 本系统统一施加——玩家持有 adapter 声明的物品且功能未关闭 → 缓存"激活"状态，
+ * 本系统统一施加—— 玩家持有 adapter 声明的物品且功能未关闭 → 缓存"激活"状态，
  * 门控 mixin 在 vanilla 链上施加效果（Mob.setTarget cancel / hurt false / 伤害放大）。
  * 关闭开关 → 缓存失效 → 本系统不再施加，恢复 vanilla。</p>
  */

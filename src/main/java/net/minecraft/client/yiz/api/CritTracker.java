@@ -28,7 +28,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>线程安全：使用 {@link ConcurrentHashMap} 支撑的 Set。</p>
  *
- * <p>1.20.1 移植版：纯 JDK 依赖，逐行照搬 1.21.1。</p>
+ * <p>1.20.1：纯 JDK 依赖</p>
  */
 public final class CritTracker {
 

@@ -9,9 +9,9 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 多段跳追踪器 — 消费 {@link YizAttributes#JUMP_COUNT} + {@link YizAttributes#JUMP_HEIGHT}
- * （仅玩家，1.21.1 移植版）。
+ * （仅玩家）。
  *
- * <p>1.20.1 差异：1.21.1 用 PlayerDataAPI（NeoForge Attachment）存储剩余次数并自动 S2C 同步；
+ * <p>实现说明：1.21.1 用 PlayerDataAPI（NeoForge Attachment）存储剩余次数并自动 S2C 同步；
  * 1.20.1 无此机制，改用静态 {@link ConcurrentHashMap} 存剩余次数（客户端/服务端各自 JVM 维护）。
  * 客户端乐观：ClientMultiJumpMixin 首次跳前初始化为 JUMP_COUNT、每次跳 -1、落地 recharge；
  * 服务端权威：C2S 包 tryConsume + MultiJumpRechargeHandler recharge/cap。</p>

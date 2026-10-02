@@ -5,7 +5,7 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
 
 /**
- * 锁定框供应者接口（1.21.1 移植版）。
+ * 锁定框供应者接口。
  * 由效果或模组实现，向渲染器提供锁定目标 + 充能/就绪状态。
  * priority 越高越优先渲染。
  */

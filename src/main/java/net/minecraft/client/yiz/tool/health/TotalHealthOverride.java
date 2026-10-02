@@ -4,6 +4,7 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.player.Player;
 
 import java.util.List;
 
@@ -53,7 +54,7 @@ public final class TotalHealthOverride {
         // agent specialGetHealth/isAlive 按 delta 钳制读值；死亡链残留的 delta(-inf)
         // 会让 agent 包装的 getHealth 与存储真值不一致 → 模组每 tick 看门狗（按 getHealth
         // 推断血量）误判「被篡改」→ 把我们的写入拉回/重置。重置后 agent 读值即存储真值。
-        // 注意：不能 clearDreamAccum——「隐藏类/AES 定位失败」实体靠 DREAM_ACCUM 持续累积
+        // 注意：不能 clearDreamAccum—— 「隐藏类/AES 定位失败」实体靠 DREAM_ACCUM 持续累积
         // 到阈值触发 dreamDeathblow 死亡链，每次攻击清累积会让 accum 永远到不了 1 → 无法累加击杀。
         try {
             EntityASMUtil.setHealthDelta(entity, 0F);
@@ -93,10 +94,20 @@ public final class TotalHealthOverride {
             return false;
         }
 
+        // 玩家：只走原版死亡（不击穿门控 / 不判死标记 / 不深层移除），血量已写到 0 → 交给原版处理
+        if (entity instanceof Player) {
+            if (target <= 0) {
+                LOGGER.warn("[TotalOverride] 玩家 {} 血量已写到 0，转原版死亡流程", entity.getName().getString());
+                EntityASMUtil.vanillaDie(attacker, entity);
+            }
+            GateHunt.verifyAndHunt(entity, target);
+            return true;
+        }
+
         smashGates(entity);
         if (target <= 0) {
             LOGGER.warn("[TotalOverride] {} 触发正常死亡流程（目标=0）", entity.getClass().getName());
-            // 仅自研实体允许 +25 tick 强制深层反注册——第三方实体（含玩家）不深层移除，
+            // 仅自研实体允许 +25 tick 强制深层反注册—— 第三方实体（含玩家）不深层移除，
             // 防 forceRemoveDeep 从世界存储深层移除破坏其关联 → 维度切换/存档异常（回主世界卡住/数据丢失）。
             if (EntityASMUtil.isSelfMob(entity)) {
                 EntityASMUtil.markForceRemoveAllowed(entity.getId());
@@ -109,7 +120,7 @@ public final class TotalHealthOverride {
             } catch (Throwable ignored) {}
             // 拒死型实体：普通 boolean「死亡/移除放行开关」被门控（die/remove 空转拦截）。
             // 行为探测并开门 → 重走目标自己的 die → 掉落 + 移除（规则 C）；未命中无副作用。
-            if (!entity.isRemoved()) {
+            if (!entity.isRemoved() && net.minecraft.client.yiz.core.YizConfig.bool("gate.remove_gate_tamper")) {
                 try {
                     DamageSource ds = attacker != null
                             ? entity.damageSources().mobAttack(attacker)
@@ -232,7 +243,10 @@ public final class TotalHealthOverride {
                 }
             } catch (Throwable ignored) {}
 
-            // 4b. 外部静态单例藏血 Map（K=UUID/实体id、V=数值或密码对象；下钻 + ARX 密码反解写真实血）
+            // 4b. 外部静态单例藏血 Map（K=UUID/实体id、V=数值或「明文+加密载体」对象）：
+            //     载体交给 ExternalCodecPool —— 按类型签名找到目标自己的造密文/读明文入口，
+            //     现场逐个提试（读出值与实体血量读数一致才认），再「生成→读出→修正」写目标明文。
+            //     全程不反解任何具体算法，也不含任何类名/字段名。
             try {
                 if (ExternalHealthStore.writeHealth(entity, target)) {
                     HealthTier.markIrregular(entity.getClass(), "外部单例藏血 Map 命中");
@@ -325,9 +339,11 @@ public final class TotalHealthOverride {
 
     /** 击穿死亡/移除门控：判死标记（行为探测）+ 声明式门控（可选补充）。 */
     private static void smashGates(LivingEntity entity) {
-        try {
-            DeathMarkerAccessor.tamperToDead(entity);   // 设 true → isAlive 翻 false 的判死标记
-        } catch (Throwable ignored) {}
+        if (net.minecraft.client.yiz.core.YizConfig.bool("gate.death_marker")) {
+            try {
+                DeathMarkerAccessor.tamperToDead(entity);   // 设 true → isAlive 翻 false 的判死标记
+            } catch (Throwable ignored) {}
+        }
         try {
             for (HealthOverridesConfig.GateDecl decl : HealthOverridesConfig.gatesFor(entity)) {
                 if (HealthOverridesConfig.applyGate(entity, decl)) {

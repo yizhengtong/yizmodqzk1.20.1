@@ -26,13 +26,13 @@ import net.minecraft.world.item.ItemStack;
  * <p>{@code PassiveChargeTracker} 的冻结写的是 {@code skill_cooldowns} 哨兵；充能数据存独立的
  * {@code yizmodqzk:skill_charges} 键。冻结期间本管理器跳过该槽的回充（{@link #isFrozenSlot}）。</p>
  *
- * <p>1.20.1 移植：
+ * <p>1.20.1：
  * <ul>
  *   <li>DataComponent（ATTRIBUTE_MODIFIERS）→ {@code ItemStack#getAttributeModifiers(EquipmentSlot)}
  *       的 Multimap 遍历（见 {@link #readAttr}）。</li>
  *   <li>YizAttributes.MAX_CHARGES / COOLDOWN_VALUE 尚未注册到 1.20.1（TODO，见使用处）。</li>
- *   <li>PlayerDataAPI（未移植）→ {@link #savePlayerData}/{@link #loadPlayerData} TODO 占位。</li>
- *   <li>PassiveChargeTracker（未移植）→ {@link #maxChargesOf(ItemStack,int,Player)} 的临时 buff 分支暂跳过。</li>
+ *   <li>PlayerDataAPI（未实现）→ {@link #savePlayerData}/{@link #loadPlayerData} TODO 占位。</li>
+ *   <li>PassiveChargeTracker（未实现）→ {@link #maxChargesOf(ItemStack,int,Player)} 的临时 buff 分支暂跳过。</li>
  * </ul></p>
  */
 public final class SkillChargeManager {
@@ -46,14 +46,14 @@ public final class SkillChargeManager {
 
     private SkillChargeManager() {}
 
-    // 
+    //
     //  大槽特权：有效上限 / 有效冷却
-    // 
+    //
 
     /** 该槽位物品的有效最大充能数（大槽 ×2，最少 1，不含临时 buff）。 */
     public static int maxChargesOf(ItemStack stack, int slot) {
         if (stack.isEmpty()) return 1;
-        // TODO(1.20.1-port): 依赖 attribute/YizAttributes.MAX_CHARGES 注册（1.21.1 id "max_charges"）。
+        // TODO(待实现): 依赖 attribute/YizAttributes.MAX_CHARGES 注册（id "max_charges"）。
         int base = (int) Math.max(1, readAttr(stack, YizAttributes.MAX_CHARGES.get()));
         return slot == 0 ? base * 2 : base;
     }
@@ -64,7 +64,7 @@ public final class SkillChargeManager {
      */
     public static int maxChargesOf(ItemStack stack, int slot, Player player) {
         int max = maxChargesOf(stack, slot);
-        // TODO(1.20.1-port): 依赖 handler/PassiveChargeTracker（1.21.1，未移植）。
+        // TODO(待实现): 依赖 handler/PassiveChargeTracker（未实现）。
         // 原逻辑：if (player != null && PassiveChargeTracker.hasTempBuff(player)) return max + 1;
         return max;
     }
@@ -110,14 +110,14 @@ public final class SkillChargeManager {
     /** 该槽位物品的有效回充间隔 tick（大槽 ×0.5，最少 1）。 */
     public static int cooldownOf(ItemStack stack, int slot) {
         if (stack.isEmpty()) return 20;
-        // TODO(1.20.1-port): 依赖 attribute/YizAttributes.COOLDOWN_VALUE 注册（1.21.1 id "cooldown_value"）。
+        // TODO(待实现): 依赖 attribute/YizAttributes.COOLDOWN_VALUE 注册（id "cooldown_value"）。
         int base = (int) Math.max(1, readAttr(stack, YizAttributes.COOLDOWN_VALUE.get()));
         return slot == 0 ? Math.max(1, base / 2) : base;
     }
 
-    // 
+    //
     //  施法消耗
-    // 
+    //
 
     /**
      * 施法时尝试消耗 1 充能。充能 >0 则 -1 并写回（并在未满时启动回充计时），返回 true；
@@ -159,9 +159,9 @@ public final class SkillChargeManager {
         return true;
     }
 
-    // 
+    //
     //  回充 tick（由 tizMod.onPlayerTick 调用，服务端）
-    // 
+    //
 
     /** 每 tick 推进各槽充能：到点 +1，未满续设计时。仅在状态变化时写回（避免每 tick 同步）。 */
     public static void tickRecharge(ServerPlayer player) {
@@ -221,9 +221,9 @@ public final class SkillChargeManager {
         if (dirty) savePlayerData(player, CHARGES_KEY, root.toString());
     }
 
-    // 
+    //
     //  登录初始化：空数据视为各槽满充能（不卡玩家）
-    // 
+    //
 
     public static void onLogin(ServerPlayer player) {
         JsonObject root = readRoot(player);
@@ -245,9 +245,9 @@ public final class SkillChargeManager {
         if (dirty) savePlayerData(player, CHARGES_KEY, root.toString());
     }
 
-    // 
+    //
     //  读取（供 HUD 用，客户端）
-    // 
+    //
 
     public static int getCharges(Player player, int slot) {
         JsonObject root = readRoot(player);
@@ -262,9 +262,9 @@ public final class SkillChargeManager {
         return entry.has("rechargeEnd") ? entry.get("rechargeEnd").getAsLong() : 0L;
     }
 
-    // 
+    //
     //  内部
-    // 
+    //
 
     private static JsonObject readRoot(Player player) {
         String raw;
@@ -327,9 +327,9 @@ public final class SkillChargeManager {
         savePlayerData(player, CHARGES_KEY, root.toString());
     }
 
-    // TODO(1.20.1-port): 依赖 api/PlayerDataAPI（1.21.1 持久化 API，未移植）。
+    // TODO(待实现): 依赖 api/PlayerDataAPI（持久化 API，未实现）。
     // 原实现：PlayerDataAPI.set(player, key, value) / PlayerDataAPI.get(player, key)。
-    // 待 PlayerDataAPI 移植后替换下方两个方法体，其余代码零改动。
+    // 待 PlayerDataAPI 实现后替换下方两个方法体，其余代码零改动。
     private static void savePlayerData(Player player, String key, String value) {
         // 暂不持久化：内存 JsonObject 逻辑保留，服务端重启后充能数据丢失。
     }

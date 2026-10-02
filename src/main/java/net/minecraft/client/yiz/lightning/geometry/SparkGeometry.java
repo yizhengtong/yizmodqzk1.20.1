@@ -13,7 +13,7 @@ import org.joml.Vector3f;
  * 投影到屏幕平面取 {@code dir2D = normalize(vCam.xy)} 作拖尾轴，垂直方向收窄。velocity≈0 时
  * 退化为对称亮点。拖尾长度随速度增长（封顶 2×）。</p>
  *
- * <p><b>UV 编码方向</b>：quad 的 v 轴对齐运动方向——vUV.y=0 为头端（+T，运动前方，亮）、
+ * <p><b>UV 编码方向</b>：quad 的 v 轴对齐运动方向—— vUV.y=0 为头端（+T，运动前方，亮）、
  * vUV.y=1 为尾端（-T，身后，暗），配合 {@code lightning_spark.fsh} 的 {@code tailFalloff} 出各向异性。</p>
  *
  * <p><b>运动位移</b>：位置 = 初始 pos + velocity·elapsed + 重力（½gt²）。{@code SparkEffect} 是纯数据，

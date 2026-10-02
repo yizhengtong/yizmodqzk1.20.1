@@ -20,7 +20,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *       原版 subsequently 扣血（setHealth(getHealth()-放行量)）。</li>
  *   <li><b>setHealth 路径</b>（{@code modifyHealthForVitalitySeverance}）：外部模组直接 setHealth 的
  *       目标值被丢弃，扣血方向按「当前血量 − 限伤后变化量」自行设血；治疗方向放行。
- *       <b>永不豁免</b>（无"已限过"标记）——外部模组在一次攻击里先 hurt() 再直接 setHealth(0)，
+ *       <b>永不豁免</b>（无"已限过"标记）—— 外部模组在一次攻击里先 hurt() 再直接 setHealth(0)，
  *       若 setHealth 被"已限过"豁免就会一刀秒；必须每次 setHealth 都无条件过限伤。</li>
  *   <li><b>不豁免任何来源</b>（kill / 环境伤害 / 模组直改一律限伤）。</li>
  * </ul></p>
@@ -36,7 +36,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p><b>限伤</b>：{@code applied = min(衰减后, max(3, maxHealth × CONDUCTION_CAP/100))}
  * （值 = 最大生命值百分比）。双重限伤无害：hurt 层与 setHealth 层都 min 到同一 cap，不会更小。</p>
  *
- * <p>1.20.1 差异：{@code entity.level()} → {@code entity.level}（字段）；属性用
+ * <p>实现说明：{@code entity.level()} → {@code entity.level}（字段）；属性用
  * {@code YizAttributes.*.get()}（RegistryObject）传给 {@code getAttribute(Attribute)}，不传 Holder。</p>
  */
 public final class ConductionDamageLimiter {
@@ -116,7 +116,7 @@ public final class ConductionDamageLimiter {
      * setHealth HEAD：外部直接 setHealth 的目标值被丢弃，扣血方向自行限伤设血。
      * <ul>
      *   <li>扣血方向（newHealth &lt; current）→ 变化量 delta 经 减伤（仅闭包实体）→限 cap，
-     *       返回 {@code current - 限伤后}。**永不豁免**（无"已限过"标记）——每次 setHealth 都无条件限。</li>
+     *       返回 {@code current - 限伤后}。**永不豁免**（无"已限过"标记）—— 每次 setHealth 都无条件限。</li>
      *   <li>治疗方向（newHealth ≥ current）→ 放行（治疗不限伤）。</li>
      * </ul>
      */
@@ -176,7 +176,7 @@ public final class ConductionDamageLimiter {
         return readAttr(target, YizAttributes.CONDUCTION_CAP.get());
     }
 
-    /** 减伤（仅对血量闭包实体补——其 setHealth 层短路跳过 DAMAGE_REDUCTION/BLOCK；非闭包实体 setHealth 层已做）。 */
+    /** 减伤（仅对血量闭包实体补—— 其 setHealth 层短路跳过 DAMAGE_REDUCTION/BLOCK；非闭包实体 setHealth 层已做）。 */
     private static float applyReductionsIfSecure(LivingEntity target, float amount) {
         if (!SecureHealthClosure.isSecure(target)) return amount;
         double red = readAttr(target, YizAttributes.DAMAGE_REDUCTION.get());

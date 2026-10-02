@@ -21,7 +21,7 @@ import java.util.UUID;
  * <p>ThreadLocal COMBO_ATTACKING 作为递归守卫，替代原先基于 NBT 的
  * {@code yiz:combo_hitting} 标志，防止连击派生的 hurt() 重复触发连击。</p>
  *
- * <p>1.20.1 移植版差异：
+ * <p>实现说明：
  * <ul>
  *   <li>{@link AttributeModifier} id 参数为 {@link UUID}（1.20.1 非 ResourceLocation），
  *       用 {@link UUID#nameUUIDFromBytes} 由 idKey 派生确定性 UUID（与 EntityAttributeGate 同约定）。</li>
@@ -63,10 +63,10 @@ public final class ComboAttackHelper {
 
         // 读取连击属性 — x = 1 + (y - 1), y 为属性值
         // y=0(未配) → 1次, y=1 → 1次, y=2 → 2次, y=3 → 3次
-        // TODO(1.20.1-port): YizAttributes 需补注册 COMBO_VALUE（1.21.1 注册 id "combo_value"）
+        // TODO(待实现): YizAttributes 需补注册 COMBO_VALUE（id "combo_value"）
         double cValue = player.getAttributeValue(YizAttributes.COMBO_VALUE.get());
         if (cValue <= 0) cValue = 100.0;
-        // TODO(1.20.1-port): YizAttributes 需补注册 COMBO_COUNT（1.21.1 注册 id "combo_count"）
+        // TODO(待实现): YizAttributes 需补注册 COMBO_COUNT（id "combo_count"）
         double rawCount = player.getAttributeValue(YizAttributes.COMBO_COUNT.get());
         int count = rawCount > 0 ? Math.max(1, (int) rawCount) : 1;
 

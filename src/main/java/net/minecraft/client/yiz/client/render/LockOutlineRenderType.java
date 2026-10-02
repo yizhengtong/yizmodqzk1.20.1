@@ -20,7 +20,7 @@ public class LockOutlineRenderType extends RenderType {
     private static final RenderStateShard.OutputStateShard KEEP_TARGET =
         new RenderStateShard.OutputStateShard("keep_target", () -> {}, () -> {});
 
-    /** 填充时切换到专用 FBO（fill flush 时绑定）；clear 切回主缓冲——fill buffer 若中途自动刷帧
+    /** 填充时切换到专用 FBO（fill flush 时绑定）；clear 切回主缓冲—— fill buffer 若中途自动刷帧
      *  （BufferBuilder 满触发 immediate.endBatch）也必须切回主缓冲，否则后续实体本体 normal 渲染
      *  写进 FBO 而非主缓冲 → 实体本体不渲染、只剩描边（描边有但实体消失）。 */
     private static final RenderStateShard.OutputStateShard FILL_TARGET =

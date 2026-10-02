@@ -9,7 +9,7 @@ import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 
 /**
- * 属性编辑台服务端 Menu（1.20.1 移植版）。
+ * 属性编辑台服务端 Menu。
  *
  * <p>槽位布局：slot 0 放置槽(9,28)；slot 1-27 玩家主背包 9×3，首格(28,142)；slot 28-36 快捷栏，首格(28,200)。</p>
  */

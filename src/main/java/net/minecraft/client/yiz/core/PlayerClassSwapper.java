@@ -22,12 +22,12 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>安全警告：此操作是 JVM 内部行为，理论上不保证跨 JVM 版本兼容。
  * 当前实现针对 HotSpot 64-bit (Java 17)。</p>
  *
- * <p>1.20.1 移植说明：{@code ProtectedServerPlayer} 尚未移植，{@link #isProtected(Player)}
- * 暂用类名字符串比对（行为等价），待 ProtectedServerPlayer 移植后恢复直接类引用。</p>
+ * <p>实现说明：{@code ProtectedServerPlayer} 尚未实现，{@link #isProtected(Player)}
+ * 暂用类名字符串比对（行为等价），待 ProtectedServerPlayer 实现后恢复直接类引用。</p>
  */
 public final class PlayerClassSwapper {
 
-    /** 保护类全限定名（ProtectedServerPlayer 移植前用作 isProtected 的字符串比对依据）。 */
+    /** 保护类全限定名（ProtectedServerPlayer 实现前用作 isProtected 的字符串比对依据）。 */
     private static final String PROTECTED_CLASS_NAME = "net.minecraft.client.yiz.core.ProtectedServerPlayer";
 
     private static final Unsafe U;
@@ -58,9 +58,9 @@ public final class PlayerClassSwapper {
         return PROTECTED_UUIDS.contains(uuidStr);
     }
 
-    // 
+    //
     //  公开 API
-    // 
+    //
 
     /**
      * 将玩家切换到保护状态。
@@ -92,7 +92,7 @@ public final class PlayerClassSwapper {
 
     /**
      * 查询玩家是否处于保护状态。
-     * <p>TODO(1.20.1-port): ProtectedServerPlayer 移植后恢复
+     * <p>TODO(待实现): ProtectedServerPlayer 实现后恢复
      * {@code return player.getClass() == ProtectedServerPlayer.class;}，
      * 现用类名字符串比对（行为等价）。</p>
      */
@@ -100,9 +100,9 @@ public final class PlayerClassSwapper {
         return player.getClass().getName().equals(PROTECTED_CLASS_NAME);
     }
 
-    // 
+    //
     //  Unsafe 核心
-    // 
+    //
 
     private static boolean swap(Player player, Class<?> targetClass) {
         String key = player.getStringUUID();
@@ -129,9 +129,9 @@ public final class PlayerClassSwapper {
         return isProtected(player);
     }
 
-    // 
+    //
     //  klass 指针读写
-    // 
+    //
 
     /**
      * 读取对象头中的 klass 指针（低 32 位，压缩指针模式）。
@@ -162,9 +162,9 @@ public final class PlayerClassSwapper {
         return compressed != 0 && (compressed & 0xFFFFFFFF00000000L) == 0;
     }
 
-    // 
+    //
     //  初始化
-    // 
+    //
 
     private static Unsafe getUnsafe() {
         try {

@@ -13,7 +13,7 @@ import net.minecraft.world.entity.player.Player;
  * 实体"每 tick 维护"清单（原样抽取自 {@code LivingEntityMixin} 的 tick 尾部注入）。
  *
  * <p>抽出来的唯一目的：<b>击飞期间目标自身 tick 被停掉，这份维护必须由 {@code LaunchController} 在驱动弹道时补跑</b>。
- * 否则会出现一类很难查的问题——血量相关设施全部失效：</p>
+ * 否则会出现一类很难查的问题—— 血量相关设施全部失效：</p>
  * <ul>
  *   <li>延迟任务调度器不跑（{@code HealthModificationScheduler}：击杀兜底、门控探测、压制任务）；</li>
  *   <li>传导限伤状态机不推进（{@code ConductionDamageLimiter} 的 CD/上限判定）；</li>
@@ -22,7 +22,7 @@ import net.minecraft.world.entity.player.Player;
  * <p>实测症状：被击飞的目标"只有第 1 次攻击造成伤害，后续只击飞不掉血"。</p>
  *
  * <p>调用点：① 实体自身 tick 尾部（{@code forcePeriodic=false}，周期项按 tickCount%10）；
- * ② 击飞飞行期驱动（{@code forcePeriodic=true}——此时 tickCount 已冻结，周期项只能每 tick 跑，飞行期很短可接受）。</p>
+ * ② 击飞飞行期驱动（{@code forcePeriodic=true}—— 此时 tickCount 已冻结，周期项只能每 tick 跑，飞行期很短可接受）。</p>
  */
 public final class EntityTickMaintenance {
 

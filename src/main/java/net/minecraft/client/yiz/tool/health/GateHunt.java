@@ -36,7 +36,7 @@ public final class GateHunt {
     private static final java.util.Set<String> DIAG = ConcurrentHashMap.newKeySet();
     /** uuid → 反向累加器槽已重写钉回的次数（有上限，用尽后才退回门控猎杀）。 */
     private static final Map<UUID, Integer> PIN_TRIES = new ConcurrentHashMap<>();
-    /** 已确认门控候选的原始值（key = 类名#候选描述）——死亡/失效时还原，避免把无关字段永久钉在 1e9。 */
+    /** 已确认门控候选的原始值（key = 类名#候选描述）—— 死亡/失效时还原，避免把无关字段永久钉在 1e9。 */
     private static final Map<String, Double> PIN_ORIGINALS = new ConcurrentHashMap<>();
 
     private static final int MAX_PIN_TRIES = 6;
@@ -48,7 +48,7 @@ public final class GateHunt {
         if (entity == null || entity.level().isClientSide() || entity.isRemoved()) return;
         // 每一刀都验证（不只在 target=0）：有「每 tick 权威拉回」的实体，中段伤害也会被拉回，
         // 需要提前猎杀门控，否则规则 A 的直接减法永远被扣血上限挡住。
-        // 不用 isDeadOrDying() 提前返回——「血打 0 瞬间 isDeadOrDying 翻 true、下一 tick 又复活」的
+        // 不用 isDeadOrDying() 提前返回—— 「血打 0 瞬间 isDeadOrDying 翻 true、下一 tick 又复活」的
         // 实体会因此漏猎。是否真死交给 2 tick 验证里的 isRemoved 判断。
         UUID uuid = entity.getUUID();
         if (HUNTING.contains(uuid)) return;
@@ -252,7 +252,7 @@ public final class GateHunt {
     }
 
     /**
-     * 双向复核（C）：命中后 2 tick 再验一次——真门控保持钉住；若又失守，说明这是巧合命中，
+     * 双向复核（C）：命中后 2 tick 再验一次—— 真门控保持钉住；若又失守，说明这是巧合命中，
      * 还原候选原值、撤掉 FOUND_GATE、继续下一个候选（并把该候选计入负向）。
      */
     private static void reverifyPin(LivingEntity entity, double target, String cls, UUID uuid,

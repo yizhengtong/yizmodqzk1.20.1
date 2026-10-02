@@ -9,9 +9,9 @@ import java.lang.invoke.VarHandle;
 import java.lang.reflect.Field;
 
 /**
- * 自定义伤害管道（1.20.1 移植版）。
+ * 自定义伤害管道。
  *
- * <p>仅移植辖界者用到的 {@link #catchSetTrueHealth}（每 tick 纠正被外部模组直写的血量字段）。
+ * <p>仅实现辖界者用到的 {@link #catchSetTrueHealth}（每 tick 纠正被外部模组直写的血量字段）。
  * 完整伤害模式（actuallyHurt/Delta）后续按需补。</p>
  */
 public final class EntityActuallyHurt {
@@ -27,7 +27,7 @@ public final class EntityActuallyHurt {
         VarHandle healthField = null;
 
         // ⚠️ 反射字符串不会被 reobf 重映射：开发环境叫 DATA_HEALTH_ID、生产环境叫 f_20961_。
-        // 两个字段必须各自独立解析——原先把 health 字段的查找放在同一个 try 里，
+        // 两个字段必须各自独立解析—— 原先把 health 字段的查找放在同一个 try 里，
         // 1.20.1 没有 health 字段 → 异常 → 后面的 DATA_HEALTH_ID 根本没机会解析（开发/生产都为 null）。
         try {
             Field f = LivingEntity.class.getDeclaredField("health");
@@ -58,10 +58,10 @@ public final class EntityActuallyHurt {
      * 强制设置实体的健康值，绕过 {@code setHealth()} 的所有逻辑。
      * 通过反射直接写 {@code health} 字段 + 更新 {@code DATA_HEALTH_ID} 同步客户端。
      *
-     * <p> 1.20.1 差异：{@code LivingEntity} <b>没有 {@code health} 普通字段</b>（血量在
+     * <p> 实现说明：{@code LivingEntity} <b>没有 {@code health} 普通字段</b>（血量在
      * {@code DATA_HEALTH_ID} DataParameter 通道）→ {@code getDeclaredField("health")} 抛
      * NoSuchFieldException → {@code REFLECTION_AVAILABLE=false}。此时<b>不能再回退
-     * {@code setHealth}</b>（辖界者 override 黑洞，外部写不进）——改为直接写
+     * {@code setHealth}</b>（辖界者 override 黑洞，外部写不进）—— 改为直接写
      * {@code DATA_HEALTH_ID} DataItem（绕过 set() 限伤），确保"校正回表值"真正落到通道。</p>
      *
      * <p>优先级： 有 health 字段（若未来版本恢复）→ 字段 + 通道双写；

@@ -42,7 +42,8 @@
     "ClientMultiJumpMixin",
     "ItemNbtTooltipMixin",
     "EntityRenderDispatcherOutlineMixin",
-    "LivingEntityRendererLaunchTiltMixin"
+    "LivingEntityRendererLaunchTiltMixin",
+    "PlayerRangeMixin"
   ],
   "injectors": {
     "defaultRequire": 1
