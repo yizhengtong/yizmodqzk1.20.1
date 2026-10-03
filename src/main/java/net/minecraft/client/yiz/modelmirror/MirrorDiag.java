@@ -26,8 +26,13 @@ import java.util.Set;
  */
 public final class MirrorDiag {
 
-    /** 总开关：诊断结束后置 false（或整类删除）即可。 */
-    public static final boolean ENABLED = true;
+    /**
+     * 总开关：定位结束后置 false（或整类删除）即可。
+     * <p>2026-10-03 起关闭：黑屏三条根因（FBO 还原到 0 号 / viewport 未跟着主目标 / 描边 fill 缺
+     * {@code affects_outline} 门禁）已修完并留下注释档案，运行时不再需要逐帧诊断。
+     * 需要再排查时把它改回 true 即可（限流逻辑与调用点都还在，零维护成本）。</p>
+     */
+    public static final boolean ENABLED = false;
 
     /** 已经放行过的 key（字符串，按内容比较）。 */
     private static final Set<String> SEEN = new HashSet<>();
