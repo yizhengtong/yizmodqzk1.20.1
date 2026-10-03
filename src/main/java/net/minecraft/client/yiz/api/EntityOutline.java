@@ -15,7 +15,12 @@ import net.minecraft.world.entity.EntityType;
  *   <li>动态判定：{@link #register(OutlineRegistry.Provider)}（如锁定目标随玩家视角变化）。</li>
  *   <li>全局调参：{@link #setWidth(int)}（描边屏幕像素半径）/ {@link #setSharpness(float)}（发光锐度）。</li>
  * </ul>
- * 描边效果：穿墙可见、屏幕固定宽度（远近一致）、跟随实体纹理 alpha（镂空区不描边）、发光晕。
+ * 描边效果：穿墙可见、屏幕固定宽度（远近一致）、发光晕。
+ *
+ * <p><b>描边的形状来自"模型几何轮廓"</b>（填充 FBO 里是实心的几何掩码，2026-10-04 起不再按实体贴图的
+ * alpha 做镂空判定）：掩码必须是实心的，否则"半透明大四边形"（守界者头须/胸甲那类零厚度片）会在填充里
+ * 变成细碎网点，后处理的邻域覆盖率整片落在峰值上 → 整片被涂成描边色。理由见
+ * {@code rendertype_lock_fill.fsh}。</p>
  */
 public final class EntityOutline {
 

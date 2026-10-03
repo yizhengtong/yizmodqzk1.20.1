@@ -56,6 +56,14 @@ public final class LockOutlineRenderer {
     /** 高斯宽度：越大描边越细越硬，越小发光晕越宽，全局可配置。 */
     private static float edgeSharpness = 6.0F;
 
+    /**
+     * <b>第三轮黑屏回退</b>：这里曾经有一个 {@code cutoutEnabled} 开关（配 {@code uCutout} uniform，
+     * 由 {@code /yiz fxtoggle probe} 每次翻转，用来做"镂空开/关"的 A/B 面积对照）。
+     * 它随"按贴图 alpha 镂空"一起删除 —— 不是因为它本身危险（它只写一个 uniform），
+     * 而是因为同一个提交里的<b>全局状态</b>改动（删 {@code blend} 节点 + {@code MASK_NO_BLEND}）
+     * 让整屏发黑，只能整体回退。要做 A/B 请等镂空安全重做之后再按
+     * {@link LockOutlineRenderType} 类注释的两条硬规则加回来。
+     */
     private static LockOutlineFramebuffer framebuffer;
 
     static {
@@ -71,6 +79,18 @@ public final class LockOutlineRenderer {
     /** 设置全局发光锐度（越大越细越硬，越小发光晕越宽）。 */
     public static void setEdgeSharpness(float s) { edgeSharpness = Math.max(0.5f, s); }
 
+    /**
+     * 当前描边屏幕像素半径（= post 的 {@code uRadius}）。
+     *
+     * <p>给 {@code RenderTargetProbe} 的填充掩码回读用：那边要在 CPU 上重算后处理用的邻域覆盖率，
+     * 必须用<b>和 shader 同一份参数</b>才说得通（一旦 {@code EntityOutline.setWidth} 改过半径，
+     * 回读的数字就得跟着变）。</p>
+     */
+    public static int postRadiusPx() { return postRadius; }
+
+    /** 当前发光锐度（= post 的 {@code uSharpness}）。见 {@link #postRadiusPx()}。 */
+    public static float edgeSharpness() { return edgeSharpness; }
+
     /** 锁定系统描边色：当前玩家锁定的目标返回青色 [0,1,1,charge]，否则 null。 */
     private static float[] lockOutlineColor(Entity entity) {
         var mc = Minecraft.getInstance();
@@ -84,6 +104,34 @@ public final class LockOutlineRenderer {
 
     /** 供 fill RenderType 的 FILL_TARGET 绑定 FBO。 */
     static LockOutlineFramebuffer framebuffer() { return framebuffer; }
+
+    /**
+     * <b>临时诊断</b>（{@code RenderTargetProbe} 现场取证用）：描边 FBO 的 id 与尺寸一行文本；
+     * 还没创建（AFTER_SKY 之前）返回 {@code "未创建"}。
+     *
+     * <p>这一项要和"当前绑定 FBO"一起看：若两者相等，说明绘制正落在描边 FBO 上 —— 那是
+     * 「镜像/其它 pass 画进描边 FBO → 主目标收不到画面 → 整屏发黑」的直接证据。</p>
+     */
+    public static String outlineTargetInfo() {
+        if (framebuffer == null) return "未创建";
+        return "id=" + framebuffer.get().frameBufferId
+                + " " + framebuffer.getWidth() + "x" + framebuffer.getHeight();
+    }
+
+    /** <b>临时诊断</b>（{@code RenderTargetProbe#sampleOutlineCoverage} 回读用）：描边 FBO 的 id；未创建返回 -1。 */
+    public static int outlineFramebufferId() {
+        return framebuffer != null ? framebuffer.get().frameBufferId : -1;
+    }
+
+    /** 同上的宽（像素）。 */
+    public static int outlineFramebufferWidth() {
+        return framebuffer != null ? framebuffer.getWidth() : -1;
+    }
+
+    /** 同上高（像素）。 */
+    public static int outlineFramebufferHeight() {
+        return framebuffer != null ? framebuffer.getHeight() : -1;
+    }
 
     @SubscribeEvent
     public static void onRenderLevelStage(RenderLevelStageEvent event) {
@@ -100,17 +148,30 @@ public final class LockOutlineRenderer {
             diagInvariants(mc, "after-sky");
         } else if (stage == RenderLevelStageEvent.Stage.AFTER_ENTITIES) {
             if (framebuffer == null) return;
+            // ── 临时诊断（黑屏现场取证）：本阶段与"模型几何镜像"共用 AFTER_ENTITIES，
+            //    进来先读一次"到底绑着谁" —— 若这里不是主目标，本阶段之后的所有绘制都会画错地方。
+            //    正常每帧一条都不打（只在异常时限流打一条），见 RenderTargetProbe。 ──
+            net.minecraft.client.yiz.modelmirror.RenderTargetProbe.once("lock-after-entities");
             // flush 填充缓冲到 FBO（fill RenderType 的 FILL_TARGET 绑 FBO）；无条件清空缓冲
             LockOutlineBufferSource.get(mc.renderBuffers().bufferSource()).endFillBatch();
             // fill 的 clearRenderState 已经把目标切回主目标，这里显式再来一次（防第三方 RenderType 收尾不对称）
             LockOutlineFramebuffer.bindMain(mc);
+            // ── 一次性混合状态自检（第三轮黑屏回退时新增的证据通道，见 diagBlendOnce） ──
+            diagBlendOnce("填充刷帧后");
             // 本帧渲染过任意描边实体（星级/渴攻 Provider 返回非 null）才做后处理——
             // 星级描边无条件触发，渴攻描边透明度仍由 Provider 的 charge alpha 控制
             if (!LockOutlineBufferSource.consumeHasOutline()) return;
             framebuffer.resizeToMainTarget(mc);
             int w = framebuffer.getWidth(), h = framebuffer.getHeight();
             if (w <= 0 || h <= 0) return;
+            // ── 临时诊断（一次性，只在第一次跑到这里时做）：回读描边 FBO 的覆盖度 ──
+            // 本模组唯一的"全屏四边形"就是下面的后处理（NDC quad 覆盖全屏），而它的 edge 由
+            // 7×7 邻域密度决定 —— FBO 里若有大片 density≈0.5，整片屏幕就会被 c.rgb 糊上一层。
+            // 这条回读把"后处理是不是黑屏来源"一次判死（覆盖度≈0 ⇒ 不是它）。
+            net.minecraft.client.yiz.modelmirror.RenderTargetProbe.sampleOutlineCoverage("lock-post");
             renderPost(mc, w, h);
+            // ── 一次性混合状态自检（后处理之后必须能被后续 pass 重新打开，见 diagBlendOnce） ──
+            diagBlendOnce("后处理之后");
         }
     }
 
@@ -212,5 +273,42 @@ public final class LockOutlineRenderer {
                         + "主目标={}x{} 描边FBO={}x{}）—— 这一项异常会让本阶段之后的绘制落到错误的缓冲/错误的裁剪区，"
                         + "表现就是整屏黑或画面错位，且不会自愈",
                 where, bad, bound, main, vp[2], vp[3], vp[0], vp[1], mw, mh, fw, fh);
+    }
+
+    /**
+     * <b>一次性混合状态自检</b>（第三轮黑屏回退时新增的取证通道；每会话每个位置只打一条 INFO）。
+     *
+     * <p><b>它回答什么问题</b>：2026-10-04 第二轮的黑屏最可疑的一条路径是"<b>全局混合被关掉、
+     * 且不自愈</b>" —— 那条路径的判据只有一个：本帧后处理的全屏四边形（NDC -1..1，本模组唯一的
+     * 全屏几何）被画下去时，{@code GL_BLEND} 到底是开还是关。开着 ⇒ 后处理只会沿掩码边界上色
+     * （{@code fragColor = vec4(c.rgb, c.a * edge)}，{@code edge==0} 的地方 alpha=0、目标保持不变）；
+     * 关着 ⇒ 整屏被写成片元值，那就是整屏黑。这条日志把这件事从"推断"变成"读出来的数"。</p>
+     *
+     * <p><b>两个采样点与各自的正常值</b>：</p>
+     * <ul>
+     *   <li>{@code 填充刷帧后}：<b>关</b>是正常的 —— fill RenderType 用原版 {@code NO_TRANSPARENCY}
+     *       （掩码本来就不该混合），而 {@code NO_TRANSPARENCY} 的 clear 是空实现，所以它会把
+     *       "混合=关"留给下一个 pass。真正要盯的是下一个采样点；</li>
+     *   <li>{@code 后处理之后}：<b>关</b>也是正常的（post 的 clear 同样不重开）。
+     *       ⇒ <b>这条日志的价值不在单看某一个值，而在"把两个值留在日志里"</b>：一旦以后再出黑屏，
+     *       只要日志里这两行和 {@code [FxBlack] 描边 FBO 回读} 那一行在，就能一次判死
+     *       "是不是后处理在混合关闭的状态下画了全屏四边形"，不必再靠猜。</li>
+     * </ul>
+     *
+     * <p>为什么用 {@code glIsEnabled} 而不是 {@code GlStateManager} 的缓存字段：缓存字段（以及
+     * {@code com.mojang.blaze3d.shaders.BlendMode#lastApplied} 那个静态缓存）都<b>可能</b>与 GL 真值
+     * 不一致 —— 而那正是本轮怀疑的对象，所以这里只读 GL 真值。</p>
+     *
+     * @param where 采样点短名（出现在 key 与日志里；同一会话同一名字只打一条）
+     */
+    private static void diagBlendOnce(String where) {
+        if (!net.minecraft.client.yiz.modelmirror.MirrorDiag.first("lock:blend:" + where)) return;
+        boolean blend = GL11.glIsEnabled(GL11.GL_BLEND);
+        LOGGER.info("[LockOutline] 混合状态自检（{}）：GL_BLEND={}（两个采样点都允许为关：fill 走原版 "
+                        + "NO_TRANSPARENCY、post 的 clear 也不重开 ⇒ 关本身不是异常。这条的唯一用途是："
+                        + "下一次再出现整屏黑时，把 GL 真值留在日志里，一次判死后处理是否在混合关闭的"
+                        + "状态下画了那张覆盖全屏的 NDC 四边形 —— 开着 ⇒ 只会沿掩码边界上色（edge==0 处 "
+                        + "alpha=0、画面保持不变）；关着 ⇒ 整屏被写成片元值 = 整屏黑）",
+                where, blend ? "开" : "关");
     }
 }

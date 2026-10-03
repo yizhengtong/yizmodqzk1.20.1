@@ -1,8 +1,6 @@
 package net.minecraft.client.yiz.lightning.orchestrate;
 
 import net.minecraft.client.yiz.lightning.LightningFX;
-import net.minecraft.client.yiz.lightning.config.SparkConfig;
-import net.minecraft.client.yiz.lightning.fx.SparkSpawner;
 import net.minecraft.client.yiz.lightning.render.LightningRenderer;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.Level;
@@ -78,16 +76,16 @@ public class LightningEmitter {
             PositionSupplier hit = PositionSupplier.offset(
                     PositionSupplier.following(t), 0, t.getBbHeight() * 0.5, 0);
             LightningFX.spawnArc(origin, hit, 0.35f, halfWidth, r, g, b);
-            // 命中瞬间"挂在目标身上"的游离弧：寿命与主电弧一致（0.35s）。
-            // 几何走模型几何镜像的 AIR_ARC 层（LightningAirArcLayer）—— 贴的是<b>实体模型自己的顶点</b>，
-            // 所以弧沿四肢/头部/盔甲轮廓跳，而不是"围着包围盒这个方盒子跳"（旧 SurfaceArcEffect 的行为）。
-            // 命中之后的持续体表表现仍归镜像层 LIGHTNING（由 ShockedEntityAPI 驱动）。
-            LightningFX.spawnSurfaceArc(t, 0.35f, halfWidth, r, g, b);
-            if (SparkConfig.isHit()) {   // 命中爆点火花 8~12 颗
-                SparkSpawner.spawnHitBurst(hit.get(0f),
-                        java.util.concurrent.ThreadLocalRandom.current().nextInt(),
-                        r, g, b,
-                        8 + java.util.concurrent.ThreadLocalRandom.current().nextInt(5));
+            // 命中瞬间"挂在目标身上"的围弧 —— <b>编号 4</b>，与 S2CShockFxPayload kind=0 同一条通道
+            // （ShockEffects 的状态表），门也是同一个开关（FxDebugSwitches.surfaceArcs()，<b>默认开</b>）。
+            //
+            // 几何 = 独立的三维短弧（飘在目标身体外那一圈空间里），端点取自<b>实体自己被渲染时写出的
+            // 那批顶点</b>采出的锚点（ShockArcs + ShockAnchors）⇒ 命中即挂上去的这批弧同样
+            // "模型在哪它就在哪"：击飞倒下跟着倒，被别的模组挪走也跟着飞。
+            // 这里用的是命中瞬间的短寿命（0.35s = 7 tick）；命中之后"整段感电时长"的围弧由
+            // S2CShockFxPayload kind=0 另外登记（同一个状态表，重复登记走 extend 续命，不重新淡入）。
+            if (net.minecraft.client.yiz.tool.FxDebugSwitches.surfaceArcs()) {
+                net.minecraft.client.yiz.lightning.fx.ShockEffects.shock(t, 7, 1.25f);
             }
             visited.add(t.getId());
             if (chainHops > 0) {

@@ -215,6 +215,9 @@ public class tizMod {
         net.minecraft.client.yiz.tool.YizKeyCommand.register();
         // 闪电特效测试指令（/yiz fx）
         net.minecraft.client.yiz.tool.YizFxCommand.register();
+        // 闪电特效的"逐个关闭"全量调试开关
+        // （/yiz fxtoggle 1..9 | status（一次列全） | all on|off | probe）
+        net.minecraft.client.yiz.tool.YizFxToggleCommand.register();
         // 物品描边指令（/yiz mb <0-5> 给主手物品加描边）
         net.minecraft.client.yiz.tool.YizOutlineCommand.register();
         // 体积火焰测试指令（/yiz flame wall|ring|rope|burning|off）

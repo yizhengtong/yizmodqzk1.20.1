@@ -173,4 +173,11 @@ public final class YizDiagnostics {
     /** 万能物品配置。 */
     public static final String ITEM_CONFIG = register("item_config", false,
         "万能物品配置发现与应用");
+
+    /**
+     * 黑屏现场取证：绘制时绑定的渲染目标 / 是否主目标 / viewport / 描边 FBO / 纹理单元 0 / 玩家身上的效果。
+     * 问题：击飞 + 感电 + 渴攻描边时整屏发黑，排查中（默认开）。
+     */
+    public static final String FX_BLACKSCREEN = register("fx_blackscreen", true,
+        "黑屏现场：FBO 归属/viewport/纹理单元0/玩家效果（击飞+感电+描边黑屏排查中，2026-10-04）");
 }

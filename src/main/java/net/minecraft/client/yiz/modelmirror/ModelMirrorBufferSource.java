@@ -8,6 +8,8 @@ import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.blaze3d.vertex.VertexMultiConsumer;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.yiz.lightning.fx.ShockAnchors;
+import net.minecraft.client.yiz.lightning.fx.ShockArcs;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.Entity;
 import org.joml.Matrix4f;
@@ -36,6 +38,22 @@ import java.util.Map;
  * {@link MirrorChannel}（独立 BufferBuilder/RenderType/uniform），互不干扰 ——
  * 所以"同一实体既着火又带电"时两份都会画。</p>
  *
+ * <p><b>第二条（与"层"并列的）下游：锚点采集</b>。围弧（编号 4）要的不是"把模型再画一遍"，
+ * 而是"模型表面到底在哪几个位置" —— 它需要一小撮模型顶点当弧的锚点。
+ * 这条需求<b>不走 {@link MirrorLayer}/{@link MirrorChannel}</b>（那条路要 RenderType、要写顶点缓冲、
+ * 要刷帧），而是由 {@link ShockArcs#beginFrame} 给出一个"只看不写"的顶点接收器
+ * （{@code ShockAnchors.Tap}），挂在本类 {@link #getBuffer} 返回的多路复用链上：
+ * 顶点照旧只写一份进主缓冲，接收器顺手记下坐标与 UV、不占任何缓冲也不画任何东西。
+ * 于是"贴模型着火"（层）与"围弧锚点"（接收器）可以同时生效、各自独立开关、互不影响。</p>
+ *
+ * <p><b>锚点接收器是"逐层"给的</b>（2026-10-05 起）：{@link #getBuffer} 拿到 {@code type} 时调
+ * {@code ShockAnchors.Tap#forType(type)}，取回<b>该层专属</b>的接收器 —— 它绑定的是<b>该层自己那张贴图</b>
+ * 的 CPU 侧 alpha 位图，用来判"这个面在贴图上到底有没有画到"（判据与描边镂空同源，见
+ * {@code ShockAnchors} 类注释）。为什么必须逐层：一次渲染里本体层 / 发光覆层 / 盔甲层的 UV
+ * 各自属于自己那张图，共用一份判据会互相串味；而且分层的接收器让"两层交叉着写顶点"也不出错。
+ * 这一步是纯查表（{@code LockOutlineLayerTexture.resolve} + {@code LockOutlineAlphaMask.get} 都带缓存），
+ * 不分配、不碰 GL。</p>
+ *
  * <p><b>与描边管线的关系（零侵入）</b>：本类不修改 {@code LockOutlineBufferSource} 与
  * {@code EntityRenderDispatcherOutlineMixin}。本类自身是 {@link MultiBufferSource.BufferSource}
  * 子类，所以描边那条 {@code replaced instanceof BufferSource} 的判断在包住本类时依然成立；
@@ -57,6 +75,19 @@ public final class ModelMirrorBufferSource extends MultiBufferSource.BufferSourc
 
     /** 当前正在渲染的实体批次；{@code null} = 该实体本帧没有任何激活层。用 List 当栈（允许存 null）。 */
     private static final List<Batch> STACK = new ArrayList<>();
+
+    /**
+     * 与 {@link #STACK} <b>平行</b>的"上一层 delegate"栈（同样是 List 当栈，允许存 null）。
+     *
+     * <p>实体渲染可以嵌套：实体的渲染器在自己的渲染过程里再经由
+     * {@code EntityRenderDispatcher.render} 渲染别的实体（乘客/坐骑/其它 MOD 的渲染层），
+     * 而每一层都会各自调一次 {@link #wrap} 把形参换成这个单例。旧写法只给 {@code delegate} 赋值、
+     * {@link #end()} 也只还原 {@code current} —— 于是<b>内层</b>换了另一个缓冲源时，
+     * 外层实体<b>剩下</b>的模型顶点会继续写进内层的缓冲源里（几何进了别人的目标，
+     * 本类 {@code getBuffer} 里所有基于 delegate 的判断也一起错位）。
+     * 现在 wrap 压栈、end 出栈，嵌套几层就还原几层。</p>
+     */
+    private static final List<MultiBufferSource> DELEGATE_STACK = new ArrayList<>();
 
     /**
      * 当前实体渲染用的"真实"主缓冲源。<b>只要求是 {@link MultiBufferSource}</b>：
@@ -93,22 +124,32 @@ public final class ModelMirrorBufferSource extends MultiBufferSource.BufferSourc
             return "非关卡透视投影 → 跳过（m23=" + fmt(m.m23()) + " m32=" + fmt(m.m32()) + " m33=" + fmt(m.m33()) + "）";
         }
 
-        if (ModelMirrorLayers.ALL.isEmpty()) return "没有任何消费者登记（ModelMirrorLayers.ALL 为空）";
-
         Batch batch = BATCHES.get(entity);
         if (batch == null) {
             batch = new Batch(entity);
             BATCHES.put(entity, batch);
         }
         batch.beginFrame(dx, dy, dz, yaw);
-        if (!batch.hasActiveChannel()) return "该实体本帧没有任何体表特效状态（模型顶点不会被抄）";
+        // ── 围弧（编号 4）的锚点采集：本帧这个实体要不要顺手收一份模型顶点坐标 ──
+        // 与"镜像层"是<b>并列</b>的两件事：它不走 MirrorChannel（不写任何顶点缓冲、不要 RenderType、
+        // 不画东西），只是一个挂在多路复用器末端的"只看不写"的接收器（见 ShockAnchors.Tap）。
+        // 只有"正在感电 + 开关 4 开着"的实体才会拿到它，其余实体一个顶点都不会被额外收走。
+        batch.anchorTap = ShockArcs.beginFrame(entity);
+
+        if (!batch.hasActiveChannel() && batch.anchorTap == null) {
+            return "该实体本帧没有任何体表特效状态（模型顶点不会被抄）";
+        }
         current = batch;
-        return "OK（双写通道已打开，激活层=" + batch.activeSummary() + "）";
+        return "OK（双写通道已打开，激活层=" + batch.activeSummary()
+                + (batch.anchorTap != null ? "，锚点采集=开" : "") + "）";
     }
 
     /** 实体渲染结束：恢复外层状态（批次留在表里，等 AFTER_ENTITIES 统一刷帧）。 */
     public static void end() {
         current = STACK.isEmpty() ? null : STACK.remove(STACK.size() - 1);
+        // delegate 与 current 成对还原（理由见 DELEGATE_STACK）：嵌套实体渲染改用别的缓冲源时，
+        // 外层剩下的顶点必须回到外层自己的 delegate 上，否则会写进内层的目标。
+        delegate = DELEGATE_STACK.isEmpty() ? null : DELEGATE_STACK.remove(DELEGATE_STACK.size() - 1);
     }
 
     /**
@@ -130,6 +171,12 @@ public final class ModelMirrorBufferSource extends MultiBufferSource.BufferSourc
      * {@link MirrorChannel}（自己的 BufferBuilder），与"delegate 是不是 BufferSource"无关。</p>
      */
     public static MultiBufferSource wrap(MultiBufferSource source) {
+        // ── 先压栈、再赋值，且"无论 source 是什么都压一层" ──
+        // wrap 与 end 是同一个方法上的两个注入点（@ModifyVariable HEAD / @Inject RETURN），
+        // 一次实体渲染各跑一次，所以这样必定成对；反过来，如果只在"确实要换"时才压栈，
+        // source == null / source 已经是本单例（二次包装）这两条早退路径就会让栈错位，
+        // 之后所有 end() 都会还原到别人的 delegate 上（比不还原更糟）。
+        DELEGATE_STACK.add(delegate);
         if (source == null) return null;
         if (source == INSTANCE) return source;   // 二次包装（同一帧里嵌套调用自己）→ 原样返回，别把 delegate 指成自己
         delegate = source;
@@ -231,8 +278,11 @@ public final class ModelMirrorBufferSource extends MultiBufferSource.BufferSourc
      * 而闪光（{@code glint*} / {@code entity_glint*}，格式 {@code POSITION_TEX}）与描边
      * （{@code outline}，格式 {@code POSITION_COLOR_TEX}）根本不是 {@code NEW_ENTITY} 格式，
      * 早已被下面那条格式判据挡住，不需要在这里再列一遍。</p>
+     *
+     * <p><b>2026-10-04 起本判据由描边管线的"门禁 2"共用</b>（{@code LockOutlineBufferSource#getBuffer}）：
+     * 描边 fill 通道不经过本类，所以那边必须自己挡一次 —— 共用同一份判据，避免两处判据漂移。</p>
      */
-    private static boolean isNonBodyShadowPass(RenderType type) {
+    public static boolean isShadowPass(RenderType type) {
         Boolean cached = SHADOW_FLAGS.get(type);
         if (cached != null) return cached;
         boolean shadow = type == VANILLA_SHADOW || "entity_shadow".equals(renderTypeName(type));
@@ -285,9 +335,9 @@ public final class ModelMirrorBufferSource extends MultiBufferSource.BufferSourc
             return delegate.getBuffer(type);
         }
         // 影子同样是 NEW_ENTITY 格式、但它是"非本体"的投影 → 排除，别在地面/墙上烧出一块特效色的影子。
-        // 判据见 #isNonBodyShadowPass（身份比较为主，名字兜底）。注意这里只放弃"多抄一份"，
+        // 判据见 #isShadowPass（身份比较为主，名字兜底）。注意这里只放弃"多抄一份"，
         // 主缓冲那一份照旧由 delegate 正常渲染，影子该显示还显示。
-        if (isNonBodyShadowPass(type)) {
+        if (isShadowPass(type)) {
             // ── 临时诊断：影子 pass 确实被挡下了（全局只打一条，key 是常量，避免每次调用都拼 RenderType 字符串）──
             if (MirrorDiag.first("mm:skipShadow")) {
                 LOGGER.info("[ModelMirror] 排除影子 pass（不抄进任何特效缓冲）: renderType={} —— 影子与模型同为 NEW_ENTITY 格式，"
@@ -305,17 +355,27 @@ public final class ModelMirrorBufferSource extends MultiBufferSource.BufferSourc
             }
             return delegate.getBuffer(type);
         }
-        // 主缓冲那一份照旧由 delegate 写；每个<b>本帧激活</b>的消费者的那一份写进各自的通道（自己的 BufferBuilder）。
+        // 主缓冲那一份照旧由 delegate 写；每个<b>本帧激活</b>的消费者的那一份写进各自的通道（自己的 BufferBuilder），
+        // 围弧（编号 4）的锚点接收器（若有）也挂在同一条多路复用链上 —— 它只看不写，不占任何缓冲。
         // 注意必须按 active() 过滤：同一实体的不同层各自生效（只着火 / 只带电 / 两者都有），
         // 没生效的层连通道都可能还没建（byLayer[i] == null）—— 直接抄会 NPE。
         VertexConsumer primary = delegate.getBuffer(type);
+        // 锚点接收器（本帧该实体正在感电且有开关 4 时非 null）：见 ShockAnchors.Tap 与上面的 begin()。
+        // 这里取的是「<b>该层专属</b>」的接收器（按 RenderType 身份从主 Tap 的池里取，见 Tap#forType）：
+        // 它在本层 getBuffer 时绑定本层贴图的 alpha 位图 ⇒ 本体层/发光覆层/盔甲层各用各的 UV 与贴图做判据，
+        // 不会串味。池满（异常多的 RenderType 实例）时主 Tap 会给出一个永不绑定的兜底接收器（= 该层不过滤）。
+        VertexConsumer tap = batch.anchorTap == null ? null : batch.anchorTap.forType(type);
         int activeCount = 0;
         for (int i = 0; i < batch.channelCount(); i++) {
             MirrorChannel ch = batch.channelAt(i);
             if (ch != null && ch.active()) activeCount++;
         }
-        if (activeCount == 0) return primary;   // 理论不可达：current 只在至少一层激活时才设置
-        if (activeCount == 1) {
+        if (activeCount == 0 && tap == null) return primary;   // 理论不可达：current 只在有活干时才设置
+        if (activeCount == 0) {
+            // 只收锚点（该实体只在感电、没着火）：锚点接收器 + 本体，走 vanilla 的 Double 组合（不额外分配数组）
+            return VertexMultiConsumer.create(tap, primary);
+        }
+        if (activeCount == 1 && tap == null) {
             for (int i = 0; i < batch.channelCount(); i++) {
                 MirrorChannel ch = batch.channelAt(i);
                 if (ch != null && ch.active()) {
@@ -324,8 +384,10 @@ public final class ModelMirrorBufferSource extends MultiBufferSource.BufferSourc
                 }
             }
         }
-        VertexConsumer[] delegates = new VertexConsumer[activeCount + 1];
+        VertexConsumer[] delegates = new VertexConsumer[(tap != null ? 1 : 0) + activeCount + 1];
         int n = 0;
+        // 锚点接收器放最前（它不写缓冲，位置无所谓；放最前让"抄了几份"的阅读顺序与诊断一致）
+        if (tap != null) delegates[n++] = tap;
         for (int i = 0; i < batch.channelCount(); i++) {
             MirrorChannel ch = batch.channelAt(i);
             if (ch != null && ch.active()) delegates[n++] = ch.copy();
@@ -366,6 +428,19 @@ public final class ModelMirrorBufferSource extends MultiBufferSource.BufferSourc
         /** 下标 = {@link ModelMirrorLayers#ALL} 的下标；{@code null} = 该层从未对这条实体生效过。 */
         private final MirrorChannel[] byLayer = new MirrorChannel[ModelMirrorLayers.ALL.size()];
 
+        /**
+         * 本帧"只收锚点、不画模型"的顶点接收器（围弧 / 编号 4）；
+         * {@code null} = 本帧这个实体不收锚点（没感电 / 开关 4 关着 / 实体渲染没走到这里）。
+         *
+         * <p>它<b>不是</b> {@link MirrorLayer}：不占 MirrorChannel、不要 RenderType、不画任何顶点，
+         * 只是挂在 {@link #getBuffer} 的多路复用链末端接住模型顶点的最终坐标
+         * （见 {@code ShockAnchors.Tap}）。这个字段持有的是<b>主 Tap</b>（工厂/标记，自己不接顶点），
+         * 真正的接收器由 {@code ShockAnchors.Tap#forType(RenderType)} 按层给出（每层绑自己那张
+         * 贴图的 alpha 位图）。锚点表本身归 {@code ShockArcs} 持有，
+         * 所以即便这个 Batch 被回收，下一帧也能接着往同一张表里采。</p>
+         */
+        ShockAnchors.Tap anchorTap;
+
         Batch(Entity entity) {
             this.entity = entity;
         }
@@ -388,6 +463,11 @@ public final class ModelMirrorBufferSource extends MultiBufferSource.BufferSourc
                 if (ch != null && ch.active()) return true;
             }
             return false;
+        }
+
+        /** 本帧这条实体是否要收锚点（围弧编号 4）——批次回收判据里与 {@link #hasActiveChannel()} 并列。 */
+        boolean wantsAnchors() {
+            return anchorTap != null;
         }
 
         /** 当前激活层的短名串（诊断日志用）。 */
@@ -428,6 +508,7 @@ public final class ModelMirrorBufferSource extends MultiBufferSource.BufferSourc
 
         /** 丢弃整批（实体已移除 / 所有层都不再激活）。 */
         void discardAll() {
+            anchorTap = null;
             for (MirrorChannel ch : byLayer) {
                 if (ch != null) {
                     ch.deactivate();

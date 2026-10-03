@@ -11,11 +11,22 @@ import net.minecraftforge.network.PacketDistributor;
 import java.util.List;
 
 /**
- * 闪电特效测试指令（排查用）— `/yiz fx` 对玩家面前目标发 S2C 触发闪电束/表面电弧。
+ * 闪电特效测试指令（排查用）— {@code /yiz fx} 对玩家面前目标发 S2C 触发闪电束 + 感电围弧。
  *
- * <p>效仿高版本直接调用特效：服务端发 {@code S2CShockFxPayload}（kind=1 链式电弧 + kind=0
- * 表面电弧），客户端 {@code LightningFX.spawnArc/spawnSurfaceArc} 渲染。用于定位：
- * 特效显示 = 特效 OK，问题在感电触发衔接；不显示 = 渲染/shader 问题。</p>
+ * <p>效仿高版本直接调用特效：服务端发 {@code S2CShockFxPayload}（kind=1 链式电弧 +
+ * kind=0 感电围弧）。kind=0 走的是与"命中即感电"完全相同的那条链：
+ * {@code ShockEffects.shock(entity, ticks)} → 身体外那一圈空间里的短弧群
+ * （{@code ShockArcs}，<b>编号 4，默认开</b>）。对<b>自己</b>发的那一条（duration=100 tick）是
+ * "围弧长什么样"最快的验证手段。</p>
+ *
+ * <p><b>围弧跟着模型走</b>：弧的几何是<b>独立的三维折线</b>（飘在体外那一圈空间里），
+ * 但两个端点取自<b>实体自己被渲染时写出的那批顶点</b>里采出来的锚点 ⇒
+ * 走动/转身/被击飞倒下/被别的模组把模型整体挪走，弧全都在模型上
+ * （详见 {@code ShockArcs} 的类注释：为什么"独立几何 + 顶点锚点"两头的好处都拿到了）。</p>
+ *
+ * <p><b>注意去重窗口</b>：kind=0 在客户端有"同一实体 / 同一格"两级去重（{@code SURFACE_ARC_EXPIRY}
+ * 与 {@code CELL_SURFACE_EXPIRY}），刚被感电过再敲本指令可能整条被跳过 —— 等 0.5s 以上再敲，
+ * 或先走开一格。</p>
  */
 public final class YizFxCommand {
 

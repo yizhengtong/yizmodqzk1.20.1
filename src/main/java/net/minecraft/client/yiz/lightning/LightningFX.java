@@ -1,35 +1,57 @@
 package net.minecraft.client.yiz.lightning;
 
 import net.minecraft.client.yiz.lightning.fx.ArcEffect;
-import net.minecraft.client.yiz.lightning.fx.SurfaceArcEffect;
-import net.minecraft.client.yiz.lightning.render.LightningAirArcState;
 import net.minecraft.client.yiz.lightning.render.LightningRenderer;
-import net.minecraft.world.entity.Entity;
 import net.minecraft.world.phys.Vec3;
 
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
+
 /**
- * 闪电特效公开 API — 技能系统通过此入口 spawn 各类电弧/球/表面游离/感电视觉。
+ * 闪电特效公开 API —— 只提供用户实测后确认要的两项。
  *
- * <p><b>两类"贴着实体"的表现各自走哪条路（用户要求"空气电弧也要跟着模型轮廓"之后的定案）</b>：</p>
+ * <h2>保留（用户定案：只有这两个有用）</h2>
  * <ul>
- *   <li><b>挂在实体身上的弧</b>（环绕/体表）：一律走<b>模型几何镜像</b> ——
- *       几何 = 实体模型顶点双写，逐点贴合四肢/头部/盔甲轮廓。
- *       <ul>
- *         <li>{@link #spawnSurfaceArc(Entity)} / {@code spawnSurfaceArc(entity, life, ...)} →
- *             {@code AIR_ARC} 层（{@code LightningAirArcLayer}，短寿命游离弧，命中瞬间用）；</li>
- *         <li>持续感电（技能 APPLY）→ {@code LIGHTNING} 层（{@code LightningSurfaceLayer}，
- *             由 {@code ShockedEntityAPI} 驱动）。</li>
- *       </ul>
- *       旧通道 {@code SurfaceArcEffect}（按<b>包围盒六面</b>撒弧）<b>不再</b>用于实体 ——
- *       那正是"围着一个方盒子跳的电"。</li>
- *   <li><b>真正在空气里的弧</b>：{@link #spawnArc(Vec3, Vec3, float, float, float, float, float)}
- *       （两点之间的折线，含跟随实体的动态端点）与 {@link #spawnSurfaceArcOnBall}
- *       （球状闪电表面；球不是实体，没有模型可镜像）。这两类保留原实现。</li>
+ *   <li><b>1 = 闪电链</b>：{@link #spawnArc(Vec3, Vec3, float, float, float, float, float)} 与
+ *       {@link #spawnArc(net.minecraft.client.yiz.lightning.orchestrate.PositionSupplier, net.minecraft.client.yiz.lightning.orchestrate.PositionSupplier, float, float, float, float, float)}
+ *       两个重载（后者端点由 {@code PositionSupplier} 实时插值，跟随移动目标不滞后）。
+ *       门 = {@code FxDebugSwitches.chainArc()}（生成入口 + 渲染段兜底）。</li>
+ *   <li><b>4 = 围弧</b>（用户要的"体表电流"）：{@code ShockEffects.shock(entity, 持续tick)} ——
+ *       只登记"这个实体在感电"这一个状态；几何与渲染由 {@code ShockArcs} 负责：
+ *       <b>独立的三维短弧</b>（飘在身体外 0.05~0.35 格那一圈空间里、有自己的顶点、有自己的生灭），
+ *       端点取自模型顶点采出的锚点（{@code ShockAnchors}）
+ *       ⇒ 模型被渲染到哪里，弧就在哪里：击飞倒下跟着倒、
+ *       别的模组把模型挪到 10 格外也跟着飞。
+ *       生产者两处：{@code S2CShockFxPayload} kind=0（整段感电）与 {@code LightningEmitter#fire}
+ *       （命中瞬间 0.35s）：
+ *       <pre>ShockEffects.shock(entity, lifeTicks);</pre>
+ *       门 = {@code FxDebugSwitches.surfaceArcs()}。</li>
+ * </ul>
+ *
+ * <h2>已删除（用户实测后确认无用，别再加回来）</h2>
+ * <ul>
+ *   <li><b>2 / 3</b>：模型几何镜像的 {@code LIGHTNING} / {@code AIR_ARC} 层 —— 都是一开（有实体感电时）
+ *       就<b>整屏发黑</b>，两层与其状态表、生成入口（{@code spawnSurfaceArc(Entity…)} 两个重载）、
+ *       着色器（{@code rendertype_lightning_surface.*} / {@code rendertype_lightning_modelarc.*}）
+ *       全部删除。<b>黑屏根因写在 {@link LightningRenderer} 的类注释里</b>（缺 {@code "blend"} 节点 ⇒
+ *       着色器自己 {@code disableBlend()}；外加用 {@code setShaderColor} 当强度通道）。
+ *       <p><b>第四~六轮补充</b>：编号 4 曾经<b>确实</b>以镜像层的身份（{@code SHOCK} /
+ *       {@code rendertype_shock_surface}）实现过 —— 它<b>不是</b>把 2/3 号接回来（JSON 有
+ *       {@code "blend"} 节点、强度走顶点色 alpha、RenderType 与火焰层逐项同构、不绑纹理），
+ *       也<b>确实没有黑屏</b>；但用户实测否掉了观感（"就是幽蓝色纹理贴在表面"）。
+ *       第六轮因此把几何整个换掉（独立折线 + 顶点锚点），并删除了那一层与它的三个着色器资源。
+ *       取证与结论见 {@code ModelMirrorLayers} 与 {@code ShockArcs} 的类注释 ——
+ *       <b>结论：闪电类着色器不要再走模型几何镜像</b>。</p></li>
+ *   <li><b>5</b>：旧体表叠亮（{@code LivingEntityRendererSurfaceLightningMixin} 把模型重画一遍）+
+ *       其着色器 {@code rendertype_lightning_surface.*}。</li>
+ *   <li><b>6</b>：球状闪电（{@code spawnBall} / {@code BallEffect} / {@code BallGeometry} / ball 着色器）。</li>
+ *   <li><b>7</b>：电弧火花粒子（{@code SparkSpawner} / {@code SparkEffect} / {@code SparkGeometry} /
+ *       {@code SparkConfig} / spark 着色器）。</li>
+ *   <li><b>8</b>：{@code spawnSurfaceArcOnBall}（球面游离弧，与 6 号同批）。</li>
+ *   <li><b>9</b>：被动带电指示的判定（{@code LightningSurfaceState}，喂给已删除的 5 号）。
+ *       {@code SHOCK_ATTACK} / {@code SHOCK_DEFENSE} <b>属性本身保留</b>（注册在 {@code tizMod}），
+ *       只是不再有客户端视觉消费者。</li>
+ *   <li>{@code ShockedEntityAPI}（感电状态机）与 {@code skillA/B/C} 预设 —— 唯一消费者是 5 号，
+ *       随 5 号一起删除。</li>
  * </ul>
  */
 public final class LightningFX {
@@ -45,6 +67,10 @@ public final class LightningFX {
 
     public static ArcEffect spawnArc(Vec3 from, Vec3 to, float life, float width,
                                      float r, float g, float b) {
+        // ── 开关 1（闪电链）：生成入口直接不生成（/yiz fxtoggle 1）──
+        // 关掉后不仅新弧不再产生，已入队的弧也会在切换那一刻由 LightningRenderer.clearArcs() 清掉，
+        // 于是"两实体之间的链式电弧"一个顶点都不画；围弧（开关 4）完全不受影响。
+        if (!net.minecraft.client.yiz.tool.FxDebugSwitches.chainArc()) return null;
         ArcEffect e = new ArcEffect(from, to, life, width,
                 ThreadLocalRandom.current().nextInt(), r, g, b);
         LightningRenderer.enqueue(e);
@@ -55,131 +81,11 @@ public final class LightningFX {
     public static ArcEffect spawnArc(net.minecraft.client.yiz.lightning.orchestrate.PositionSupplier from,
                                      net.minecraft.client.yiz.lightning.orchestrate.PositionSupplier to,
                                      float life, float width, float r, float g, float b) {
+        // ── 开关 1（闪电链）：同上（这是链式电弧实际走的那条重载）──
+        if (!net.minecraft.client.yiz.tool.FxDebugSwitches.chainArc()) return null;
         ArcEffect e = new ArcEffect(from, to, life, width,
                 ThreadLocalRandom.current().nextInt(), r, g, b);
         LightningRenderer.enqueue(e);
         return e;
-    }
-
-    /**
-     * 对实体施加"围绕身体的游离电弧"（默认 0.35 秒、蓝白）。
-     *
-     * <p><b>几何 = 实体模型本身</b>（模型几何镜像的 {@code AIR_ARC} 层，见
-     * {@code LightningAirArcLayer}）：弧贴着四肢/头部/盔甲的轮廓走，<b>不再是包围盒</b>。</p>
-     *
-     * @return 无（旧签名返回 {@code SurfaceArcEffect}；那个对象已经不存在了 —— 弧由镜像层按状态绘制）
-     */
-    public static void spawnSurfaceArc(Entity entity) {
-        spawnSurfaceArc(entity, 0.35f, 0.028f, DEFAULT_R, DEFAULT_G, DEFAULT_B);
-    }
-
-    /**
-     * 自定义外观的"围绕实体的游离电弧"。
-     *
-     * <p><b>改动说明（用户要求"空气电弧也应该跟着模型轮廓"）</b>：旧实现 new 一个
-     * {@code SurfaceArcEffect} 入 {@code LightningRenderer.SURFACE} —— 那是按实体<b>包围盒六个面</b>
-     * 生成小弧（还会生成跨面宽 40~80% 的长弧），会飘在头顶上方/脚下方这些模型之外的盒面上，
-     * 看上去是"围着一个方盒子跳的电"。现在改成<b>注册状态</b>，由模型几何镜像的
-     * {@code AIR_ARC} 层用实体模型自己的顶点画出来。</p>
-     *
-     * <p><b>仍然留在空气中的弧</b>（镜像层无法表达，故保留在 {@code LightningRenderer}）：</p>
-     * <ul>
-     *   <li>两点之间的链式电弧：{@link #spawnArc(net.minecraft.world.phys.Vec3, net.minecraft.world.phys.Vec3, float, float, float, float, float)}
-     *       / 动态端点版本 —— 本来就是两点之间的折线，与模型轮廓无关；</li>
-     *   <li>球状闪电表面：{@link #spawnSurfaceArcOnBall} —— 球不是实体（{@code BallEffect}），
-     *       没有模型几何可镜像。</li>
-     * </ul>
-     */
-    public static void spawnSurfaceArc(Entity entity, float life,
-                                       float halfWidth, float r, float g, float b) {
-        LightningAirArcState.put(entity, life, halfWidth, r, g, b);
-    }
-
-    /** 在指定位置 spawn 球状闪电。pos = 位置提供者（如头顶），selectable = 能否被链式选中作中转。 */
-    public static net.minecraft.client.yiz.lightning.fx.BallEffect spawnBall(
-            net.minecraft.client.yiz.lightning.orchestrate.PositionSupplier pos, float radius, float life, boolean selectable) {
-        var b = new net.minecraft.client.yiz.lightning.fx.BallEffect(pos, radius, life, selectable,
-                ThreadLocalRandom.current().nextInt());
-        LightningRenderer.enqueueBall(b);
-        return b;
-    }
-
-    /**
-     * 在动态球（如飞行球）表面生成游离电弧：AABB 实时跟随 center ± radius。
-     *
-     * <p><b>为什么这一种保留"包围盒/包围球"实现</b>：球状闪电不是实体（{@code BallEffect}），
-     * 没有"模型几何"可以镜像 —— 它本来就是一个球，弧绕球面走是正确的表现。
-     * 这是"无法用镜像层表达"的那一类，与实体身上的弧分开：见
-     * {@link #spawnSurfaceArc(net.minecraft.world.entity.Entity, float, float, float, float, float)}。</p>
-     */
-    public static net.minecraft.client.yiz.lightning.fx.SurfaceArcEffect spawnSurfaceArcOnBall(
-            net.minecraft.client.yiz.lightning.orchestrate.PositionSupplier center, float radius, float life) {
-        var e = new net.minecraft.client.yiz.lightning.fx.SurfaceArcEffect(center, radius, life, 0.025f,
-                DEFAULT_R, DEFAULT_G, DEFAULT_B, ThreadLocalRandom.current().nextInt());
-        LightningRenderer.enqueueSurface(e);
-        return e;
-    }
-
-    // ══════════════════════════════════════════════════════════════════
-    //  预设技能快捷函数（基于 LightningEmitter 编排层）
-    // ══════════════════════════════════════════════════════════════════
-
-    /** 技能 A：玩家头顶球状闪电 + 球持续向周围实体释放链式闪电。 */
-    public static void skillA(net.minecraft.world.entity.player.Player player) {
-        var head = net.minecraft.client.yiz.lightning.orchestrate.PositionSupplier.offset(
-                net.minecraft.client.yiz.lightning.orchestrate.PositionSupplier.following(player),
-                0, player.getBbHeight() + 1.0, 0);
-        spawnBall(head, 0.5f, 20f, true);
-        net.minecraft.client.yiz.lightning.orchestrate.LightningEmitter.builder(player.level())
-                .source(head)
-                .mode(net.minecraft.client.yiz.lightning.orchestrate.LightningEmitter.Mode.CONTINUOUS)
-                .interval(0.5f)
-                .range(8f).maxTargets(3).chainHops(3)
-                .lifetime(20f)
-                .start();
-    }
-
-    /** 技能 B：玩家前方定向电弧 → 命中目标后向周围扩散链式闪电。 */
-    public static void skillB(net.minecraft.world.entity.player.Player player) {
-        net.minecraft.world.phys.Vec3 eye = player.getEyePosition(1f);
-        net.minecraft.world.entity.Entity hit = raycastEntity(player, 16);
-        if (hit == null) {
-            spawnArc(eye, eye.add(player.getViewVector(1f).scale(16)));
-            return;
-        }
-        net.minecraft.world.phys.Vec3 hitPos = new net.minecraft.world.phys.Vec3(
-                hit.getX(), hit.getY() + hit.getBbHeight() * 0.5, hit.getZ());
-        spawnArc(eye, hitPos, 0.4f, 0.05f, DEFAULT_R, DEFAULT_G, DEFAULT_B);
-        net.minecraft.client.yiz.lightning.orchestrate.LightningEmitter.builder(player.level())
-                .source(net.minecraft.client.yiz.lightning.orchestrate.PositionSupplier.following(hit))
-                .mode(net.minecraft.client.yiz.lightning.orchestrate.LightningEmitter.Mode.ONCE)
-                .range(6f).maxTargets(4).chainHops(3)
-                .lifetime(0.4f)
-                .start();
-    }
-
-    /** 技能 C：范围技能，玩家周围所有实体各自触发链式闪电。 */
-    public static void skillC(net.minecraft.world.entity.player.Player player) {
-        net.minecraft.client.yiz.lightning.orchestrate.LightningEmitter.builder(player.level())
-                .source(net.minecraft.client.yiz.lightning.orchestrate.PositionSupplier.following(player))
-                .mode(net.minecraft.client.yiz.lightning.orchestrate.LightningEmitter.Mode.ONCE)
-                .range(8f).maxTargets(99)
-                .chainHops(2)
-                .lifetime(0.4f)
-                .start();
-    }
-
-    /** 玩家视线方向的最近可拾取实体（技能 B 命中检测）。 */
-    private static net.minecraft.world.entity.Entity raycastEntity(net.minecraft.world.entity.player.Player player, double range) {
-        net.minecraft.world.phys.Vec3 eye = player.getEyePosition(1f);
-        net.minecraft.world.phys.Vec3 view = player.getViewVector(1f);
-        net.minecraft.world.phys.AABB search = new net.minecraft.world.phys.AABB(eye, eye.add(view.scale(range))).inflate(1.0);
-        return player.level().getEntities(player, search, e -> e.isAlive() && e.isPickable()).stream()
-                .filter(e -> {
-                    net.minecraft.world.phys.Vec3 toE = e.position().subtract(eye);
-                    return toE.lengthSqr() > 1e-4 && toE.normalize().dot(view) > 0.92;
-                })
-                .min(java.util.Comparator.comparingDouble(e -> e.distanceToSqr(eye)))
-                .orElse(null);
     }
 }

@@ -30,6 +30,9 @@ public final class ShaderEventRegistrar {
         net.minecraft.client.yiz.flame.render.FlameShaders.declareProtected();
         // 贴模型火焰（"着火"贴实体实际模型）：同一套声明式注册，单独一个 shader + RenderType
         net.minecraft.client.yiz.flame.render.FlameSurfaceShaders.declareProtected();
+        // 注：编号 4 围弧（第六轮起）不再有自己的着色器 —— 它复用编号 1 的
+        // rendertype_lightning_arc（见 ShockArcs 类注释）。原先的 rendertype_shock_surface.*
+        // 与 ShockSurfaceShaders 已随"几何=皮肤顶点"那条路整体删除。
         ShaderProtectionRegistry.onRegisterShaders(event);
 
         LightningShaders.onRegisterShaders(event);
