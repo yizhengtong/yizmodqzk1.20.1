@@ -83,37 +83,56 @@ import java.util.Map;
  * 打进限流日志（{@code 过滤=… 未过滤面=…}），并在<b>本会话第一次</b>出现某种原因时打一条
  * {@code [ShockArc] 围弧锚点采样退回未过滤模式…}（判据是整数位比较，稳态零分配、零字符串拼接）。</p>
  *
- * <h2>采样：固定容量 + 步长自适应（写满就隔点抽稀、步长翻倍）</h2>
- * <p>目标是把"几千个模型顶点（现在是几百~几千个通过判据的采样点）"压成 64~256 个<b>铺满整个模型</b>
- * 的锚点，且不吃逐帧分配：</p>
+ * <h2>采样（2026-10-06：点数 ∝ 面的 3D 面积 + 表 2048，不再靠"按写入顺序抽稀"来压量）</h2>
+ * <p><b>病灶（用户原话）</b>："特效太过于贴合实体……躯干（胸）这个最大的部位，弧反而很少出现在胸前和胸后"。
+ * 离线用真模型 + 真贴图逐部件/逐面复算（{@code _scan/AnchorLayoutProbe.java}，与 {@code Tap#emitFace}
+ * 逐句同构；贴图取原版 {@code client-extra.jar} 里的真 PNG），证实是<b>采样密度规则</b>与
+ * <b>写满抽稀</b>两条叠加：</p>
  * <ol>
- *   <li><b>容量固定</b>：{@link #CAPACITY} 个点，{@code float[3×CAPACITY]} 一次分配、跨帧复用
- *       （每条实体一份，实体效果结束后随 {@code Track} 一起回收）；</li>
- *   <li><b>步长自适应</b>：初始步长 1（每个通过判据的采样点都算候选）；表写满时执行一次
- *       {@link #compact()}（保留偶数下标 = 隔点抽稀）并把步长翻倍。
- *       于是无论模型是 600 个顶点还是 20000 个顶点，最终表里都稳定落在
- *       {@code [CAPACITY/2, CAPACITY]} 这个区间；抽稀的相位逐轮错开，
- *       不会出现"永远只采到每个面片的同一个角"那种规律性聚集；</li>
- *   <li><b>下标稳定</b>：同一个模型（顶点数与写出顺序不变）逐帧算出来的表内容顺序完全一致，
- *       所以 {@link ShockArcs} 里"弧 = 某两个锚点下标 + 偏移"这种记法跨帧指向同一个身体部位
- *       —— 这是"弧粘在身体上跟着动"而不是"逐帧乱跳"的前提。</li>
+ *   <li><b>每面点数被夹在 4~16，与面在 3D 里多大基本无关</b>（旧式 {@code n = clamp(√纹素面积/4, 2, 4)}）：
+ *       僵尸 42 个面里 36 个"有画"的面<b>全部只拿 4 个点</b> ⇒ 胸前那面 0.375 格² 拿 4 点（10.7 点/格²），
+ *       手臂面 0.188 格² 也拿 4 点（21.3 点/格²）—— <b>躯干是全身最稀的部位</b>；</li>
+ *   <li><b>160 表写满后按 2 的幂步长隔点抽稀</b>，而面网格宽度又是 2 或 4（与步长同相）⇒ 幸存点
+ *       <b>塌缩成一行/一列</b>：监守者胸前那面 16 个候选最后只剩 4 个，且全在 {@code t=0.13} 那条水平线上；</li>
+ *   <li><b>写入顺序本身不产生偏置</b>（这条实测<b>否掉</b>了"先写的部位霸占名额"的猜测）：僵尸躯干是
+ *       最后一个写的（子级顺序是 {@code HashMap} 桶序，见 {@code _scan/MapOrder.java}），
+ *       表内占比 24/144 = 16.7%，与它的候选占比 24/144 完全一致 —— 抽稀是按比例的。</li>
  * </ol>
+ * <p><b>现在</b>：{@link #SAMPLE_SPACING}(0.15 格) 决定"每 0.0225 格² 一个采样点"，面按自己的 3D 面积取点
+ * （单面上限 {@link #FACE_SAMPLE_MAX}），表容量 {@link #CAPACITY}(2048) 大到正常模型一次抽稀都不触发
+ * ⇒ 锚点分布<b>正比于可见面积</b>且在各部位均匀。实测（"表内点/可见格²"）：
+ * 僵尸 头 51.0 / 臂 51.8 / 腿 49.5 / 躯干 50.1（<b>1.05 : 1</b>），
+ * 监守者 躯干 46.6 / 头 48.2 / 臂 55.2~56.4 / 腿 62.0（1.33 : 1）；
+ * 胸前那一面从 <b>4 个点（一条线）</b>变成 <b>僵尸 18 点（3×6 网格）、监守者 70 点</b>。</p>
+ * <p><b>仍然只在"贴图真正画到的地方"</b>：alpha≥0.1 与"空白面零锚点"的规则一个字没改
+ * （离线实测：僵尸胸前后都画到了 92%，所以它们<b>应该</b>有锚点，不必为"包满"破坏这条原则；
+ * 监守者肋甲 12 个面、僵尸"帽子"层 6 个面确实整面透明 ⇒ 它们仍然是 0 个锚点）。</p>
+ * <p><b>为什么不做"体素分桶 / 每桶限量"</b>（评估过并否掉）：分桶键必须<b>相机无关</b>
+ * （视图空间的格子会随镜头转动 ⇒ 逐帧算出的幸存集合会变 ⇒ {@code ShockArcs} 里"弧 = 锚点下标 + 偏移"
+ * 会指向别的部位，弧就在身体上乱跳 —— 而"下标稳定"正是要保住的性质）；按 UV/纹素分桶又会把
+ * <b>镜像部件</b>（僵尸左右臂共用同一块 UV）算进同一个桶，把两条臂的名额砍半。改成"点数 ∝ 3D 面积"后，
+ * 分桶要解决的"某个部位霸占名额"从根上不存在（每面点数正比于它自己的面积，且单面有硬上限），
+ * 因此不需要引入任何分桶状态。</p>
+ *
+ * <p><b>下标稳定</b>：采样点、网格尺寸、alpha 判据全部与相机无关 ⇒ 同一个模型逐帧算出来的表内容
+ * 顺序完全一致，{@link ShockArcs} 里"弧 = 锚点下标 + 偏移"跨帧指向同一个身体部位
+ * —— 这是"弧粘在身体上跟着动"而不是"逐帧乱跳"的前提。</p>
  *
  * <h2>开销（逐帧零分配，这是硬要求）</h2>
  * <ul>
  *   <li><b>每个顶点</b>：3 次 {@code double} 写 + 1 次 {@code float}×2 写（面累积）+ 1 次
  *       {@code boolean} 写；</li>
- *   <li><b>每个面</b>（只在第 4 个顶点）：4 次 min/max 扫描、6 组"同侧必须同 UV"比较、
- *       {@code n² ≤ 16} 次 alpha 查表（一次 {@code byte[]} 读 + 一次比较）、
- *       通过点各一次双线性插值（≤4 组乘加/轴）与 3 次 {@code float} 写；</li>
+ *   <li><b>每个面</b>（只在第 4 个顶点）：4 次 min/max 扫描、6 组"同侧必须同 UV"比较、一次叉积
+ *       （面外法线）、{@code nu×nv ≤ }{@link #FACE_SAMPLE_MAX} 次 alpha 查表（一次 {@code byte[]} 读 +
+ *       一次比较）、通过点各一次双线性插值（≤4 组乘加/轴）与 6 次 {@code float} 写（位置 3 + 法线 3）；</li>
+ *   <li><b>采样预算</b> {@link #SAMPLE_BUDGET}（16384 点/实体/帧）：典型用量 僵尸 404、监守者 4104
+ *       ⇒ 正常游戏里这道闸门一次都不落下；</li>
  *   <li><b>每层每次 getBuffer</b>：1 次 {@code WeakHashMap} 查（逐层贴图）+ 1 次
  *       "资源管理器身份比较 + HashMap 查"（alpha 位图）—— 都不分配；</li>
  *   <li><b>没有任何 {@code new}/装箱/String 拼接在热路径上</b>：面的累积数组、分组求和数组、
  *       层 Tap 池全部是<b>字段</b>（随 {@code Track}/Tab 建一次）；采样点直接写进
- *       {@link #CAPACITY} 容量的 {@code float[]}；日志门是整数位运算（见 {@link #noteUnfiltered}）。</li>
- *   <li>实测口径（离线用真 {@code warden.png} 跑同一套算法）：监守者 10 个立方体 60 个面里
- *       只有 30 个面"有画"，耳朵那块平板从 24 个顶点锚点降到 <b>2 个</b>（且都在画出来的纹理上），
- *       两个肋甲平板从 24 降到 2 —— 总的候选点仍在几百量级，抽稀后表长照旧 80~160。</li>
+ *       {@link #CAPACITY} 容量的 {@code float[]}（位置 3 张 + 法线 3 张，{@code Track} 建立时一次分配、
+ *       跨帧复用，实体不再感电就随 {@code Track} 回收）；日志门是整数位运算（见 {@link #noteUnfiltered}）。</li>
  * </ul>
  *
  * <h2>怎么拿到顶点</h2>
@@ -138,24 +157,66 @@ public final class ShockAnchors {
     private static final Logger LOGGER = LoggerFactory.getLogger("YizShockArc");
 
     /**
-     * 锚点表容量：模型越大越可能触发抽稀，但表长恒定不超过它。
-     * 160 对"玩家 604 顶点"意味着约 1/4 的顶点被采到（几乎逐面片取一个对角点，铺得很匀）；
-     * 对 GeckoLib 那种上万顶点的模型则自动降到 1/16、1/32…，始终 ≈80~160 个点。
+     * <b>锚点表硬上限</b>：{@code float[3×CAPACITY]}（位置）与 {@code float[3×CAPACITY]}（面外法线）
+     * 在 {@code Track} 建立时<b>一次分配、跨帧复用</b>，稳态逐帧零分配（{@code Track} 只对"正在感电"
+     * 的实体存在，感电结束即随 {@code Track} 一起回收）。2048 × 24 字节 = 48 KB/实体。
+     *
+     * <h2>2026-10-06：160 → 2048，因为"抽稀"本身就是躯干空的元凶之一</h2>
+     * <p>旧的 160 表在监守者这种实体上稳定触发 2 次 {@link #compact()}（步长 1→2→4），
+     * 于是<b>每个面的幸存点恰好落成一条线</b>：面网格宽度是 2 或 4（{@code n∈[2,4]}），
+     * 与 2 的幂步长同相 ⇒ 保留下来的永远是光栅序里同一行/同一列。
+     * 离线用真 {@code warden.png} 复算：胸前那一面（16 个候选）最后只剩 <b>4 个点，且全在
+     * t=0.13 那一条水平线上</b>；躯干正面因此"几乎没有弧"。</p>
+     * <p>现在采样点密度按 3D 面积走（见 {@link #SAMPLE_SPACING}），典型用量：僵尸本体层 296 点、
+     * 监守者六层 1125 点 —— <b>都落在表内、一次抽稀都不触发</b>，所以"按写入顺序抽稀"这条偏置
+     * 在正常模型上彻底不出现。2048 是给大模型（GeckoLib 巨物 / 全画满的资源包）留的余量；
+     * 真超了才退回原来的"隔点抽稀"（比例抽稀，不会让某个部件独占）。</p>
      */
-    public static final int CAPACITY = 160;
+    public static final int CAPACITY = 2048;
 
     // ══════════════════════════ 过滤参数（改判据只改这里） ══════════════════════════
 
-    /** 单面采样网格下限：{@code 2×2}（极小的面也要有 4 个采样点，否则等于没采样）。 */
-    private static final int GRID_MIN = 2;
-    /** 单面采样网格上限：{@code 4×4 = 16} 次 alpha 查表 —— 这是"每面最多 16 次"这条预算的来源。 */
-    private static final int GRID_MAX = 4;
+    /**
+     * <b>目标采样间距（格，模型/视图空间）</b>：每个面按"自己的 3D 面积"决定采几个点，
+     * 使<b>单位可见面积上的锚点数在各面之间恒定</b>——这就是"面积加权 + 空间均匀"的落地点。
+     *
+     * <p><b>旧规则为什么不行</b>：{@code n = clamp(round(√(纹素面积)/4), 2, 4)} 只看<b>纹素</b>面积，
+     * 且上下限把它压成 2~4 ⇒ 单面点数被夹在 4~16，<b>与面在 3D 里有多大基本无关</b>。
+     * 44 个面各拿 4 点的僵尸：胸前面 0.375 格² 拿 4 点（10.7 点/格²），手臂面 0.188 格² 也拿 4 点
+     * （21.3 点/格²）⇒ <b>躯干是全身最稀的部位</b>；监守者更极端，所有大面都顶到 16 点的上限，
+     * 于是 6.3 格² 的躯干与 4.0 格² 的脑袋拿一样多。</p>
+     *
+     * <p><b>新规则</b>：{@code N = clamp(round(面积 / 间距²), 1, FACE_SAMPLE_MAX)}，再按
+     * "面在 3D 里的两条边长比"拆成 {@code nu × nv}（各轴夹在 {@code [1, GRID_AXIS_MAX]}）。
+     * 间距 0.15 格 ⇒ 每 0.0225 格² 一个点（≈44 点/格²）。实测（离线复算，见 {@code _scan/AnchorLayoutProbe}）：
+     * 僵尸头 51.0、臂 51.8、腿 49.5、躯干 50.1 <b>点/格²（max/min = 1.05 : 1）</b>；
+     * 监守者躯干 46.6、头 48.2、臂 55.2~56.4、腿 62.0（1.33 : 1）。</p>
+     *
+     * <p>为什么用<b>世界/模型空间</b>的边长而不是屏幕空间：屏幕空间依赖相机，同一个模型在相机
+     * 移动时算出的表会变 ⇒ {@code ShockArcs} 里"弧 = 锚点下标 + 偏移"这种跨帧记法会指向
+     * 另一个身体部位（弧会跟着镜头在身体上乱跳）。模型空间是刚体不变量，逐帧结果与相机无关，
+     * "下标稳定 ⇒ 弧粘在身体上"这条性质才保得住。</p>
+     */
+    public static final float SAMPLE_SPACING = 0.15F;
+    /** 单面采样总数上限（超大面：面积 ≥ {@code FACE_SAMPLE_MAX × SAMPLE_SPACING²} ≈ 2.16 格² 时封顶）。 */
+    public static final int FACE_SAMPLE_MAX = 96;
+    /** 单面每轴采样数上限（细长面：长边不因为另一维窄而无限加密）。 */
+    private static final int GRID_AXIS_MAX = 32;
+    /**
+     * <b>单实体每帧采样点预算</b>（所有层所有面加起来）：超过就停手，这一帧剩下的面一个点都不采。
+     * 这是一道"模型被改坏 / 上万面 GeckoLib 巨物"的护栏：典型用量是僵尸本体层 404 点、
+     * 监守者六层 4104 点，离 16384 很远 ⇒ <b>正常模型上这道闸门一次都不会落下</b>，
+     * 也就不会出现"后面的面被前面挤掉"的偏置（155 个面 × 96 才算得满）。
+     */
+    private static final int SAMPLE_BUDGET = 16384;
     /** 主 Tap 最多派生几个"逐层 Tap"（按 RenderType 身份缓存）；超了走永不绑定的兜底 Tap（= 不过滤）。 */
     private static final int POOL_MAX = 16;
     /** UV 轴对齐容差：远小于一个纹素在 UV 上的宽度，又远大于 float 误差（与描边同一套判据）。 */
     private static final float UV_AXIS_EPS = 1.0E-4F;
     /** 某一维的纹素跨度小于它就认为该维退化（零厚度薄片的棱面：UV 退化成一条线）。 */
     private static final float DEGENERATE_TEXELS = 0.5F;
+    /** 面法线长度小于它就认为叉积退化（零厚度薄片的棱面 / 共线顶点）⇒ 外推方向退回"锚点−质心"径向。 */
+    private static final float NORMAL_EPS = 1.0E-6F;
 
     /** 未过滤原因位：该层贴图解析不到（{@link LockOutlineLayerTexture#resolve} 返回 null）。 */
     public static final int REASON_NO_TEXTURE = 1;
@@ -186,12 +247,35 @@ public final class ShockAnchors {
     private int statUnfilteredFaces;
     /** 本帧通过 alpha 判据的采样点总数（= 喂给抽稀的候选点数，最终表长 ≤ {@link #CAPACITY}）。 */
     private int statOffers;
+    /** 本帧真正的 alpha 查表次数（= 采样点数；预算 {@link #SAMPLE_BUDGET} 就是夹它的）。 */
+    private int statSamples;
+    /** 本帧因 {@link #SAMPLE_BUDGET} 用尽而整面跳过、一个点都没采的面数（正常模型恒为 0）。 */
+    private int statBudgetFaces;
     /** 本帧出现过的"未过滤"原因位掩码（层级的 + 面级的）。 */
     private int statReasons;
 
     private final float[] xs = new float[CAPACITY];
     private final float[] ys = new float[CAPACITY];
     private final float[] zs = new float[CAPACITY];
+
+    /**
+     * 每个锚点所在<b>面的外法线</b>（单位向量，模型/视图空间；退化面写 0 ⇒ 由 {@code ShockArcs}
+     * 退回"锚点−质心"径向）。
+     *
+     * <p><b>为什么要存它</b>：{@code ShockArcs#setOffset} 原来沿"锚点−质心"径向外推，
+     * 而<b>躯干离质心最近</b>（质心就在躯干里）⇒ 躯干锚点的径向几乎是<b>切向</b>，
+     * 推不出体表。离线复算（真 warden.png / zombie.png，每点 32 次随机抽样）：
+     * 起点被推进体表以内（随后被本体深度测试吃掉 ⇒ 看不到）的比例，
+     * 沿径向是 <b>躯干胸前 18~27%、头 23%、臂 35~41%、腿 40~42%、合计 22~31%</b>；
+     * 改成沿面外法线后全部降到 <b>1~2%</b>。见 {@code ShockArcs#setOffset}。</p>
+     *
+     * <p>符号：叉积 {@code (p1−p0)×(p3−p0)}。原版未镜像的面全部天然朝外（离线自检 44/44），
+     * 镜像过的面有少数朝内 ⇒ 判"哪边是外"交给 {@code ShockArcs} 用质心做一次校正
+     * （本类在采集期<b>没有</b>质心可用，"下标稳定"也要求这里不做任何跨帧状态判断）。</p>
+     */
+    private final float[] nx = new float[CAPACITY];
+    private final float[] ny = new float[CAPACITY];
+    private final float[] nz = new float[CAPACITY];
 
     /** 本帧已采到的点数（≤ {@link #CAPACITY}）。 */
     private int count;
@@ -211,23 +295,37 @@ public final class ShockAnchors {
         statBlankFaces = 0;
         statUnfilteredFaces = 0;
         statOffers = 0;
+        statSamples = 0;
+        statBudgetFaces = 0;
         statReasons = 0;
     }
 
-    /** 收一个通过判据的锚点候选（<b>视图空间</b>坐标，已经是最终位置：视图旋转 / 相机相对平移 / 姿态全部烤好了）。 */
-    public void offer(double x, double y, double z) {
+    /**
+     * 收一个通过判据的锚点候选（<b>视图空间</b>坐标，已经是最终位置：视图旋转 / 相机相对平移 / 姿态全部烤好了）。
+     *
+     * @param ox/oy/oz 该锚点所在面的外法线（模型/视图空间，不必是单位向量；退化面传 0）
+     */
+    public void offer(double x, double y, double z, float ox, float oy, float oz) {
         statOffers++;
         if ((seen++ % stride) != 0) return;
         if (count == CAPACITY) compact();
         xs[count] = (float) x;
         ys[count] = (float) y;
         zs[count] = (float) z;
+        nx[count] = ox;
+        ny[count] = oy;
+        nz[count] = oz;
         count++;
     }
 
     /**
      * 表写满时的抽稀：保留偶数下标（= 采样序列里隔一个留一个），步长翻倍。
      * 代价 O(CAPACITY/2)，一帧最多发生 log2(候选点数/CAPACITY) 次。
+     *
+     * <p><b>2026-10-06</b>：这是"面积加权 + 表 2048"之后的<b>兜底路径</b>，正常模型碰不到
+     * （离线：僵尸 296 点、监守者 1125 点，都在表内）。它按<b>比例</b>抽稀（每个部件的幸存数
+     * 正比于它的候选数），所以即便触发也不会让某个部位独占；但它会把每个面的幸存点压成
+     * "光栅序里同一个相位"的一行/一列（旧 160 表的病根），所以只该在超大模型上出现。</p>
      */
     private void compact() {
         int n = 0;
@@ -235,6 +333,9 @@ public final class ShockAnchors {
             xs[n] = xs[i];
             ys[n] = ys[i];
             zs[n] = zs[i];
+            nx[n] = nx[i];
+            ny[n] = ny[i];
+            nz[n] = nz[i];
             n++;
         }
         count = n;
@@ -250,6 +351,11 @@ public final class ShockAnchors {
     public float y(int i) { return ys[i]; }
     public float z(int i) { return zs[i]; }
 
+    /** 第 {@code i} 个锚点所在面的外法线（未单位化；全 0 = 退化面，调用方退回径向）。 */
+    public float nx(int i) { return nx[i]; }
+    public float ny(int i) { return ny[i]; }
+    public float nz(int i) { return nz[i]; }
+
     // ── 过滤统计（诊断日志；读的都是本帧的值）──
 
     /** 本帧处理过的面数。 */
@@ -262,6 +368,10 @@ public final class ShockAnchors {
     public int statUnfilteredFaces() { return statUnfilteredFaces; }
     /** 本帧通过 alpha 判据的候选点总数（抽稀之前）。 */
     public int statOffers() { return statOffers; }
+    /** 本帧真正的 alpha 查表次数（= 采样点数）。 */
+    public int statSamples() { return statSamples; }
+    /** 本帧因采样预算 {@link #SAMPLE_BUDGET} 用尽而整面跳过的面数（正常模型恒为 0）。 */
+    public int statBudgetFaces() { return statBudgetFaces; }
     /** 本帧出现过的未过滤原因位掩码（0 = 该实体本帧所有层都按贴图 alpha 过滤）。 */
     public int filterReasons() { return statReasons; }
 
@@ -516,8 +626,10 @@ public final class ShockAnchors {
         public void endVertex() {
             // 未过滤（层次级兜底 / 非 QUADS）：<b>逐顶点</b> offer —— 与改造前逐字节一致，
             // 包括"非 4 倍数顶点"这种异常几何（不攒面就永远不会丢零头）。
+            // 法线给 0：这条路上不攒面（拿不到面法线），偏移方向由 ShockArcs 退回"锚点−质心"径向
+            // —— 也就是这层退回时弧的行为与改造前完全一致。
             if (this.mask == null) {
-                this.anchors.offer(this.vx, this.vy, this.vz);
+                this.anchors.offer(this.vx, this.vy, this.vz, 0f, 0f, 0f);
                 return;
             }
             // 过滤模式：攒面（走到这里必然是 QUADS，见 bind）
@@ -539,12 +651,22 @@ public final class ShockAnchors {
         }
 
         /**
-         * 一个 QUADS 面的完整判定：UV 矩形 → 网格采样 → 纹素 alpha → 双线性插值位置 → offer。
+         * 一个 QUADS 面的完整判定：UV 矩形 → 按 3D 面积定采样网格 → 纹素 alpha → 双线性插值位置 → offer。
          * 任何一步判据不成立都"退回现状"（这个面的 4 个顶点逐个 offer），并计数。
+         *
+         * <p><b>采样预算是"整面跳过"而不是"半个面"</b>：{@link #SAMPLE_BUDGET} 用尽时，这一帧剩下的面
+         * 一个点都不采（连 {@code statFaces} 都不记），并计入 {@link #statBudgetFaces()}。这样
+         * "哪些面被采过"永远是确定的（与相机无关）、每个被采过的面永远拿到自己完整的网格 ⇒
+         * 下标稳定这条性质不被预算破坏。典型模型（僵尸 404 点、监守者 4104 点）离 16384 很远，
+         * 这道闸门在正常游戏里一次都不会落下。</p>
          */
         private void emitFace() {
             ShockAnchors an = this.anchors;
             LockOutlineAlphaMask m = this.mask;
+            if (an.statSamples >= SAMPLE_BUDGET) {
+                an.statBudgetFaces++;
+                return;
+            }
             an.statFaces++;
             if (m == null || this.faceUvMissing) {
                 an.statUnfilteredFaces++;
@@ -633,31 +755,63 @@ public final class ShockAnchors {
                 this.ay[r] = (float) (this.sumY[r] / n);
                 this.az[r] = (float) (this.sumZ[r] / n);
             }
+            // ── 面外法线（叉积 (p1−p0)×(p3−p0)，模型/视图空间）：弧的外推方向要用它 ──
+            //  符号：原版未镜像的面全部天然朝外（离线自检 44/44）；少数镜像面朝内 ⇒
+            //  由 ShockArcs 在生成弧时用"锚点−质心"校正一次（这里没有质心可用，也不该引入跨帧状态）。
+            //  退化面（零厚度平板的棱面：顶点共线）叉积为 0 ⇒ 存 0，调用方退回径向。
+            float nnx = 0f, nny = 0f, nnz = 0f;
+            {
+                float e1x = (float) (this.px[1] - this.px[0]);
+                float e1y = (float) (this.py[1] - this.py[0]);
+                float e1z = (float) (this.pz[1] - this.pz[0]);
+                float e3x = (float) (this.px[3] - this.px[0]);
+                float e3y = (float) (this.py[3] - this.py[0]);
+                float e3z = (float) (this.pz[3] - this.pz[0]);
+                float cx = e1y * e3z - e1z * e3y;
+                float cy = e1z * e3x - e1x * e3z;
+                float cz = e1x * e3y - e1y * e3x;
+                if (cx * cx + cy * cy + cz * cz > NORMAL_EPS) { nnx = cx; nny = cy; nnz = cz; }
+            }
+            // ── 采样：点数 ∝ 这个面在 3D 里有多大（不是纹素有多大），再按边长比拆成两轴 ──
+            int nu, nv;
+            if (mode == MODE_LINE_U || mode == MODE_LINE_V || mode == MODE_POINT) {
+                // 退化面：只沿"非退化那一维"取点（旧的 n×n 会把同一个位置重复 offer n 次 = 白占名额）
+                if (mode == MODE_LINE_U) {
+                    nu = clampInt(Math.round(sideSpan(0) / SAMPLE_SPACING), 1, FACE_SAMPLE_MAX);
+                    nv = 1;
+                } else if (mode == MODE_LINE_V) {
+                    nu = 1;
+                    nv = clampInt(Math.round(sideSpan(1) / SAMPLE_SPACING), 1, FACE_SAMPLE_MAX);
+                } else {
+                    nu = 1; nv = 1;
+                }
+            } else {
+                float wu = sideSpan(0);
+                float wv = sideSpan(1);
+                int target = clampInt(Math.round(wu * wv / (SAMPLE_SPACING * SAMPLE_SPACING)), 1, FACE_SAMPLE_MAX);
+                nu = clampInt(Math.round((float) Math.sqrt(target * (wu / Math.max(1.0e-4f, wv)))), 1, GRID_AXIS_MAX);
+                nv = clampInt(Math.max(1, Math.round((float) target / nu)), 1, GRID_AXIS_MAX);
+            }
             int hits = 0;
             if (mode == MODE_POINT) {
-                // 退化成一个点：只查一次、只产一个锚点（否则 n×n 会产出 4 个完全重合的点）
+                // 退化成一个点：只查一次、只产一个锚点
                 if (m.opaqueTexel(texel(uMin, m.width()), texel(vMin, m.height()))) {
-                    an.offer(this.ax[0], this.ay[0], this.az[0]);
+                    an.offer(this.ax[0], this.ay[0], this.az[0], nnx, nny, nnz);
                     hits = 1;
                 }
             } else {
-                // 采样密度按"面在贴图上覆盖的纹素面积开方 / 4"自适应；退化面按非退化那一维的长度。
-                // 16×16 纹素的面 ⇒ 4×4 = 16 个点（每点约 16 纹素）；8×8 ⇒ 2×2；上限恒为 16 次查表。
-                float span = degenU ? vh : (degenV ? uw : (float) Math.sqrt(uw * vh));
-                int n = Math.round(span * 0.25f);
-                if (n < GRID_MIN) n = GRID_MIN;
-                else if (n > GRID_MAX) n = GRID_MAX;
                 int wt = m.width();
                 int ht = m.height();
                 float du = uMax - uMin;
                 float dv = vMax - vMin;
-                for (int i = 0; i < n; i++) {
-                    float s = (i + 0.5f) / n;
+                for (int i = 0; i < nu; i++) {
+                    float s = (i + 0.5f) / nu;
                     int tx = texel(uMin + s * du, wt);          // 外层的纹素下标提到内层循环外
-                    for (int j = 0; j < n; j++) {
-                        float t = (j + 0.5f) / n;
+                    for (int j = 0; j < nv; j++) {
+                        float t = (j + 0.5f) / nv;
+                        an.statSamples++;
                         if (!m.opaqueTexel(tx, texel(vMin + t * dv, ht))) continue;
-                        offerSample(an, mode, s, t);            // 通过判据 ⇒ 双线性插值出位置
+                        offerSample(an, mode, s, t, nnx, nny, nnz);   // 通过判据 ⇒ 双线性插值出位置
                         hits++;
                     }
                 }
@@ -667,6 +821,25 @@ public final class ShockAnchors {
             } else {
                 an.statBlankFaces++;         // ★ 这个面一个通过点都没有 ⇒ 一个锚点都不产生（耳朵的空白区）
             }
+        }
+
+        /**
+         * 面在 3D 里沿某一维的边长（格）：{@code axis=0} 取"u 小端两侧点 → u 大端两侧点"的平均距离，
+         * {@code axis=1} 取 v 方向同理。用两侧点的<b>平均位置</b>而不是某一条边，所以
+         * 梯形/非平行四边形的面也能拿到合理的边长（标准盒面就是精确边长）。
+         */
+        private float sideSpan(int axis) {
+            float lx = 0f, ly = 0f, lz = 0f, hx = 0f, hy = 0f, hz = 0f;
+            int ln = 0, hn = 0;
+            for (int r = 0; r < 4; r++) {
+                if (this.groupN[r] == 0) continue;
+                boolean high = axis == 0 ? (r & 1) != 0 : (r & 2) != 0;
+                if (high) { hx += this.ax[r]; hy += this.ay[r]; hz += this.az[r]; hn++; }
+                else { lx += this.ax[r]; ly += this.ay[r]; lz += this.az[r]; ln++; }
+            }
+            if (ln == 0 || hn == 0) return 0f;
+            float dx = hx / hn - lx / ln, dy = hy / hn - ly / ln, dz = hz / hn - lz / ln;
+            return (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
         }
 
         /**
@@ -680,7 +853,7 @@ public final class ShockAnchors {
          *   <li>{@link #MODE_LINE_V}：u 退化 ⇒ 沿 v 同理。</li>
          * </ul>
          */
-        private void offerSample(ShockAnchors an, int mode, float s, float t) {
+        private void offerSample(ShockAnchors an, int mode, float s, float t, float nnx, float nny, float nnz) {
             if (mode == MODE_BILINEAR) {
                 float w0 = (1f - s) * (1f - t);
                 float w1 = s * (1f - t);
@@ -688,22 +861,25 @@ public final class ShockAnchors {
                 float w3 = s * t;
                 an.offer(w0 * this.ax[0] + w1 * this.ax[1] + w2 * this.ax[2] + w3 * this.ax[3],
                         w0 * this.ay[0] + w1 * this.ay[1] + w2 * this.ay[2] + w3 * this.ay[3],
-                        w0 * this.az[0] + w1 * this.az[1] + w2 * this.az[2] + w3 * this.az[3]);
+                        w0 * this.az[0] + w1 * this.az[1] + w2 * this.az[2] + w3 * this.az[3],
+                        nnx, nny, nnz);
             } else if (mode == MODE_LINE_U) {
                 an.offer(this.ax[0] + (this.ax[1] - this.ax[0]) * s,
                         this.ay[0] + (this.ay[1] - this.ay[0]) * s,
-                        this.az[0] + (this.az[1] - this.az[0]) * s);
+                        this.az[0] + (this.az[1] - this.az[0]) * s,
+                        nnx, nny, nnz);
             } else {
                 an.offer(this.ax[0] + (this.ax[2] - this.ax[0]) * t,
                         this.ay[0] + (this.ay[2] - this.ay[0]) * t,
-                        this.az[0] + (this.az[2] - this.az[0]) * t);
+                        this.az[0] + (this.az[2] - this.az[0]) * t,
+                        nnx, nny, nnz);
             }
         }
 
         /** 面级兜底：这个面的 4 个顶点逐个 offer（= 改造前的行为，一字不差）。 */
         private void offerAllFour(ShockAnchors an) {
             for (int i = 0; i < 4; i++) {
-                an.offer(this.px[i], this.py[i], this.pz[i]);
+                an.offer(this.px[i], this.py[i], this.pz[i], 0f, 0f, 0f);
             }
         }
 
@@ -712,5 +888,10 @@ public final class ShockAnchors {
             int t = (int) (uv * size);
             return t < 0 ? 0 : (t >= size ? size - 1 : t);
         }
+    }
+
+    /** 夹取（零分配，热路径上替代 {@code Math.max/Math.min} 链）。 */
+    private static int clampInt(int v, int lo, int hi) {
+        return v < lo ? lo : (v > hi ? hi : v);
     }
 }

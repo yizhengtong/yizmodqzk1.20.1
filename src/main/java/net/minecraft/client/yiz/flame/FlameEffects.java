@@ -28,6 +28,11 @@ public final class FlameEffects {
 
     private FlameEffects() {}
 
+    /** 诊断日志里的两位小数（Locale.ROOT：避免某些区域用逗号当小数点，日志反而不好读）。 */
+    private static String fmt(double v) {
+        return String.format(java.util.Locale.ROOT, "%.2f", v);
+    }
+
     public enum Shape { WALL, RING, ROPE, BURNING }
 
     /**
@@ -47,6 +52,31 @@ public final class FlameEffects {
     public static final Vec3 CORE = new Vec3(1.00, 0.95, 0.75);
     public static final Vec3 MID  = new Vec3(1.00, 0.55, 0.12);
     public static final Vec3 EDGE = new Vec3(0.55, 0.09, 0.02);
+
+    /**
+     * 体积侧湍流阈值相对贴模型火的换算比（{@code 0.30 / 0.62 ≈ 0.484}）。
+     *
+     * <p>为什么两条路径不能直接用同一个阈值：贴模型火是 0.42 格的短光程、密度 5.0；
+     * 体积火是绕实体的小火团（密度另有 0.65 合成补偿与 0.55 透明度缩放），
+     * 同一个阈值搬到体积侧会几乎全空。这个比值就是两条路径长期实测下来的换算，
+     * 默认档（{@code 0.62 × 0.484 ≈ 0.30}）与改动前的体积火逐值相同。</p>
+     */
+    private static final float PATCH_TURBULENCE_RATIO = 0.30f / 0.62f;
+
+    /**
+     * 火花相对主火焰的"更碎更快"倍数：默认档 {@code 4.4 × 1.364 = 6.0}、{@code 2.2 × 1.364 = 3.0}
+     * —— 正是改动前写死的两个数，于是默认档下火花与改动前逐值相同，换预设时又会跟着变。
+     */
+    private static final float SPARK_DETAIL_SCALE = 6.0f / 4.4f;
+
+    /**
+     * 预设密度的基准值（默认档密度）。
+     *
+     * <p>原引自已归档的烛火特效（2026-10-29 归档到 {@code 废案\烛火-candle-fire-2026-10-29}，密度 5.0）。
+     * 归档后写死为等价常量：
+     * 体积补丁密度 = {@code patchDensity × (当前预设密度 / 本值)}，默认档下逐值不变。</p>
+     */
+    public static final float DEFAULT_STYLE_DENSITY = 5.0f;
 
     /** 一个火焰体积实例（公开字段方便调用方微调；改完立即生效，无需重建）。 */
     public static final class Flame {
@@ -75,6 +105,25 @@ public final class FlameEffects {
         public float turbulence = 0.42f;
         /** 整体不透明度上限（0~1）。 */
         public float alpha = 1.0f;
+        /**
+         * <b>火焰自身亮度</b>（乘在最终累积颜色上，1.0 = 原样）。
+         *
+         * <p>为什么需要它：体积火的输出是<b>预乘 α</b>（{@code acc * centerMask}），alpha 只决定
+         * "透出多少本体"，光的强度全在 {@code acc} 里；而体积火在暗贴图的生物身上会被底色读成"很深的暗火"。
+         * 亮度与"透明度"分开之后，就能<b>只提亮、不变实</b>。</p>
+         *
+         * <p>取值：由"着火"族的生成处从当前预设写入（默认档 = 1.0，与改动前逐字节相同）；
+         * 其余形态（火墙/火环/火绳/火壳）保持这里的默认 1.0。</p>
+         *
+         * <p>这是<b>通用提亮能力</b>：只影响片元颜色的强度，不改变透明度，也不再专属于某一种特效。</p>
+         *
+         * <p><b>踩过的坑</b>：这个 uniform 必须同时在
+         * {@code rendertype_flame_volume.json} 的 {@code "uniforms"} 里声明 ——
+         * 只写在 GLSL 里的话 Java 侧 {@code safeGetUniform} 静默失效、GLSL 停在 0，
+         * 输出就变成"黑颜色 + 非零 alpha"（预乘混合下等于把本体压暗，整片特效像脏影）。
+         * 着色器里另有一道 {@code <=0 → 1.0} 的防呆。</p>
+         */
+        public float brightness = 1.0f;
         /** 整体染色（乘在火焰颜色上）。 */
         public float tintR = 1.0f, tintG = 1.0f, tintB = 1.0f;
 
@@ -248,10 +297,11 @@ public final class FlameEffects {
     public static SurfaceBurning burningSurface(Entity target, int spreadTicks, int life) {
         SurfaceBurning s = new SurfaceBurning(target, spreadTicks, life);
         SURFACE.add(s);
-        // ── 临时诊断（定位"贴模型火完全看不见"）：状态到底建起来了没有、建在谁身上 ──
-        LOGGER.info("[FlameSurface] 状态已创建: entity={} spreadTicks={} life={} 当前贴模型着火实体数={}",
+        // 诊断（降到 debug：这条以前每建一个状态就打一条 info，实测时把关键日志淹了）：
+        // 打出<b>目标自己的身高</b>与本次蔓延/寿命，用来对账"火线是否按各自身高归一化"。
+        LOGGER.debug("[FlameSurface] 状态已创建: entity={} 身高={} spreadTicks={} life={} 当前贴模型着火实体数={}",
                 net.minecraft.client.yiz.modelmirror.MirrorDiag.entity(target),
-                spreadTicks, life, SURFACE.size());
+                fmt(target.getBbHeight()), spreadTicks, life, SURFACE.size());
         return s;
     }
 
@@ -309,13 +359,40 @@ public final class FlameEffects {
         /** 火花（短命小团）的尺寸与寿命。 */
         private static final float SPARK_RADIUS = 0.10f, SPARK_HEIGHT = 0.24f;
         private static final int SPARK_LIFE = 12;
+        /**
+         * 火星概率（老入口的值，改动前一字未改）。实际概率 = 当前预设的 {@code sparkChance}
+         * 按 {@link #SPARK_CHANCE_SCALE} 缩放到"体积补丁这一侧"（贴模型火的默认概率是 0.35，见
+         * {@link SurfaceBurning}），于是预设调火星只调一个数、两条路径同向变化。
+         */
         private static final float SPARK_CHANCE = 0.28f;
+        /** 体积补丁的火星概率相对"贴模型火默认概率"的缩放：0.28/0.35 = 0.8（默认档逐值还原）。 */
+        private static final float SPARK_CHANCE_SCALE = SPARK_CHANCE / 0.35f;
         /**
          * 自己着火 + 第一人称时的冻结时刻（tick，40 ≈ 2.0 秒）。
          * 第一人称下火焰铺满视野，再继续蔓延只会越叠越亮、把本来模糊的边界顶成刺眼的硬边；
          * 到点冻结（不再新增、不再长大），保留当前形态即可。
          */
         private static final int LOCAL_FIRST_PERSON_FREEZE = 40;
+
+        /**
+         * 老入口（{@link FlameEffects#burning}）的补丁中心高度上限（占身高比例）。
+         * <b>0.48 = 改动前的原值</b>（火团集中在腰以下），老入口靠它逐值还原。
+         */
+        private static final float DEFAULT_MAX_CENTER_RATIO = 0.48f;
+        /** 老入口的补丁密度（体积火的等效密度）。<b>6.5 = 改动前的原值</b>。 */
+        private static final float DEFAULT_PATCH_DENSITY = 6.5f;
+        /** 起燃点高度（占身高比例）：<b>0.22 = 改动前的原值</b>（身体中下部）。 */
+        private static final float START_Y_RATIO = 0.22f;
+        /** 蔓延时的向上步长（占身高比例区间）：{@code 0.05 + rand*0.12} = 改动前的原值。 */
+        private static final double UP_STEP_MIN = 0.05, UP_STEP_RAND = 0.12;
+        /** 补丁中心允许的最低高度（占身高比例）：{@code 0.04 = 改动前的原值}（脚踝附近）。 */
+        private static final float MIN_CENTER_RATIO = 0.04f;
+        /**
+         * 体积补丁的湍流阈值 = 贴模型火的阈值 × 本系数（换算比见 {@link FlameEffects#PATCH_TURBULENCE_RATIO}）。
+         */
+        private static final float PATCH_TURBULENCE_RATIO = FlameEffects.PATCH_TURBULENCE_RATIO;
+        /** 火花相对主火焰的"更碎更快"倍数（定义见 {@link FlameEffects#SPARK_DETAIL_SCALE}）。 */
+        private static final float SPARK_DETAIL_SCALE = FlameEffects.SPARK_DETAIL_SCALE;
 
         private final Entity target;
         private final List<Flame> patches = new ArrayList<>();
@@ -325,11 +402,16 @@ public final class FlameEffects {
         private final net.minecraft.util.RandomSource random = net.minecraft.util.RandomSource.create();
         private final float halfWidth;
         private final float bodyHeight;
+        /** 补丁中心的允许高度区间（占身高比例）：固定 0.04~0.48 身高（改动前的原值）。 */
+        private final double minYRatio, maxYRatio;
+        /** 主火焰密度（体积火的等效密度；贴模型火不吃这个值，它有自己的 uniform）。 */
+        private final float patchDensity;
 
         private int age;
         private boolean ended;
         private boolean frozen;
 
+        /** 逐值与改动前相同（中心 ≤ 0.48 身高、单团火最高 {@link #MAX_HEIGHT} 格、密度 6.5）。 */
         BurningSpread(Entity target, int maxPatches, int spreadInterval, int life) {
             this.target = target;
             this.maxPatches = Math.max(1, Math.min(24, maxPatches));
@@ -337,6 +419,9 @@ public final class FlameEffects {
             this.life = life;
             this.halfWidth = (float) Math.max(target.getBbWidth() * 0.5, 0.25);
             this.bodyHeight = (float) Math.max(target.getBbHeight(), 0.6);
+            this.patchDensity = DEFAULT_PATCH_DENSITY;
+            this.maxYRatio = Math.max(0.05f, DEFAULT_MAX_CENTER_RATIO);
+            this.minYRatio = Math.min(MIN_CENTER_RATIO, this.maxYRatio * 0.5);
             spawnPatch(null);   // 第一团：起燃点（身体中下部）
         }
 
@@ -408,19 +493,23 @@ public final class FlameEffects {
          * @param near 参考补丁（就近蔓延）；{@code null} = 起燃点（身体中下部）
          */
         private void spawnPatch(Flame near) {
-            // 约三成概率改成一朵"火花"：更小、更亮、短命，且不占主火焰的名额（只进 ACTIVE）
-            boolean spark = near != null && random.nextFloat() < SPARK_CHANCE;
+            // 当前预设：粗细/快慢/浓淡/明暗/颜色/火星概率都从它读（默认档见 FlameStylePreset.CLASSIC）。
+            FlameStylePreset style = FlameStylePreset.active();
+            // 火星概率（老入口默认 0.28，营火预设会更高）：更小、更亮、短命，且不占主火焰的名额（只进 ACTIVE）
+            boolean spark = near != null
+                    && random.nextFloat() < style.sparkChance * SPARK_CHANCE_SCALE;
 
             double localX;
             double localZ;
             double y;
             if (near == null) {
-                //  起燃点：贴着身体圆柱面（半径约 0.35~0.65 倍半宽），高度偏下 → 从下往上烧
+                //  起燃点：贴着身体圆柱面（半径约 0.35~0.65 倍半宽），高度偏下 → 从下往上烧。
+                //  0.22 身高 = <b>改动前的原值</b>（与老入口逐值相同）。
                 double ang = random.nextDouble() * Math.PI * 2.0;
                 double r = halfWidth * (0.35 + random.nextDouble() * 0.30);
                 localX = Math.cos(ang) * r;
                 localZ = Math.sin(ang) * r;
-                y = bodyHeight * 0.22;
+                y = clamp(bodyHeight * START_Y_RATIO, minYRatio * bodyHeight, maxYRatio * bodyHeight);
             } else {
                 //  就近 + 绕身 + 向上：沿极角推进一小段、再往上爬一点（绕身蔓延，不是方盒里乱堆）
                 double baseAng = Math.atan2(near.followOffset.z, near.followOffset.x);
@@ -431,14 +520,15 @@ public final class FlameEffects {
                         : 0.35 + random.nextDouble() * 0.35);
                 localX = Math.cos(baseAng + dAng) * r;
                 localZ = Math.sin(baseAng + dAng) * r;
-                //  蔓延上限：只烧<b>下半身</b>（用户反馈：烧满全身很丑），y 最高 ≈ 0.48 倍身高，
-                //  向上步长也缩小，补丁集中在腰以下
-                y = clamp(near.followYOffset + bodyHeight * (0.05 + random.nextDouble() * 0.12),
-                          0.04 * bodyHeight, 0.48 * bodyHeight);
+                //  向上步长 0.05 + rand*0.12 身高 = <b>改动前的原值</b>（火团集中在腰以下的节奏）；
+                //  夹取上下限：上限已经扣掉单团火自身高度，所以越线的是"火苗尾巴"而不是中心。
+                y = clamp(near.followYOffset + bodyHeight * (UP_STEP_MIN + random.nextDouble() * UP_STEP_RAND),
+                          minYRatio * bodyHeight, maxYRatio * bodyHeight);
             }
 
             Flame p = new Flame(Shape.BURNING, target.position(), spark ? SPARK_LIFE : 64);
-            p.turbulence = 0.30f + random.nextFloat() * 0.06f;
+            // 体积补丁的湍流阈值 = 贴模型火阈值 × 换算比（见 PATCH_TURBULENCE_RATIO），默认档 = 改动前的 0.30
+            p.turbulence = Math.min(0.9f, style.turbulence * PATCH_TURBULENCE_RATIO) + random.nextFloat() * 0.06f;
             p.follow(target, y, true);
             p.followOffset = new Vec3(localX, 0.0, localZ);
 
@@ -446,10 +536,13 @@ public final class FlameEffects {
                 p.ephemeral = true;
                 p.thickness = SPARK_RADIUS * (0.8f + random.nextFloat() * 0.5f);
                 p.height = SPARK_HEIGHT * (0.8f + random.nextFloat() * 0.5f);
-                p.noiseScale = 6.0f;
-                p.flow = 3.0f;
+                p.noiseScale = style.noiseScale * SPARK_DETAIL_SCALE;   // 火花更碎（默认档 = 改动前的 6.0）
+                p.flow = style.flow * SPARK_DETAIL_SCALE;               // 火花窜得更快（默认档 = 改动前的 3.0）
                 p.density = 11.0f;      // 小而亮 → 像飞溅的火星
                 p.alpha = 0.9f;
+                p.colorCore = style.core;
+                p.colorMid = style.mid;
+                p.colorEdge = style.edge;
                 p.fadeIn = 1;
                 p.fadeOut = 5;
                 ACTIVE.add(p);          // 只进 ACTIVE：不占主火焰名额、也不作为蔓延起点
@@ -457,11 +550,18 @@ public final class FlameEffects {
             }
 
             p.thickness = MIN_RADIUS * (0.85f + random.nextFloat() * 0.3f);
-            p.height = MIN_HEIGHT * (0.85f + random.nextFloat() * 0.3f);
-            p.noiseScale = 4.4f + random.nextFloat() * 0.8f;   // 小团火 → 细节更碎
-            p.flow = 2.2f + random.nextFloat() * 0.5f;         // 小火苗抖得快
-            p.density = 6.5f;                                  // 比原来淡：盖住身体但不遮模型
-            p.alpha = 0.85f;
+            // 出生高度不超过 MAX_HEIGHT（它随后会按 heightStep 长到 MAX_HEIGHT 为止）
+            p.height = Math.min(MAX_HEIGHT, MIN_HEIGHT * (0.85f + random.nextFloat() * 0.3f));
+            p.noiseScale = style.noiseScale + random.nextFloat() * 0.8f;   // 小团火 → 细节更碎
+            p.flow = style.flow + random.nextFloat() * 0.5f;               // 小火苗抖得快
+            // 密度随预设缩放：默认档 = patchDensity（6.5，改动前的值）
+            p.density = patchDensity * (style.density / DEFAULT_STYLE_DENSITY);
+            p.alpha = style.opacity;
+            // 与贴模型火同一个亮度（两条路径的"深/淡"因此由同一个来源控制）
+            p.brightness = style.brightness;
+            p.colorCore = style.core;
+            p.colorMid = style.mid;
+            p.colorEdge = style.edge;
             p.fadeIn = 3 + random.nextInt(3);
             p.fadeOut = 6;
             ACTIVE.add(p);
@@ -487,10 +587,16 @@ public final class FlameEffects {
      *       同一条约定：第一人称火焰铺满视野，再长只会越叠越亮、把边界顶成刺眼硬边）；</li>
      *   <li>原版第一人称<b>不渲染本地玩家模型</b>（{@code LevelRenderer} 的实体循环会跳过摄像机实体），
      *       贴模型火没有几何可画 → 自动挂一套既有的 {@link BurningSpread} 体积火兜底，
-     *       保证第一人称仍然"四周一圈火"（它自带 2.0s 冻结、中心剔除与火花）；</li>
+     *       保证第一人称仍然"四周一圈火"（它自带 2.0s 冻结、中心剔除与火花）。
+     *       <b>用哪一套参数</b>：兜底走 {@link FlameEffects#burning} 的既有观感
+     *       （火团可到腰以上，与改动前逐值相同）；</li>
      *   <li>切回第三人称：兜底体积火停掉（避免"模型火 + 碰撞箱火"双重叠加）、蔓延上限放开
      *       （第一人称的视野/帧率约束不存在了，让火焰继续爬满，否则看起来像卡住）。</li>
      * </ol>
+     *
+     * <p><b>火线高度按"目标自己的身高"归一化</b>：{@code FlameSurfaceLayer} 每帧把
+     * {@code entity.getBbHeight()} 传给着色器的 {@code uSpreadHeight}，<b>不写死 1.8</b> ——
+     * 于是 2.9 格高的监守者与 1.8 格高的玩家的"火线停在身高某个比例"是同一条规则。</p>
      */
     public static final class SurfaceBurning {
 
@@ -505,6 +611,10 @@ public final class FlameEffects {
         /** 追击间隔与概率：约"每 20 tick 有 1/3 概率冒一朵" → 偶尔一两朵，而不是持续喷火星。 */
         private static final int SPARK_INTERVAL = 20;
         private static final float SPARK_CHANCE = 0.35f;
+        /**
+         * 火星高度带：{@code 0.45 + rand*0.5} 身高 —— <b>改动前的原值</b>，火星溅在身体中上部。
+         */
+        private static final double SPARK_BAND_FREE_MIN = 0.45, SPARK_BAND_FREE_RAND = 0.50;
         /** 淡出 tick（{@link #stop()} 后按它收尾）。 */
         private static final int FADE_OUT = 8;
 
@@ -543,6 +653,20 @@ public final class FlameEffects {
             float in = Math.min(1.0f, age / 4.0f);
             float out = Math.min(1.0f, remaining / (float) FADE_OUT);
             return Math.max(0.0f, Math.min(in, out));
+        }
+
+        /**
+         * 火焰自身亮度（{@code FlameSurfaceLayer} 喂给 {@code uBrightness}）。
+         *
+         * <p>取值来自<b>当前预设</b>（{@link FlameStylePreset#active()}），与第一人称体积兜底、
+         * 以及体积补丁（它们各自把同一个值写进 {@code Flame#brightness}）是<b>同一个来源</b> ——
+         * 这就是"玩家/生物观感一致"的代码级保证（不是靠两边各调一遍数字凑出来的）。</p>
+         *
+         * <p>注意它只是"顺手提供"的读取口：真正喂给贴模型着色器的是
+         * {@code FlameSurfaceLayer.setUniforms} 里的同一表达式（那边逐帧读，切预设立刻生效）。</p>
+         */
+        public float brightness() {
+            return FlameStylePreset.active().brightness;
         }
 
         /** 冻结蔓延：把 uSpread 上限钉在当前值（第一人称视野/帧率保护）。 */
@@ -596,6 +720,8 @@ public final class FlameEffects {
         /**
          * 第一人称兜底体积火的自动收放（见类注释第 2/3 条）。
          * 兜底存在期间不再生成自己的火花 —— {@link BurningSpread} 本来就带火花，避免火花翻倍。
+         *
+         * <p>兜底走 {@link FlameEffects#burning} 的既有观感 —— <b>与改动前逐值相同</b>。</p>
          */
         private void syncFirstPersonFallback(boolean firstPersonSelf) {
             if (ended) return;
@@ -610,28 +736,35 @@ public final class FlameEffects {
         }
 
         /**
-         * 偶尔冒一朵短命火花：参数与 {@link BurningSpread} 的 spark 分支完全一致
+         * 偶尔冒一朵短命火花：参数与 {@link BurningSpread} 的 spark 分支一致
          * （小而亮、不长大、活完 {@link #SPARK_LIFE} tick 就消失），复用同一条渲染路径。
+         *
+         * <p>高度带用改动前的 {@code 0.45 + rand*0.5} 身高（火星溅在身体中上部），一字未改。</p>
          */
         private void spawnSparkIfDue() {
             if (--sparkTimer > 0) return;
             sparkTimer = SPARK_INTERVAL;
-            if (random.nextFloat() > SPARK_CHANCE) return;
+            FlameStylePreset style = FlameStylePreset.active();
+            if (random.nextFloat() > style.sparkChance) return;
 
-            // 贴在身体中上部、稍微离开体表 → 像从火里溅出来的火星（而不是又一层贴身火）
+            // 贴在身体中下部、稍微离开体表 → 像从火里溅出来的火星（而不是又一层贴身火）
             double ang = random.nextDouble() * Math.PI * 2.0;
             double r = halfWidth * (0.8 + random.nextDouble() * 0.5);
-            double y = bodyHeight * (0.45 + random.nextDouble() * 0.5);
+            double y = bodyHeight * (SPARK_BAND_FREE_MIN + random.nextDouble() * SPARK_BAND_FREE_RAND);
 
             Flame p = new Flame(Shape.BURNING, target.position(), SPARK_LIFE);
             p.ephemeral = true;
             p.thickness = SPARK_RADIUS * (0.8f + random.nextFloat() * 0.5f);
             p.height = SPARK_HEIGHT * (0.8f + random.nextFloat() * 0.5f);
-            p.noiseScale = 6.0f;
-            p.flow = 3.0f;
+            p.noiseScale = style.noiseScale * SPARK_DETAIL_SCALE;      // 火花更碎（默认档 = 改动前的 6.0）
+            p.flow = style.flow * SPARK_DETAIL_SCALE;                  // 火花窜得更快（默认档 = 改动前的 3.0）
             p.density = 11.0f;
             p.alpha = 0.9f;
-            p.turbulence = 0.30f + random.nextFloat() * 0.06f;
+            p.brightness = style.brightness;
+            p.colorCore = style.core;
+            p.colorMid = style.mid;
+            p.colorEdge = style.edge;
+            p.turbulence = Math.min(0.9f, style.turbulence * PATCH_TURBULENCE_RATIO) + random.nextFloat() * 0.06f;
             p.fadeIn = 1;
             p.fadeOut = 5;
             p.follow(target, y, true);

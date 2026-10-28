@@ -20,6 +20,7 @@
 
         { "name": "uSpread",        "type": "float",     "count": 1,  "values": [ 0.0 ] },
         { "name": "uSpreadHeight",  "type": "float",     "count": 1,  "values": [ 1.8 ] },
+        { "name": "uBrightness",    "type": "float",     "count": 1,  "values": [ 1.0 ] },
 
         { "name": "uParams",        "type": "float",     "count": 4,  "values": [ 4.4, 2.2, 5.0, 0.62 ] },
         { "name": "uParams2",       "type": "float",     "count": 4,  "values": [ 0.42, 0.05, 0.45, 0.85 ] },

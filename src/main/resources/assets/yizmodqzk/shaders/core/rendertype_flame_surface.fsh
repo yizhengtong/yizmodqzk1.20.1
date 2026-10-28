@@ -20,8 +20,11 @@
 //    uParams2 : x=步进长度(格) y=表面外偏移(格) z=法线/视线混合(0=纯法线) w=透明度上限
 //    uParams3 : x=边缘衰减起点(|N·V|) y=边缘衰减终点(|N·V|) z=向外衰减指数（越大火舌越短越虚）
 //               w=轮廓处最低强度（0 = 轮廓完全不烧，会把往外舔的火舌一起削掉，别设 0）
-//    uSpread  : 蔓延进度 0→1（从下往上爬满模型），由 FlameEffects.SurfaceBurning 驱动
+//    uSpread  : 蔓延进度 0→1（从下往上爬，uSpread=1 时火线到 SPREAD_LINE_MAX），由 FlameEffects.SurfaceBurning 驱动
 //    uSpreadHeight : 模型高度（格），把"模型局部高度"归一化到 0~1 再和 uSpread 比
+//                    —— 由 Java 传<b>目标自己的</b> getBbHeight()，因此每个实体都按自身体高的同一比例烧
+//    uBrightness  : 火焰自身亮度（乘在颜色上，缺省 1.0 = 原样）。<b>必须在 .json 的 "uniforms" 里声明</b>，
+//                   否则 Java 侧 safeGetUniform 静默失效、GLSL 停在 0 → 整团火变黑（见文件末尾的防呆）
 //
 //  "不要烧满"（用户反馈：下半身被均匀糊满、像套了层壳）的四个旋钮，调参看这里：
 //    ① 斑驳程度 = uParams.w（阈值）：湍流超过它才算火舌；调高 → 火舌之间出现真正烧不到的空隙；
@@ -30,6 +33,7 @@
 //    ③ 边缘柔和度 = uParams3.x/y（|N·V| 区间）+ uParams3.w（轮廓处最低强度）+ uParams3.z（向外衰减指数）：
 //       轮廓处平滑压暗、外沿按指数收尾，于是外边界是渐隐的而不是硬切；
 //    ④ 火线前沿柔和度 = SPREAD_SOFT（常量）：烧到哪的过渡带宽度。
+//  "火焰多高"只看 SPREAD_FLOOR / SPREAD_LINE_MAX / SPREAD_NOISE / SPREAD_SOFT 这四个常量（见下）。
 // ═══════════════════════════════════════════════════════════════════════════
 
 #define MAX_STEPS   16      // 步数上限（实际由 uSteps 决定）
@@ -40,17 +44,28 @@
 #define SELF_VISIBLE_EPS 0.00040   // fragDepth 与 sceneDepth 差多少以内算"本片元自己就是可见表面"
 #define RELAX_STEPS      2         // 可见且面向相机的片元：起点附近无条件放行的步数
 
-// ── 蔓延进度的可见起点 ──
+// ── 蔓延进度的可见起点与火线上限（"只烧下半身"的两个端点，改高度只看这两行）──
 // uSpread 由 Java 侧从 0 线性推到 1（0 = 刚点着）。若直接拿 0 当火线前沿，整具身体只有极少数
-// 噪声列会亮 —— 观感就是"施法了但什么都没发生"。映射到 [0.15, 1]：施法瞬间火线 = 0.15*1.25-0.25
-// ≈ -0.06（贴着模型最底部），脚边立刻有一圈明确的火，随后仍按原速率向上爬满（1 → 火线 1.0）。
-#define SPREAD_FLOOR 0.15
+// 噪声列会亮 —— 观感就是"施法了但什么都没发生"。所以火线映射到 [SPREAD_FLOOR, SPREAD_LINE_MAX]：
+//   uSpread=0 → 火线 = SPREAD_FLOOR = 0.00（贴着模型最底部，脚边立刻有一圈明确的火）；
+//   uSpread=1 → 火线 = SPREAD_LINE_MAX = 0.45（下半身一半以上都烧到，肉眼一眼可见）。
+//
+// 【本组数值的来历 —— 两次实测的折中，别再单方向推】
+//   · 只烧到 0.32：火被压在下半身最下面一小截，整体看着"变淡、几乎看不见"（用户实测反馈 ✗）；
+//   · 0.42 + 列噪声 ±0.15：接近满强度的最高点 ≈ 0.57 身高，看着"烧过身高一半了"（用户实测反馈 ✗）。
+//   现在取中间：火线 0.45，但把列噪声收到 ±0.06 → 接近满强度的最高点 = 0.45 + 0.06 = 0.51 ≈ 身高一半，
+//   而火线本身（满强度边界）落在 0.45，下半身大面积有火 → 既"看得见"又不越"身高一半"这条线。
+// 注意这里的比例对<b>每个实体各自成立</b>：基准是 uSpreadHeight = 该实体自己的 getBbHeight()。
+#define SPREAD_FLOOR      0.00
+#define SPREAD_LINE_MAX   0.45
+#define SPREAD_NOISE      0.12
 
 // ── 火线前沿的柔和宽度（归一化高度）──
 // 火线以下 = 已烧到。这个宽度是"从全透明到全强度"的过渡带：0.3 只有一条窄缝（看起来像水位线，
-// 边缘偏硬），0.42 = 前后各留出约 1/5 身高的渐隐区，于是"烧到哪"是晕开的、不是一刀切。
+// 边缘偏硬），0.34 ≈ 上下各留出约 1/6 身高的渐隐区，于是"火到哪"是晕开的、不是一刀切 ——
+// 这个"宽渐隐"正是用户觉得"透明好看"的来源（曾经收到 0.18 去压高度，结果火的外沿变硬、整体显小 ✗）。
 // 想更"实"就调小，想更"烟熏渐隐"就调大。
-#define SPREAD_SOFT 0.42
+#define SPREAD_SOFT 0.34
 
 in vec3  vViewPos;
 in vec3  vViewNormal;
@@ -75,8 +90,9 @@ uniform vec3  uCamWorld;      // 相机世界坐标（视图空间 → 世界要
 uniform vec3  uNoiseAnchor;   // 噪声锚点 = 实体脚部世界坐标 → 采样落在实体局部空间
 uniform float uAnchorYaw;     // 实体渲染朝向：把采样点反向旋转，火焰图案钉在身体坐标系里
 
-uniform float uSpread;        // 蔓延进度 0→1（0 = 还没烧起来，1 = 爬满）
-uniform float uSpreadHeight;  // 模型高度（格）
+uniform float uSpread;        // 蔓延进度 0→1（0 = 还没烧起来，1 = 火线到上限）
+uniform float uSpreadHeight;  // 模型高度（格）—— 由 Java 传目标自己的 getBbHeight()，不是写死的 1.8
+uniform float uBrightness;    // 火焰自身亮度（通用提亮，缺省 1.0；与体积火共用同一个旋钮）
 
 uniform vec4  uParams;
 uniform vec4  uParams2;
@@ -177,21 +193,23 @@ float hash12(vec2 p) {
 
 // 蔓延进度（含可见起点，见 SPREAD_FLOOR）：火线位置与整体亮度都以它为基准。
 float spreadAmount() {
-    return mix(SPREAD_FLOOR, 1.0, clamp(uSpread, 0.0, 1.0));
+    return mix(SPREAD_FLOOR, SPREAD_LINE_MAX, clamp(uSpread, 0.0, 1.0));
 }
 
 // 蔓延遮罩：spreadAmount() 是"火线"在模型上的归一化高度前沿，火线以下 = 已烧到。
 // 前沿不能是一条水平直线 —— 用"按身体局部列取样 + 随时间抖动"的低成本扰动把边缘打成不规则锯齿，
 // 于是火是"一簇簇爬上去"的，而不是像水位线一样整齐上升；过渡带宽度见 SPREAD_SOFT。
 //
-// <b>蔓延上限（用户反馈：烧满全身很丑）</b>：火线在 uSpread=1 时停在身体<b>下半部分</b> ——
-// line = -0.20 + spreadAmount*0.62 → uSpread=1 时 0.42（≈42% 身高），再叠加列噪声 ±0.15，
-// 最高约 57% 身高；<b>上半身与头不烧</b>。起点（uSpread≈0）落在脚踝附近，刚点着就是"脚边一圈火"。
+// <b>蔓延上限（用户要求：火焰不超过目标身高的一半）</b>：火线在 uSpread=1 时停在 body 的 45%，
+// 叠加列噪声（±SPREAD_NOISE/2 = ±6%）之后，接近满强度的最高点 ≈ 51% 身高（≈ 一半）；
+// 再往上只剩 SPREAD_SOFT 的渐隐尾巴（很淡，到 0.85 身高归于无）—— <b>胸以上与头不烧</b>；
+// 起点（uSpread≈0）落在脚边。这里的高度是<b>相对目标自己的身高</b>归一化的（uSpreadHeight），
+// 所以 2.9 格的监守者与 1.8 格的玩家各自按"自己的身高一半"收边。
 float spreadMask(vec3 lp) {
     float hNorm = clamp(lp.y / max(uSpreadHeight, 0.05), 0.0, 1.0);
     float colNoise = hash12(floor(vec2(lp.x, lp.z) * 3.0) + floor(iTime * 1.2) * 7.0);
-    float front = hNorm + (colNoise - 0.5) * 0.30;      // 列噪声 ±0.15
-    float line = -0.20 + spreadAmount() * 0.62;         // uSpread=1 → 0.42（只烧下半身）
+    float front = hNorm + (colNoise - 0.5) * SPREAD_NOISE;   // 列噪声 ±SPREAD_NOISE/2
+    float line = spreadAmount();                             // uSpread=1 → SPREAD_LINE_MAX（只烧下半身）
     return 1.0 - smoothstep(line, line + SPREAD_SOFT, front);
 }
 
@@ -317,5 +335,14 @@ void main() {
     }
 
     float alpha = clamp((1.0 - trans) * vFade * uParams2.w * centerMask, 0.0, 1.0);
-    fragColor = vec4(acc * centerMask, alpha);
+    // 亮度乘在<b>颜色</b>上而不是 alpha 上：输出是预乘 alpha，提亮 = 让火自己更亮，
+    // 而"能透出多少本体"仍由 alpha（uParams2.w）决定。两者分开之后，
+    // 深色贴图的生物身上火不会被底色拖成暗火（见 FlameEffects.Flame#brightness 的说明）。
+    //
+    // 防呆（踩过一次，代价是"整片特效变黑、几乎看不见"）：本 uniform 若没有在
+    // rendertype_flame_surface.json 的 "uniforms" 里声明，Java 侧 safeGetUniform 会静默返回
+    // 空实现、GLSL 侧就停在默认值 <b>0</b> → 这里乘出全黑，而预乘混合会把黑"盖"在本体上
+    // （看起来就是一层脏影，而不是火）。所以 <=0 一律按 1.0（无提亮）处理。
+    float bright = uBrightness > 0.0 ? uBrightness : 1.0;
+    fragColor = vec4(acc * centerMask * bright, alpha);
 }

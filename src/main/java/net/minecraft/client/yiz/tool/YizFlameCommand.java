@@ -3,6 +3,7 @@ package net.minecraft.client.yiz.tool;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.yiz.flame.FlameStylePreset;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
@@ -19,6 +20,12 @@ import java.util.List;
  *
  * <p>形态：{@code wall} 火墙 / {@code ring} 火环 / {@code rope} 火绳 /
  * {@code burning} 着火（<b>贴实体实际模型</b>）/ {@code patches} 着火（旧版碰撞箱补丁簇，用于对比）/ {@code shell} 火壳。</p>
+ *
+ * <p><b>观感预设</b>：{@code /yiz flame preset <名字>} 可在游戏里直接换一整套观感
+ * （经典/Classic / 火把 / 营火 / 烈焰喷射 / 蓝焰 / 余烬，见 {@link FlameStylePreset}），
+ * {@code /yiz flame preset list} 列全部。预设只改"粗细/快慢/浓淡/明暗/颜色/火舌长度/火星"，
+ * <b>不改"火焰多高"</b>（那是写死在着色器里的硬约束：不超过目标身高一半）。
+ * 旧名 {@code candle} 仍可用，会切到 {@code classic}（同一套参数）。</p>
  *
  * <p>{@code burning} 与 {@code patches} 的区别（方便左右对比观感）：</p>
  * <ul>
@@ -58,7 +65,72 @@ public final class YizFlameCommand {
                 .then(Commands.literal("follow").executes(ctx -> spawn(ctx, shape, true))));
         }
         flame.then(Commands.literal("off").executes(YizFlameCommand::clear));
+        flame.then(presetNode());
         SimpleCommandRegistry.register(Commands.literal("yiz").then(flame));
+    }
+
+    /**
+     * {@code /yiz flame preset <名字>} —— 切换"火焰观感预设"（{@link FlameStylePreset}），
+     * 外加 {@code /yiz flame preset list} 列出全部。
+     *
+     * <p>为什么做它：用户在"想要哪种火"这件事上给不出参数化的描述（"就想要现实里那种火"），
+     * 但完全能指着某一种说"我要这个"。有了这条指令，说明书里的 6 种预设可以<b>当场看</b>，
+     * 不用改代码重新构建。</p>
+     *
+     * <p>它只改客户端的 uniform 值（粗细/快慢/浓淡/明暗/颜色/火舌长度/火星），
+     * <b>不动"火焰多高"</b> —— 那是用户要求过的硬约束（不超过身高一半），写死在着色器常量里。</p>
+     */
+    private static LiteralArgumentBuilder<CommandSourceStack> presetNode() {
+        LiteralArgumentBuilder<CommandSourceStack> preset = Commands.literal("preset");
+        for (var p : FlameStylePreset.all()) {
+            preset.then(Commands.literal(p.id).executes(ctx -> selectPreset(ctx, p.id)));
+        }
+        // 旧名别名（如 candle → classic）：不注册对应预设，只注册一个指向正式 id 的字面量节点，
+        //  于是 `/yiz flame preset candle` 与 `/yiz flame preset classic` 完全等价。
+        for (String alias : FlameStylePreset.aliases()) {
+            preset.then(Commands.literal(alias).executes(ctx -> selectPreset(ctx, alias)));
+        }
+        preset.then(Commands.literal("list").executes(YizFlameCommand::listPresets));
+        preset.executes(YizFlameCommand::listPresets);   // 不带参数 = 列出全部
+        return preset;
+    }
+
+    /** 切换预设：只动客户端视觉状态，服务端/专用服务器上直接拒绝（不假装成功）。 */
+    private static int selectPreset(CommandContext<CommandSourceStack> ctx, String id) {
+        if (!net.minecraftforge.fml.loading.FMLEnvironment.dist.isClient()) {
+            ctx.getSource().sendFailure(Component.literal("§c火焰预设是客户端视觉，专用服务器上无效"));
+            return 0;
+        }
+        FlameStylePreset p = FlameStylePreset.select(id);
+        if (p == null) {
+            ctx.getSource().sendFailure(Component.literal("§c未知预设: " + id + "（用 /yiz flame preset list 看全部）"));
+            return 0;
+        }
+        ctx.getSource().sendSuccess(() -> Component.literal(
+                "§a已切换火焰预设: §f" + p.label + " §7(" + p.id + ")"
+                + (FlameStylePreset.isAlias(id) ? "\n§7（§f" + id + "§7 是旧名别名 → §f" + p.id
+                        + "§7，参数完全一样）" : "")
+                + "\n§7" + p.blurb
+                + "\n§7参数: " + FlameStylePreset.describe()
+                + "\n§7已经烧起来的贴模型火会当帧变化；体积补丁（旧版着火/火星）在下次生成时用新参数。"), false);
+        return 1;
+    }
+
+    /** 列出全部预设（带一句话观感），供用户挑。 */
+    private static int listPresets(CommandContext<CommandSourceStack> ctx) {
+        StringBuilder sb = new StringBuilder("§b火焰预设（§f/yiz flame preset <名字>§b 切换，当前 = ")
+                .append(FlameStylePreset.active().label).append("§b）:");
+        for (var p : FlameStylePreset.all()) {
+            sb.append("\n§7 - §f").append(p.id).append("§7（").append(p.label).append("）：").append(p.blurb);
+        }
+        // 旧名别名单独标一行（不占预设条目、不改上面的顺序）：candle = classic（旧名别名）
+        for (String alias : FlameStylePreset.aliases()) {
+            sb.append("\n§7   ↳ §f").append(alias).append("§7 = §f")
+              .append(FlameStylePreset.canonicalId(alias)).append("§7（旧名别名），参数相同");
+        }
+        sb.append("\n§7看效果：§f/yiz flame burning follow§7（跟在自己身上）或 §f/yiz flame burning");
+        ctx.getSource().sendSuccess(() -> Component.literal(sb.toString()), false);
+        return FlameStylePreset.all().size();
     }
 
     private static int spawn(CommandContext<CommandSourceStack> ctx, String kind, boolean follow) {

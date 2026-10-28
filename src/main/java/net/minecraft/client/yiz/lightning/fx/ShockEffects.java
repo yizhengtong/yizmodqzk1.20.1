@@ -47,7 +47,16 @@ public final class ShockEffects {
     /** 正在感电的实体状态（渲染 hook 每帧按实体查询）。 */
     private static final List<SurfaceShock> ACTIVE = new ArrayList<>();
 
-    /** 围弧默认色：弧心近白、外晕青蓝（与旧围弧的 0.4/0.6/1.0 同色系，略提亮以便在暗处可辨）。 */
+    /**
+     * 围弧的<b>历史</b>色档：弧心近白、外晕青蓝（最早那版围弧用的 0.4/0.6/1.0 同色系）。
+     *
+     * <p><b>围弧（编号 4）现在不再用这两个常量</b>：用户反馈"只有白蓝、缺明蓝"之后，
+     * 颜色改成了 {@code ShockArcs} 里的<b>两档随机色表</b>（明蓝档 {@code COLOR_BLUE_*}
+     * / 白蓝档 {@code COLOR_WB_*}，外加"核心偏白、光晕偏明蓝"的 {@code HALO_*} 光晕色，
+     * 见 {@code ShockArcs#sampleColor}）。这里保留它们只为：① 其它闪电层/历史调用点的兼容；
+     * ② 想快速回到"近白 + 青蓝"两色插值那一版观感时，把 {@code ShockArcs} 的色表临时
+     * 指回这两个常量即可。本类<b>不</b>参与任何几何/顶点写入。</p>
+     */
     public static final float CORE_R = 0.82f, CORE_G = 0.96f, CORE_B = 1.00f;
     public static final float EDGE_R = 0.40f, EDGE_G = 0.60f, EDGE_B = 1.00f;
 

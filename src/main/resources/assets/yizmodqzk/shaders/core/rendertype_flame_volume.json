@@ -37,6 +37,7 @@
         { "name": "uShape",         "type": "float",     "count": 1,  "values": [ 0.0 ] },
         { "name": "uParams",        "type": "float",     "count": 4,  "values": [ 1.6, 1.1, 6.0, 0.42 ] },
         { "name": "uParams2",       "type": "float",     "count": 4,  "values": [ 1.2, 3.0, 1.0, 1.0 ] },
+        { "name": "uBrightness",    "type": "float",     "count": 1,  "values": [ 1.0 ] },
 
         { "name": "uColorCore",     "type": "float",     "count": 3,  "values": [ 1.0, 0.95, 0.75 ] },
         { "name": "uColorMid",      "type": "float",     "count": 3,  "values": [ 1.0, 0.55, 0.12 ] },

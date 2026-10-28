@@ -18,6 +18,8 @@
 //    uParams  : x=噪声尺度  y=流动速度(格/tick 归一)  z=密度/发光强度  w=湍流阈值
 //    uParams2 : x=半径或壳厚  y=高度(垂直尺度)  z=跨度(长度/范围)  w=透明度上限
 //    uShape   : 0=火墙 1=火环 2=火绳 3=着火
+//    uBrightness : 火焰自身亮度（乘在颜色上，缺省 1.0）—— 通用提亮，与 rendertype_flame_surface 同一个旋钮
+//                  （见 FlameEffects.Flame#brightness）
 //    uPoints  : 火绳折线控制点（世界坐标，最多 8 点）；其余形态忽略
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -75,6 +77,9 @@ uniform float uPointCount;
 uniform float uShape;
 uniform vec4  uParams;
 uniform vec4  uParams2;
+/** 火焰自身亮度：与 rendertype_flame_surface 的同名 uniform 一致（缺省 1.0 = 原样）。
+ *  <b>必须在 .json 的 "uniforms" 里声明</b>（本文件已声明），否则 GLSL 停在 0 → 整团火变黑。 */
+uniform float uBrightness;
 
 uniform vec3  uColorCore;
 uniform vec3  uColorMid;
@@ -372,5 +377,10 @@ void main() {
     // 自己着火（uCenterCull>0）时整体再压一档透明度：少挡视野，看得见路
     float viewFade = uCenterCull > 0.001 ? 0.75 : 1.0;
     float alpha = clamp((1.0 - trans) * vColor.a * uParams2.w * centerMask * viewFade, 0.0, 1.0);
-    fragColor = vec4(acc * vColor.rgb * ColorModulator.rgb * centerMask * viewFade, alpha);
+    // 火焰自身亮度（uBrightness，缺省 1.0）：与 rendertype_flame_surface 同一个旋钮 ——
+    // 两条路径共用 FlameEffects.Flame#brightness（通用提亮，不再专属于某一种特效），
+    // 于是"提亮但不变实"在两处同时生效（alpha 只由 uParams2.w 与 vColor.a 决定）。
+    // 防呆（踩过一次：JSON 没声明该 uniform → GLSL 停在 0 → 整片火焰变黑、几乎看不见）：<=0 按 1.0 处理。
+    float bright = uBrightness > 0.0 ? uBrightness : 1.0;
+    fragColor = vec4(acc * vColor.rgb * ColorModulator.rgb * centerMask * viewFade * bright, alpha);
 }

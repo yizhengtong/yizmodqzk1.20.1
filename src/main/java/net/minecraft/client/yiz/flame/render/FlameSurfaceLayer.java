@@ -4,6 +4,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.ShaderInstance;
 import net.minecraft.client.yiz.flame.FlameEffects;
+import net.minecraft.client.yiz.flame.FlameStylePreset;
 import net.minecraft.client.yiz.lightning.util.ShaderTimeUtil;
 import net.minecraft.client.yiz.modelmirror.MirrorChannel;
 import net.minecraft.client.yiz.modelmirror.MirrorDiag;
@@ -30,49 +31,24 @@ public final class FlameSurfaceLayer implements MirrorLayer {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("YizFlame");
 
-    /** 步进长度（格）：火焰从体表往外舔多远。0.42 ≈ 一次火舌的高度；再长就成火球了。 */
-    private static final float MARCH_LENGTH = 0.42f;
-    /** 起点抬离表面的偏移（格）：避免第一段采样和本体深度打架。 */
+    // ────────────────────────── 本 pass 的固定几何参数 ──────────────────────────
+    // 光程（marchLength）不在这里写死：它属于"可观感旋钮"，逐帧从当前预设取
+    // （{@code FlameStylePreset#marchLength}，默认档 0.42 ≈ 一次火舌的高度，再长就成火球了）。
+    /** 起点抬离表面的偏移（格）：避免第一段采样和本体深度打架。<b>不是风格旋钮</b>，固定值。 */
     private static final float SURFACE_OFFSET = 0.045f;
-    /** 法线/视线混合：0 = 纯法线（火垂直表面外舔），1 = 纯视线（掠射角下更饱满）。 */
+    /** 法线/视线混合：0 = 纯法线（火垂直表面外舔），1 = 纯视线（掠射角下更饱满）。<b>固定值</b>。 */
     private static final float NORMAL_VIEW_MIX = 0.45f;
-    /**
-     * 整体透明度上限（0.95 → 0.85）：用户要求"隔着火能看见身体本身的颜色/材质"，
-     * 上限压下来给本体透出一部分；再低火就"虚"了。
-     */
-    private static final float OPACITY = 0.85f;
-    /**
-     * 噪声尺度 / 上升流速（跟旧的 fireShell 对齐：贴着身体的小火舌，不是一层均匀火壳）。
-     */
-    private static final float NOISE_SCALE = 4.4f, FLOW = 2.2f;
-    /**
-     * <b>斑驳程度</b>：湍流阈值（0.30 → 0.62）。湍流场归一化到 [0,1]，只有超过阈值的采样才算"火舌"；
-     * 阈值越高空隙越大、火越"一簇簇"。用户反馈"下半身被均匀糊满"，主因就是它太低。
-     * 调参方向：还想更斑驳 → 继续加到 0.7 左右；觉得火太稀 → 往 0.45 降。
-     */
-    private static final float TURBULENCE = 0.62f;
-    /**
-     * <b>整体浓度</b>：每步吸收率系数（15.0 → 5.0）。本 pass 的光程只有 {@link #MARCH_LENGTH} 格（约 0.4 格），
-     * 15 会让几乎每一步都吸收到接近不透明（= 一层壳），降到 5.0 才有真正的空隙与层次。
-     */
-    private static final float DENSITY = 5.0f;
+
+    // ────────────────────────── 观感参数（两条路径共用同一来源）──────────────────────────
+    // 数值不在这里写死：默认档看 FlameStylePreset.CLASSIC（两条路径共用一份常量 → "自己身上"与"别的实体身上"
+    // 不可能调出两种浓淡），运行时要换风格看 FlameStylePreset（/yiz flame preset <名字>）。
     /**
      * <b>边缘柔和度</b>：按"片元表面朝向相机的程度"（{@code |N·V|}）衰减。
      * 低于 {@link #EDGE_FADE_LO} 衰减到最弱、高于 {@link #EDGE_FADE_HI} 不衰减，
-     * 中间 smoothstep → 火在部件轮廓处渐隐而不是硬切一刀。
+     * 中间 smoothstep → 火在部件轮廓处渐隐而不是硬切一刀。<b>不加进预设</b>：它是"外边界怎么收"
+     * 的实现细节，不是用户看得懂的风格选项（预设只暴露 falloffK 与 edgeFadeMin 两个）。
      */
     private static final float EDGE_FADE_LO = 0.05f, EDGE_FADE_HI = 0.55f;
-    /**
-     * 轮廓处的最低强度（{@link #EDGE_FADE_LO} 处衰减到的值）。
-     * <b>刻意不设 0</b>：轮廓处正是往外舔得最远的那批片元，压到 0 会把火舌一起削掉、
-     * 只剩贴着表面的一层发光；0.35 = "轮廓处明显变透，但还有火舌挑出去"。
-     */
-    private static final float EDGE_FADE_MIN = 0.35f;
-    /**
-     * <b>向外衰减指数</b>：沿步进方向按 {@code exp(-k·进度)} 衰减（原来是一条直线 1-0.62·进度）。
-     * 越大火舌越短越虚；指数曲线末段拖尾更长，不会有可见的"截断面"。
-     */
-    private static final float FALLOFF_K = 1.6f;
 
     @Override
     public String id() {
@@ -114,11 +90,15 @@ public final class FlameSurfaceLayer implements MirrorLayer {
         setUniforms(shader, frame, state, cam, firstPerson, px);
 
         int flushed = channel.flush();
+        // 诊断（每个实体只打一条）：把"这一帧真正喂给着色器的参数"打出来。
+        // 用途一：对账"玩家与生物是不是同一套参数"——uSpreadHeight 会随目标身高变化，其余必须逐值相同。
+        // 用途二：火线高度不到预期时，直接看这里的 身高 与 spread 对不对。
         if (MirrorDiag.first("flame:draw:" + MirrorDiag.entity(frame.entity()))) {
-            LOGGER.info("[FlameSurface] 绘制: entity={} 顶点={} spread={} steps={} boxH={}",
+            FlameStylePreset p = FlameStylePreset.active();
+            LOGGER.info("[FlameSurface] 绘制: entity={} 顶点={} 身高={} spread={} 亮度={} 透明度上限={} 密度={} steps={} 预设={}",
                     MirrorDiag.entity(frame.entity()),
-                    flushed, fmt(state.spread()), stepsFor(px),
-                    fmt(frame.entity().getBbHeight()));
+                    flushed, fmt(frame.entity().getBbHeight()), fmt(state.spread()),
+                    fmt(p.brightness), fmt(p.opacity), fmt(p.density), stepsFor(px), p.id);
         }
     }
 
@@ -132,6 +112,9 @@ public final class FlameSurfaceLayer implements MirrorLayer {
 
     private static void setUniforms(ShaderInstance sh, MirrorFrame frame,
                                     FlameEffects.SurfaceBurning state, Vec3 cam, boolean firstPerson, float px) {
+        // 当前预设：所有"可观感旋钮"都从它读（默认档 = FlameStylePreset.CLASSIC）。
+        // 逐帧读而不是缓存：/yiz flame preset 切完当帧就能看见变化。
+        FlameStylePreset style = FlameStylePreset.active();
         // LOD：按实体屏幕投影尺寸降质（和体积火焰同一套判据，见 FlameRenderer#stepsFor/octavesFor）
         sh.safeGetUniform("uSteps").set(stepsFor(px));
         sh.safeGetUniform("uOctaves").set(px > 260.0f ? 3 : (px > 90.0f ? 4 : 5));
@@ -148,16 +131,23 @@ public final class FlameSurfaceLayer implements MirrorLayer {
         sh.safeGetUniform("uAnchorYaw").set((float) Math.toRadians(frame.yaw()));
 
         sh.safeGetUniform("uSpread").set(state.spread());
+        // 高度归一化基准 = <b>目标自己的身高</b>（不写死 1.8）：2.9 格的监守者与 1.8 格的玩家
+        // 共用同一条"火线停在身高某个比例"的规则（着色器里 SPREAD_LINE_MAX + 噪声 + SPREAD_SOFT）。
         sh.safeGetUniform("uSpreadHeight").set((float) Math.max(frame.entity().getBbHeight(), 0.05f));
+        // 火焰自身亮度：与第一人称体积兜底、体积补丁同一个来源（当前预设），
+        // 且着色器里 <=0 会退回 1.0 防呆（见 rendertype_flame_surface.fsh 末尾）
+        sh.safeGetUniform("uBrightness").set(state.brightness());
 
-        sh.safeGetUniform("uParams").set(NOISE_SCALE, FLOW, DENSITY, TURBULENCE);
-        sh.safeGetUniform("uParams2").set(MARCH_LENGTH, SURFACE_OFFSET, NORMAL_VIEW_MIX, OPACITY);
+        // x=噪声尺度 y=上升流速 z=密度/吸收率 w=湍流阈值（越高越斑驳）
+        sh.safeGetUniform("uParams").set(style.noiseScale, style.flow, style.density, style.turbulence);
+        // x=光程(格) y=表面外偏移 z=法线/视线混合 w=透明度上限
+        sh.safeGetUniform("uParams2").set(style.marchLength, SURFACE_OFFSET, NORMAL_VIEW_MIX, style.opacity);
         // x/y = 边缘柔和度区间（|N·V|），z = 向外衰减指数，w = 轮廓处最低强度
-        sh.safeGetUniform("uParams3").set(EDGE_FADE_LO, EDGE_FADE_HI, FALLOFF_K, EDGE_FADE_MIN);
+        sh.safeGetUniform("uParams3").set(EDGE_FADE_LO, EDGE_FADE_HI, style.falloffK, style.edgeFadeMin);
 
-        sh.safeGetUniform("uColorCore").set((float) FlameEffects.CORE.x, (float) FlameEffects.CORE.y, (float) FlameEffects.CORE.z);
-        sh.safeGetUniform("uColorMid").set((float) FlameEffects.MID.x, (float) FlameEffects.MID.y, (float) FlameEffects.MID.z);
-        sh.safeGetUniform("uColorEdge").set((float) FlameEffects.EDGE.x, (float) FlameEffects.EDGE.y, (float) FlameEffects.EDGE.z);
+        sh.safeGetUniform("uColorCore").set((float) style.core.x, (float) style.core.y, (float) style.core.z);
+        sh.safeGetUniform("uColorMid").set((float) style.mid.x, (float) style.mid.y, (float) style.mid.z);
+        sh.safeGetUniform("uColorEdge").set((float) style.edge.x, (float) style.edge.y, (float) style.edge.z);
 
         // iTime 由绘制路径喂入（JSON 里声明了；VertexBuffer#_drawWithShader 不会覆盖它）
         ShaderTimeUtil.setITime(sh);

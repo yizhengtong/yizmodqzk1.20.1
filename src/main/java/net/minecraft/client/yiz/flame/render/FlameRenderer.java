@@ -400,6 +400,9 @@ public final class FlameRenderer {
                 f.density * VOLUME_COMPOSITE_COMPENSATION * OPACITY_SCALE, f.turbulence);
         // w = 不透明度上限；淡入淡出走顶点色 alpha（emitBackFaces 传 fade）
         sh.safeGetUniform("uParams2").set(f.thickness, f.height, f.span, f.alpha);
+        // 火焰自身亮度（1.0 = 原样），通用提亮项：着火族从当前预设取值，其余效果默认 1.0。
+        // 着色器侧另有 <=0 → 1.0 的防呆（见 FlameEffects.Flame#brightness）。
+        sh.safeGetUniform("uBrightness").set(f.brightness);
 
         sh.safeGetUniform("uColorCore").set((float) f.colorCore.x, (float) f.colorCore.y, (float) f.colorCore.z);
         sh.safeGetUniform("uColorMid").set((float) f.colorMid.x, (float) f.colorMid.y, (float) f.colorMid.z);

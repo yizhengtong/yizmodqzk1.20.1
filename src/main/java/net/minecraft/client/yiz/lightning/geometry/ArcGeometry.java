@@ -251,7 +251,7 @@ public final class ArcGeometry {
      * </ul>
      *
      * <p>顶点预算：主干 {@code 3 × segments × 4}（{@code segments}=6 → 72）+ 每根细丝 16。
-     * 于是"挂 2 根细丝"的最坏单弧 = 104 顶点，40 多条弧 ≈ 4.6k 顶点/实体/帧（见
+     * 于是"挂 2 根细丝"的最坏单弧 = 104 顶点，围弧满档（88 条）≈ 9.2k 顶点/实体/帧（见
      * {@code ShockArcs} 顶部的预算表）。</p>
      *
      * @param filaments 细丝根数（0 = 不挂；围弧按概率给 0~2）
@@ -260,12 +260,42 @@ public final class ArcGeometry {
                                     Vec3 fromRel, Vec3 toRel, int seed, float halfWidth,
                                     float r, float g, float b, float alpha, float time, int segments,
                                     int filaments) {
+        // 老口径（也是唯一的历史调用口径）：光晕 = 芯色压暗 r/g、保留 b（偏冷偏蓝）
+        emitShortArc(vc, mat, fromRel, toRel, seed, halfWidth, r, g, b,
+                r * 0.45f, g * 0.55f, b, alpha, time, segments, filaments);
+    }
+
+    /**
+     * 同上，但<b>外辉光带用单独给的颜色</b>（{@code haloR/G/B}）—— 围弧的"核心偏白、光晕偏明蓝"
+     * 就是靠这一组参数实现的（见 {@code ShockArcs.HALO_BLUE_R} 一带的常量）。
+     *
+     * <p><b>为什么要单独给光晕色而不是继续用"芯色 × 0.45/0.55"派发</b>：片元着色器
+     * {@code rendertype_lightning_arc.fsh} 会把每条带子的中轴往白里混
+     * （{@code mix(vColor.rgb, vec3(1.0), white * 0.9)}，{@code white = smoothstep(0.35, 0.0, |v|)}）——
+     * 也就是<b>带子的正中间一定是白的</b>，只有两侧翼保留 {@code vColor.rgb}。光晕带比主干宽 3 倍，
+     * 它的两侧翼（也就是弧外面那圈光）才是"蓝"真正被看见的地方，
+     * 所以这一层的颜色必须能单独调，否则"明蓝"永远只能靠芯色间接表达、一远就发白。
+     * 派发公式（{@code r*0.45, g*0.55}）只保留在旧重载里，供其它调用点保持原观感。</p>
+     *
+     * <p><b>⚠ 关于 {@code alpha}</b>：本 pass 的 fsh 只读 {@code vColor.rgb}，{@code vColor.a} 完全不参与
+     * （片元自己算 alpha），所以这个参数对画面<b>没有影响</b> —— 亮度/生灭必须落在 RGB 与线宽上，
+     * 保留它只是为了与编号 1 的 {@link #emitArcFromSpine} 同形。</p>
+     *
+     * @param haloR/G/B 外辉光带（宽度 ×3.0）的颜色，通常是"比芯色更饱和的蓝"
+     */
+    public static void emitShortArc(VertexConsumer vc, Matrix4f mat,
+                                    Vec3 fromRel, Vec3 toRel, int seed, float halfWidth,
+                                    float r, float g, float b,
+                                    float haloR, float haloG, float haloB,
+                                    float alpha, float time, int segments,
+                                    int filaments) {
         // 短弧的抖动幅度按"弧长"给：0.22（链式闪电那档）会把 0.3 格的弧拧成毛线团
         Vec3[] spine = buildSpine(fromRel, toRel, 0.09, seed, time, segments);
         Vec3[] ax0 = widthAxes(spine, 0);
         Vec3[] ax1 = widthAxes(spine, 1);
-        // 外辉光（朝相机的单带，颜色偏冷偏暗）+ 主干双交叉带（3D 体积感），配方与 emitArcFromSpine 同源
-        emitBand(vc, mat, spine, ax0, halfWidth * 3.0f, r * 0.45f, g * 0.55f, b, alpha * 0.20f);
+        // 外辉光（朝相机的单带，比主干宽 3 倍、颜色单独给 = "核心偏白、光晕偏明蓝"）
+        //  + 主干双交叉带（3D 体积感），配方与 emitArcFromSpine 同源
+        emitBand(vc, mat, spine, ax0, halfWidth * 3.0f, haloR, haloG, haloB, alpha * 0.20f);
         emitBand(vc, mat, spine, ax0, halfWidth, r, g, b, alpha * 0.80f);
         emitBand(vc, mat, spine, ax1, halfWidth, r, g, b, alpha * 0.80f);
 
