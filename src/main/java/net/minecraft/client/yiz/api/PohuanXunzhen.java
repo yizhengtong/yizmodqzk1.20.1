@@ -143,10 +143,11 @@ public final class PohuanXunzhen implements DefenseBreach {
 
         double value = rawValue(attacker);
         boolean active = value > THRESHOLD;
-        if (active && HIT_LOG.incrementAndGet() <= 30) {
-            LOGGER.info("[破幻寻真] 命中检查 target={} attacker={} total={} canAffect={}",
+        // 前 30 次命中无论是否生效都打一行：便于区分“属性没设上(total=0)”和“生效但没破防”
+        if (HIT_LOG.incrementAndGet() <= 30) {
+            LOGGER.info("[破幻寻真] 命中检查 target={} attacker={} total={} active={} canAffect={}",
                 target.getClass().getSimpleName(), attacker.getClass().getSimpleName(),
-                value, canAffect(target));
+                value, active, canAffect(target));
         }
         if (!active) return false;
         if (!canAffect(target)) return false;
