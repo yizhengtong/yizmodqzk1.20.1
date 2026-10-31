@@ -212,6 +212,7 @@ public class tizMod {
         net.minecraft.client.yiz.tool.YizRemoveCommand.register();
         net.minecraft.client.yiz.tool.YizAgentCommand.register();
         net.minecraft.client.yiz.tool.YizSetHealthCommand.register();
+        net.minecraft.client.yiz.tool.YizPohuanCommand.register();
         net.minecraft.client.yiz.tool.YizHealthLocateCommand.register();
         net.minecraft.client.yiz.tool.YizKeyCommand.register();
         // 闪电特效测试指令（/yiz fx）

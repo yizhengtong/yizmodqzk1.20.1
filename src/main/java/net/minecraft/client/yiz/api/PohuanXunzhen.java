@@ -67,13 +67,17 @@ public final class PohuanXunzhen implements DefenseBreach {
 
     /** 攻击者是否持有生效中的破幻寻真（总值 &gt; 1）。 */
     public static boolean isActive(LivingEntity attacker) {
-        if (attacker == null) return false;
-        if (!YizConfig.bool("pohuan.enabled")) return false;
+        return attacker != null && YizConfig.bool("pohuan.enabled") && rawValue(attacker) > THRESHOLD;
+    }
+
+    /** 属性总值（基础值 + 修饰符）；未挂载/异常返回 0。 */
+    public static double rawValue(LivingEntity attacker) {
+        if (attacker == null) return 0.0;
         try {
             AttributeInstance inst = attacker.getAttribute(YizAttributes.POHUAN_XUNZHEN.get());
-            return inst != null && inst.getValue() > THRESHOLD;
+            return inst != null ? inst.getValue() : 0.0;
         } catch (Throwable t) {
-            return false;
+            return 0.0;
         }
     }
 
@@ -125,6 +129,9 @@ public final class PohuanXunzhen implements DefenseBreach {
 
     // ==================== 命中前 / 命中后 ====================
 
+    /** 诊断限频：前 30 次生效命中打印一次。 */
+    private static final AtomicInteger HIT_LOG = new AtomicInteger();
+
     /**
      * {@code LivingEntity.hurt} HEAD：清零无敌帧/硬直，并登记本次破除上下文。
      *
@@ -133,7 +140,15 @@ public final class PohuanXunzhen implements DefenseBreach {
     public static boolean onHurtHead(LivingEntity attacker, LivingEntity target) {
         if (attacker == null || target == null) return false;
         if (attacker.level().isClientSide() || target.level().isClientSide()) return false;
-        if (!isActive(attacker)) return false;
+
+        double value = rawValue(attacker);
+        boolean active = value > THRESHOLD;
+        if (active && HIT_LOG.incrementAndGet() <= 30) {
+            LOGGER.info("[破幻寻真] 命中检查 target={} attacker={} total={} canAffect={}",
+                target.getClass().getSimpleName(), attacker.getClass().getSimpleName(),
+                value, canAffect(target));
+        }
+        if (!active) return false;
         if (!canAffect(target)) return false;
 
         beginBreach(target);

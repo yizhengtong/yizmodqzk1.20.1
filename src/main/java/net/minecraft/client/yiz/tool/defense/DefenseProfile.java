@@ -25,13 +25,15 @@ public final class DefenseProfile {
 
     /** 疑似单次/窗口上限常量（来自 hurt/actuallyHurt/setHealth 内的 Math.min/max 附近）。 */
     public static final class CapCandidate {
+        public String owner;
         public String method;
         public double value;
         public String type;   // int / long / float / double
 
         public CapCandidate() {}
 
-        public CapCandidate(String method, double value, String type) {
+        public CapCandidate(String owner, String method, double value, String type) {
+            this.owner = owner;
             this.method = method;
             this.value = value;
             this.type = type;

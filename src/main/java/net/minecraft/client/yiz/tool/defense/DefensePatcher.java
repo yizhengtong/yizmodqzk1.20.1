@@ -57,18 +57,33 @@ public final class DefensePatcher implements java.lang.instrument.ClassFileTrans
     }
 
     private static void patchNow(Class<?> cls) {
-        if (cls == null || PATCHED.contains(cls.getName())) return;
+        if (cls == null) return;
         DefenseProfile p = DefenseProfile.cached(cls.getName());
         if (p == null || p.caps.isEmpty()) return;
         try {
             install();
             Instrumentation inst = AgentBridge.getInstrumentation();
             if (inst == null) return;
-            inst.retransformClasses(cls);
-            PATCHED.add(cls.getName());
-            CrashGuard.run("pohuan-patch-log", () ->
-                net.minecraft.client.yiz.tizMod.LOGGER.info("[破幻寻真] 字节码上限常量已改写 {} 条（{}）",
-                    p.caps.size(), cls.getName()));
+            // 上限常量可能写在父类（抽象基类）里：按 cap.owner 逐类改写
+            java.util.Set<String> owners = new java.util.LinkedHashSet<>();
+            for (DefenseProfile.CapCandidate c : p.caps) {
+                owners.add(c.owner != null ? c.owner : cls.getName());
+            }
+            int patched = 0;
+            for (String owner : owners) {
+                if (PATCHED.contains(owner)) continue;
+                Class<?> target = owner.equals(cls.getName()) ? cls
+                    : Class.forName(owner, false, cls.getClassLoader());
+                inst.retransformClasses(target);
+                PATCHED.add(owner);
+                patched++;
+            }
+            if (patched > 0) {
+                final int n = patched;
+                CrashGuard.run("pohuan-patch-log", () ->
+                    net.minecraft.client.yiz.tizMod.LOGGER.info("[破幻寻真] 字节码上限常量已改写 {} 个类（入口 {}）",
+                        n, cls.getName()));
+            }
         } catch (VirtualMachineError | ThreadDeath fatal) {
             throw fatal;
         } catch (Throwable t) {

@@ -244,7 +244,7 @@ public final class DefenseScanner {
                                     String type = n instanceof Float ? "float"
                                         : n instanceof Double ? "double"
                                         : n instanceof Long ? "long" : "int";
-                                    p.caps.add(new DefenseProfile.CapCandidate(name, v, type));
+                                    p.caps.add(new DefenseProfile.CapCandidate(className, name, v, type));
                                 }
                             }
                             recent.clear();
