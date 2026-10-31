@@ -89,6 +89,8 @@ public final class YizConfig {
     public static final ForgeConfigSpec.BooleanValue POHUAN_STRUCTURAL_GATES;
     public static final ForgeConfigSpec.BooleanValue POHUAN_SETTLE_NO_DAMAGE;
     public static final ForgeConfigSpec.BooleanValue POHUAN_BASE_HEALTH;
+    public static final ForgeConfigSpec.BooleanValue POHUAN_FORCE_BASE_HURT;
+    public static final ForgeConfigSpec.BooleanValue POHUAN_TIMER_GATES;
 
     public static final ForgeConfigSpec SPEC;
 
@@ -177,6 +179,10 @@ public final class YizConfig {
             "命中返回成功但生命/吸收都没变化（静默无敌）时，改走 actuallyHurt 结算");
         POHUAN_BASE_HEALTH = define("pohuan", "base_health", true, When.LIVE,
             "P3：目标覆写 setHealth/getHealth/actuallyHurt 时，用 IMPL_LOOKUP 直调基类生命通道结算，绕过覆写截断");
+        POHUAN_FORCE_BASE_HURT = define("pohuan", "force_base_hurt", true, When.LIVE,
+            "目标覆写了 hurt（含 DamageCap()/距离衰减/状态机限伤）时，直接跳过它走基类 actuallyHurt，彻底绕开 hurt 内上限");
+        POHUAN_TIMER_GATES = define("pohuan", "timer_gates", false, When.LIVE,
+            "结构门里的 timer/hitwritten 字段是否清零（默认关：这类字段语义不明确，清零可能触发回血/冷却反转）");
         B.pop();
 
         SPEC = B.build();

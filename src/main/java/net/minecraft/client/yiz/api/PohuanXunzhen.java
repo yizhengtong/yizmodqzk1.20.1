@@ -174,6 +174,31 @@ public final class PohuanXunzhen implements DefenseBreach {
     }
 
     /**
+     * 是否应完全跳过目标自己的 {@code hurt}（强制走基类 actuallyHurt 结算）。
+     *
+     * <p>适用于 {@code hurt} 内用虚拟方法/状态机做限伤的实现（例如
+     * {@code Math.min(DamageCap(), amount)}、距离衰减、damageBucket 累加器），
+     * 这类上限既不是常量也不是字段，P2 改不到，只能绕过整个覆写。</p>
+     */
+    public static boolean shouldSkipHurt(LivingEntity target) {
+        if (target == null || target instanceof Player) return false;
+        if (!YizConfig.bool("pohuan.force_base_hurt")) return false;
+        if (!net.minecraft.client.yiz.tool.defense.P3BaseHealth.ready()) return false;
+        String name = target.getClass().getName();
+        if (name.startsWith("net.minecraft.client.yiz")) return false;   // 不跳过自研实体
+        net.minecraft.client.yiz.tool.defense.DefenseProfile p =
+            net.minecraft.client.yiz.tool.defense.DefenseProfile.cached(name);
+        return p != null && p.overrides != null
+            && (p.overrides.contains("hurt") || p.overrides.contains("m_6469_"));
+    }
+
+    /** 外部（mixin HEAD 取消 hurt 时）直接结算：基类通道优先，失败回退 actuallyHurt。 */
+    public static void settleDirect(LivingEntity target, DamageSource source, float amount) {
+        SETTLED.set(false);
+        settleRejected(target, source, amount);
+    }
+
+    /**
      * {@code LivingEntity.hurt} RETURN：处理两类“防御”。
      *
      * <ul>

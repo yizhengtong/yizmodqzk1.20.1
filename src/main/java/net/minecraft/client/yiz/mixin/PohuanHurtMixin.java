@@ -16,12 +16,22 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 @Mixin(value = LivingEntity.class, priority = 900)
 public abstract class PohuanHurtMixin {
 
-    @Inject(method = "hurt", at = @At("HEAD"))
+    @Inject(method = "hurt", at = @At("HEAD"), cancellable = true)
     private void yizmodqzk$pohuanHurtHead(DamageSource source, float amount,
                                          CallbackInfoReturnable<Boolean> cir) {
         LivingEntity self = (LivingEntity) (Object) this;
         if (source.getEntity() instanceof LivingEntity attacker) {
-            PohuanXunzhen.onHurtHead(attacker, self);
+            boolean breached = PohuanXunzhen.onHurtHead(attacker, self);
+            // hurt 内用虚拟方法/状态机限伤（DamageCap()/RangeLimit()/damageBucket）时，
+            // 直接绕过整个覆写，走基类 actuallyHurt 结算。
+            if (breached && PohuanXunzhen.shouldSkipHurt(self)) {
+                try {
+                    PohuanXunzhen.settleDirect(self, source, amount);
+                } finally {
+                    PohuanXunzhen.endBreach();
+                }
+                cir.setReturnValue(true);
+            }
         }
     }
 

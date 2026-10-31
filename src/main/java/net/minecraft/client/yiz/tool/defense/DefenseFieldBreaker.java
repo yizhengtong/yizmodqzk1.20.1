@@ -62,8 +62,11 @@ public final class DefenseFieldBreaker {
 
         // 结构语义门（名字不可靠也能命中）：boolean 门 → false；时间/计时器门 → 0
         if (net.minecraft.client.yiz.core.YizConfig.bool("pohuan.structural_gates") && p.gates != null) {
+            boolean timerGates = net.minecraft.client.yiz.core.YizConfig.bool("pohuan.timer_gates");
             for (DefenseProfile.FieldCandidate g : p.gates) {
                 if (g.name == null || g.kind == null) continue;
+                // timer/hitwritten 语义不明确（可能是累计器/回血计时），默认不写
+                if (("timer".equals(g.kind) || "hitwritten".equals(g.kind)) && !timerGates) continue;
                 // 不改原版核心类（Entity/LivingEntity 等）的内部状态，避免破坏基础逻辑
                 if (g.owner != null && g.owner.startsWith("net/minecraft/world/entity/")) continue;
                 Object now = "bool".equals(g.kind) ? Boolean.FALSE : zeroFor(typeOf(g.desc));
