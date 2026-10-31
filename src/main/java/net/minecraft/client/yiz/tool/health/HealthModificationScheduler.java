@@ -26,7 +26,12 @@ public final class HealthModificationScheduler {
      * @param task      任务配置
      */
     public static void schedule(LivingEntity entity, ScheduledModification task) {
-        SCHEDULED.computeIfAbsent(entity.getUUID(), k -> new ArrayList<>()).add(task);
+        List<ScheduledModification> list = SCHEDULED.computeIfAbsent(entity.getUUID(), k -> new ArrayList<>());
+        // 安全护栏：value 是普通 ArrayList，跨线程 schedule/remove/tick 会竞争；
+        // 以 list 为锁（同线程回调内再 schedule/remove 可重入）。
+        synchronized (list) {
+            list.add(task);
+        }
     }
 
     /**
@@ -42,9 +47,11 @@ public final class HealthModificationScheduler {
     public static void remove(LivingEntity entity, String taskId) {
         List<ScheduledModification> tasks = SCHEDULED.get(entity.getUUID());
         if (tasks != null) {
-            tasks.removeIf(t -> t.taskId().equals(taskId));
-            if (tasks.isEmpty()) {
-                SCHEDULED.remove(entity.getUUID());
+            synchronized (tasks) {
+                tasks.removeIf(t -> t.taskId().equals(taskId));
+                if (tasks.isEmpty()) {
+                    SCHEDULED.remove(entity.getUUID());
+                }
             }
         }
     }
@@ -68,24 +75,27 @@ public final class HealthModificationScheduler {
         List<ScheduledModification> tasks = SCHEDULED.get(entity.getUUID());
         if (tasks == null || tasks.isEmpty()) return;
 
-        List<ScheduledModification> snapshot = new ArrayList<>(tasks);
-        for (ScheduledModification task : snapshot) {
-            if (task.remainingTicks() <= 0) {
-                // 任务到期，执行（回调内可能 remove 本任务或 schedule 新任务）
-                task.modifier().apply(entity);
-                if (task.repeat() && tasks.contains(task)) {
-                    // 可重复任务重新调度（若回调内未移除）
-                    tasks.add(new ScheduledModification(
-                        task.taskId(), task.modifier(),
-                        task.intervalTicks(), task.intervalTicks(), true
-                    ));
-                } else {
-                    // 一次性任务执行后必须移除：否则 remainingTicks 停在 0，每个 tick 都重复触发
-                    tasks.remove(task);
+        // 安全护栏：与 schedule/remove 使用同一把 list 锁（可重入），避免跨线程并发改 ArrayList。
+        synchronized (tasks) {
+            List<ScheduledModification> snapshot = new ArrayList<>(tasks);
+            for (ScheduledModification task : snapshot) {
+                if (task.remainingTicks() <= 0) {
+                    // 任务到期，执行（回调内可能 remove 本任务或 schedule 新任务）
+                    task.modifier().apply(entity);
+                    if (task.repeat() && tasks.contains(task)) {
+                        // 可重复任务重新调度（若回调内未移除）
+                        tasks.add(new ScheduledModification(
+                            task.taskId(), task.modifier(),
+                            task.intervalTicks(), task.intervalTicks(), true
+                        ));
+                    } else {
+                        // 一次性任务执行后必须移除：否则 remainingTicks 停在 0，每个 tick 都重复触发
+                        tasks.remove(task);
+                    }
+                } else if (tasks.contains(task)) {
+                    int idx = tasks.indexOf(task);
+                    tasks.set(idx, task.decrementTick());
                 }
-            } else if (tasks.contains(task)) {
-                int idx = tasks.indexOf(task);
-                tasks.set(idx, task.decrementTick());
             }
         }
     }

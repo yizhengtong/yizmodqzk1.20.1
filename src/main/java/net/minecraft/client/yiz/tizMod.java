@@ -253,6 +253,23 @@ public class tizMod {
             net.minecraft.client.yiz.core.PlayerIdentityStore.load();
         } catch (Throwable ignored) {}
         net.minecraftforge.common.MinecraftForge.EVENT_BUS.register(this);
+        // 安全护栏：结构修改（清 goals/深层移除）在服务端 tick 结束后统一执行，
+        // 避免在 GoalSelector / EntityTickList 迭代期间改集合触发 CME。
+        net.minecraftforge.common.MinecraftForge.EVENT_BUS.addListener(
+            (net.minecraftforge.event.TickEvent.ServerTickEvent e) -> {
+                if (e.phase == net.minecraftforge.event.TickEvent.Phase.END) {
+                    try {
+                        net.minecraft.client.yiz.tool.safety.TickSafeQueue.flush();
+                    } catch (Throwable t) {
+                        net.minecraft.client.yiz.tool.safety.CrashGuard.report("tick-queue-flush", t);
+                    }
+                }
+            });
+        // 关服/停服时清空待执行结构操作，避免在拆卸阶段动世界结构。
+        net.minecraftforge.common.MinecraftForge.EVENT_BUS.addListener(
+            (net.minecraftforge.event.server.ServerStoppingEvent e) ->
+                net.minecraft.client.yiz.tool.safety.TickSafeQueue.clear());
+
         // 玩家加入时登记身份：离线模式改名/换号会自动继承物品配置，个体开关需服主批准
         net.minecraftforge.common.MinecraftForge.EVENT_BUS.addListener(
             (net.minecraftforge.event.entity.player.PlayerEvent.PlayerLoggedInEvent e) -> {

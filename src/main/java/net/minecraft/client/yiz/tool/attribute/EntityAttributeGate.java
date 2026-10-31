@@ -79,6 +79,13 @@ public final class EntityAttributeGate {
      */
     public static void set(LivingEntity entity, RegistryObject<Attribute> attr, String idKey, double value) {
         if (attr == null || !attr.isPresent()) return;
+        // 安全护栏：NaN/±Infinity 不是合法属性值。写进去会让 getMaxHealth/攻击力等
+        // 变成 NaN 并污染其它模组的血条/比例计算，这里直接拒绝（不改变正常值路径）。
+        if (!Double.isFinite(value)) {
+            tizMod.LOGGER.warn("[AttributeGate] 拒绝非有限属性值: {} idKey={} value={}",
+                attr.get().getDescriptionId(), idKey, value);
+            return;
+        }
         AttributeInstance inst = entity != null ? entity.getAttribute(attr.get()) : null;
         if (inst == null) return;
         if (!isCallerTrusted()) {

@@ -71,6 +71,12 @@ public final class YizConfig {
     public static final ForgeConfigSpec.BooleanValue REMOVE_GATE_TAMPER;
     public static final ForgeConfigSpec.BooleanValue DEATH_MARKER;
 
+    // 安全保护（只拦截异常/非法值/危险时点，不改变正常数值与流程）
+    public static final ForgeConfigSpec.BooleanValue DEFER_STRUCTURAL_OPS;
+    public static final ForgeConfigSpec.BooleanValue CRASH_BARRIER;
+    public static final ForgeConfigSpec.BooleanValue FINITE_GUARD;
+    public static final ForgeConfigSpec.BooleanValue DISCARD_ON_ERROR;
+
     public static final ForgeConfigSpec SPEC;
 
     static {
@@ -118,6 +124,19 @@ public final class YizConfig {
             "允许行为探测并击穿「死亡/移除放行开关」");
         DEATH_MARKER = define("gate", "death_marker", true, When.LIVE,
             "允许写「判死标记」（设 true 后目标自认已死）");
+        B.pop();
+
+        B.comment("安全保护（防误崩）",
+                  "只拦截异常/非法值/危险时点，不改变正常数值与流程。",
+                  "关闭任一开关即回退到旧行为（用于对照排障）。").push("safety");
+        DEFER_STRUCTURAL_OPS = define("safety", "defer_structural_ops", true, When.LIVE,
+            "结构性操作（清 goals / 深层移除）延迟到服务端 tick 结束后执行，避免在 GoalSelector/EntityTickList 迭代中改集合触发 CME");
+        CRASH_BARRIER = define("safety", "crash_barrier", true, When.LIVE,
+            "入口异常隔离：改血/死亡链/探查包抛出的异常只记录并隔离，不打断服务端 tick");
+        FINITE_GUARD = define("safety", "finite_guard", true, When.LIVE,
+            "有限值净化：拒绝 NaN/Infinity 的血量与属性写入（死亡仍按 0/已死处理）");
+        DISCARD_ON_ERROR = define("safety", "discard_on_error", false, When.LIVE,
+            "实体的每 tick 维护抛异常时是否丢弃实体（默认关：只记录日志，避免误删 Boss/玩家实体）");
         B.pop();
 
         SPEC = B.build();

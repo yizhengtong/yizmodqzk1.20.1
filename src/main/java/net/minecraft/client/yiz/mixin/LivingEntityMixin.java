@@ -201,7 +201,9 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
     private void yizmodqzk$onTick(CallbackInfo ci) {
         LivingEntity entity = (LivingEntity) (Object) this;
         // 每 tick 维护清单已抽到 EntityTickMaintenance（击飞飞行期目标 tick 被停，由 LaunchController 用同一份补跑）
-        net.minecraft.client.yiz.core.EntityTickMaintenance.tick(entity, false);
+        // 安全护栏：维护链异常只记录，不让它把整条实体 tick（进而服务端 tick）打断。
+        net.minecraft.client.yiz.tool.safety.CrashGuard.run("entity-maintenance",
+            () -> net.minecraft.client.yiz.core.EntityTickMaintenance.tick(entity, false));
     }
 
     @Inject(method = "die", at = @At("HEAD"), cancellable = true)
@@ -249,6 +251,7 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
 
     @ModifyVariable(method = "hurt", at = @At("HEAD"), argsOnly = true)
     private float yizmodqzk$modifyHurtAmount(float amount, DamageSource source) {
+        if (!Float.isFinite(amount)) return 0F;   // 安全护栏：NaN/Infinity 伤害不进入任何计算
         if (amount <= 0) return amount;
         LivingEntity self = (LivingEntity) (Object) this;
 
@@ -430,6 +433,12 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
     private float yizmodqzk$modifyHealthForVitalitySeverance(float newHealth) {
         if (EntityASMUtil.consumeVitalitySeveranceFlag()) {
             return newHealth;
+        }
+
+        // 安全护栏：非有限值（NaN/±Infinity）不是合法血量，先有限化再做后续计算，
+        // 避免 current-(-Inf)=+Inf、Inf*0=NaN 之类污染最终写入通道。
+        if (!Float.isFinite(newHealth)) {
+            return newHealth > 0 ? Float.MAX_VALUE : 0.0F;
         }
 
         LivingEntity self = (LivingEntity) (Object) this;
