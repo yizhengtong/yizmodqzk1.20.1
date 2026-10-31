@@ -16,6 +16,10 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 @Mixin(value = LivingEntity.class, priority = 900)
 public abstract class PohuanHurtMixin {
 
+    /** 每个目标类只打印一次“跳过自定义 hurt”。 */
+    private static final java.util.Set<String> yizmodqzk$SKIP_LOGGED =
+        java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     @Inject(method = "hurt", at = @At("HEAD"), cancellable = true)
     private void yizmodqzk$pohuanHurtHead(DamageSource source, float amount,
                                          CallbackInfoReturnable<Boolean> cir) {
@@ -25,6 +29,11 @@ public abstract class PohuanHurtMixin {
             // hurt 内用虚拟方法/状态机限伤（DamageCap()/RangeLimit()/damageBucket）时，
             // 直接绕过整个覆写，走基类 actuallyHurt 结算。
             if (breached && PohuanXunzhen.shouldSkipHurt(self)) {
+                if (yizmodqzk$SKIP_LOGGED.add(self.getClass().getName())) {
+                    net.minecraft.client.yiz.tizMod.LOGGER.info(
+                        "[破幻寻真] 跳过自定义 hurt：{} amount={} → 基类 actuallyHurt",
+                        self.getClass().getName(), amount);
+                }
                 try {
                     PohuanXunzhen.settleDirect(self, source, amount);
                 } finally {
