@@ -323,6 +323,14 @@ public class tizMod {
         } catch (Throwable t) {
             LOGGER.warn("Agent 加载跳过（不影响血量扫描体系）: {}", t.getMessage());
         }
+        // 破幻寻真 P2b：bytecode_patch 开启时提前安装常量改写 transformer（默认关）
+        try {
+            if (net.minecraft.client.yiz.core.YizConfig.bool("pohuan.bytecode_patch")) {
+                net.minecraft.client.yiz.tool.defense.DefensePatcher.install();
+            }
+        } catch (Throwable t) {
+            LOGGER.warn("破幻寻真字节码改写安装跳过: {}", t.getMessage());
+        }
         // 藏血发现扫描预热：全类路径枚举一次（约 1~3 秒）挪到后台，别留给首次攻击
         try {
             net.minecraft.client.yiz.tool.health.HealthDiscovery.warmupAsync();

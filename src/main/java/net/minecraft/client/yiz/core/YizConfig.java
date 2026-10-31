@@ -84,6 +84,8 @@ public final class YizConfig {
     public static final ForgeConfigSpec.BooleanValue POHUAN_SETTLE_REJECTED;
     public static final ForgeConfigSpec.BooleanValue POHUAN_BREAK_CREATIVE_INVULN;
     public static final ForgeConfigSpec.BooleanValue POHUAN_SCAN_LOG;
+    public static final ForgeConfigSpec.BooleanValue POHUAN_FIELD_CAPS;
+    public static final ForgeConfigSpec.BooleanValue POHUAN_BYTECODE_PATCH;
 
     public static final ForgeConfigSpec SPEC;
 
@@ -162,6 +164,10 @@ public final class YizConfig {
             "生存/冒险玩家被套创造式无敌（abilities.invulnerable）时强制可受伤");
         POHUAN_SCAN_LOG = define("pohuan", "scan_log", true, When.LIVE,
             "首次命中某实体类时打印防御扫描结果（覆写方法/上限字段），用于排查");
+        POHUAN_FIELD_CAPS = define("pohuan", "field_caps", true, When.LIVE,
+            "P2a：命中前把目标类里疑似上限/冷却/无敌帧字段临时改写为 MAX/0，命中后还原");
+        POHUAN_BYTECODE_PATCH = define("pohuan", "bytecode_patch", false, When.LIVE,
+            "P2b（实验性）：用 agent 把 hurt/actuallyHurt/setHealth 内被 Math.min/max 使用的疑似上限常量改写为 MAX；默认关，需重启/重进存档后生效");
         B.pop();
 
         SPEC = B.build();

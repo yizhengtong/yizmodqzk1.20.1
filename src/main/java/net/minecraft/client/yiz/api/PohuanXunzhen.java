@@ -108,6 +108,11 @@ public final class PohuanXunzhen implements DefenseBreach {
 
     /** 结束上下文；可重复调用。 */
     public static void endBreach() {
+        try {
+            if (net.minecraft.client.yiz.core.YizConfig.bool("pohuan.field_caps")) {
+                net.minecraft.client.yiz.tool.defense.DefenseFieldBreaker.restore();
+            }
+        } catch (Throwable ignored) {}
         BREACH_TARGET.remove();
     }
 
@@ -131,7 +136,13 @@ public final class PohuanXunzhen implements DefenseBreach {
                 target.hurtTime = 0;
             } catch (Throwable ignored) {}
         }
+        // 先扫描（首次命中建画像），再按画像做字段临时破除
         scanOnce(target.getClass());
+        if (YizConfig.bool("pohuan.field_caps")) {
+            try {
+                net.minecraft.client.yiz.tool.defense.DefenseFieldBreaker.neutralize(target);
+            } catch (Throwable ignored) {}
+        }
         return true;
     }
 
@@ -167,47 +178,38 @@ public final class PohuanXunzhen implements DefenseBreach {
     // ==================== 防御扫描（诊断 / 后续字节码阶段输入） ====================
 
     /**
-     * 首次命中某类时扫描：列出被覆写的生命/伤害方法 + 名字像“上限/无敌帧”的数值字段。
+     * 首次命中某类时扫描（P1）：只读 ASM 画像 + 日志；P2b 开关打开时按类请求常量改写。
      *
-     * <p>只读，不改任何值。后续 P1 字节码阶段会以此 + ASM 数据流生成 DefenseProfile。</p>
+     * <p>画像缓存到 {@code config/yizmodqzk/defense_profiles.json}，后续命中只读内存。</p>
      */
     private static void scanOnce(Class<?> cls) {
         if (cls == null) return;
-        if (!YizConfig.bool("pohuan.scan_log")) return;
+        if (!YizConfig.bool("pohuan.scan_log") && !YizConfig.bool("pohuan.bytecode_patch")) return;
         if (!SCANNED.add(cls)) return;
-        if (SCAN_LOGS.incrementAndGet() > 80) return;   // 防刷屏：最多 80 个类
         try {
-            List<String> overrides = new ArrayList<>();
-            for (Method m : cls.getDeclaredMethods()) {
-                String n = m.getName();
-                if (n.equals("hurt") || n.equals("actuallyHurt") || n.equals("setHealth")
-                        || n.equals("getHealth") || n.equals("isInvulnerableTo")
-                        || n.equals("die") || n.equals("isDeadOrDying") || n.equals("isAlive")) {
-                    overrides.add(n);
+            net.minecraft.client.yiz.tool.defense.DefenseProfile p =
+                net.minecraft.client.yiz.tool.defense.DefenseScanner.ensureScanned(cls);
+            if (p == null) return;
+            if (YizConfig.bool("pohuan.scan_log") && SCAN_LOGS.incrementAndGet() <= 80) {
+                StringBuilder caps = new StringBuilder();
+                int n = 0;
+                for (var c : p.caps) {
+                    if (n++ >= 8) break;
+                    caps.append(c.method).append(':').append(c.value).append(',');
                 }
-            }
-            List<String> fields = new ArrayList<>();
-            Class<?> c = cls;
-            while (c != null && c != LivingEntity.class && fields.size() < 16) {
-                for (Field f : c.getDeclaredFields()) {
-                    if (Modifier.isStatic(f.getModifiers())) continue;
-                    Class<?> t = f.getType();
-                    if (t != int.class && t != long.class && t != float.class && t != double.class) continue;
-                    String n = f.getName();
-                    String ln = n.toLowerCase(java.util.Locale.ROOT);
-                    if (ln.contains("invul") || ln.contains("iframe") || ln.contains("hurt")
-                            || ln.contains("damage") || ln.contains("cap") || ln.contains("limit")
-                            || ln.contains("cooldown") || ln.contains("tick")) {
-                        fields.add(n + ":" + t.getSimpleName());
-                        if (fields.size() >= 16) break;
-                    }
+                StringBuilder fields = new StringBuilder();
+                n = 0;
+                for (var f : p.fields) {
+                    if (n++ >= 8) break;
+                    fields.append(f.name).append(',');
                 }
-                c = c.getSuperclass();
+                LOGGER.info("[破幻寻真] 防御画像 {}：覆写={} 上限常量=[{}] 字段=[{}]",
+                    cls.getName(), p.overrides, caps, fields);
             }
-            LOGGER.info("[破幻寻真] 防御扫描 {}：覆写={} 候选字段={}", cls.getName(), overrides, fields);
-        } catch (Throwable t) {
-            // 扫描失败不影响破除
-        }
+            if (YizConfig.bool("pohuan.bytecode_patch") && !p.caps.isEmpty()) {
+                net.minecraft.client.yiz.tool.defense.DefensePatcher.requestPatch(cls);
+            }
+        } catch (Throwable ignored) {}
     }
 
     // ==================== DefenseBreach 接口 ====================
