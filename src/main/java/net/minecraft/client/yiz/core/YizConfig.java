@@ -88,6 +88,7 @@ public final class YizConfig {
     public static final ForgeConfigSpec.BooleanValue POHUAN_BYTECODE_PATCH;
     public static final ForgeConfigSpec.BooleanValue POHUAN_STRUCTURAL_GATES;
     public static final ForgeConfigSpec.BooleanValue POHUAN_SETTLE_NO_DAMAGE;
+    public static final ForgeConfigSpec.BooleanValue POHUAN_BASE_HEALTH;
 
     public static final ForgeConfigSpec SPEC;
 
@@ -168,12 +169,14 @@ public final class YizConfig {
             "首次命中某实体类时打印防御扫描结果（覆写方法/上限字段），用于排查");
         POHUAN_FIELD_CAPS = define("pohuan", "field_caps", true, When.LIVE,
             "P2a：命中前把目标类里疑似上限/冷却/无敌帧字段临时改写为 MAX/0，命中后还原");
-        POHUAN_BYTECODE_PATCH = define("pohuan", "bytecode_patch", false, When.LIVE,
-            "P2b（实验性）：用 agent 把 hurt/actuallyHurt/setHealth 内被 Math.min/max 使用的疑似上限常量改写为 MAX；默认关，需重启/重进存档后生效");
+        POHUAN_BYTECODE_PATCH = define("pohuan", "bytecode_patch", true, When.LIVE,
+            "P2b：用 agent 把 hurt/actuallyHurt/setHealth 内被 Math.min/max 使用的疑似上限常量改写为 MAX（默认开；改写失败自动跳过）");
         POHUAN_STRUCTURAL_GATES = define("pohuan", "structural_gates", true, When.LIVE,
             "结构语义门：不依赖字段名，命中前把 hurt 里读到的 boolean 门/时间门/计时器临时改为 false 或 0（跳过原版核心类）");
         POHUAN_SETTLE_NO_DAMAGE = define("pohuan", "settle_no_damage", true, When.LIVE,
             "命中返回成功但生命/吸收都没变化（静默无敌）时，改走 actuallyHurt 结算");
+        POHUAN_BASE_HEALTH = define("pohuan", "base_health", true, When.LIVE,
+            "P3：目标覆写 setHealth/getHealth/actuallyHurt 时，用 IMPL_LOOKUP 直调基类生命通道结算，绕过覆写截断");
         B.pop();
 
         SPEC = B.build();

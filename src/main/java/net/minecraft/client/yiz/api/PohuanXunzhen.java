@@ -193,12 +193,26 @@ public final class PohuanXunzhen implements DefenseBreach {
         } catch (Throwable ignored) {}
     }
 
-    /** 直接走 actuallyHurt 结算（已含护甲/魔咒减免，但跳过 hurt 的无敌/上限/自定义拒绝）。 */
+    /** 直接走伤害结算：优先基类生命通道（P3，破自定义 setHealth 截断），否则 actuallyHurt accessor。 */
     private static void settleRejected(LivingEntity target, DamageSource source, float amount) {
         float dmg = amount;
         if (!Float.isFinite(dmg) || dmg <= 0) return;
         SETTLED.set(true);
         try {
+            // P3：目标类覆写了 setHealth/getHealth/actuallyHurt → 走 IMPL_LOOKUP 基类通道
+            net.minecraft.client.yiz.tool.defense.DefenseProfile p =
+                net.minecraft.client.yiz.tool.defense.DefenseProfile.cached(target.getClass().getName());
+            boolean customHealth = p != null && p.overrides != null
+                && (p.overrides.contains("setHealth") || p.overrides.contains("getHealth")
+                    || p.overrides.contains("actuallyHurt"));
+            if (customHealth
+                    && YizConfig.bool("pohuan.base_health")
+                    && net.minecraft.client.yiz.tool.defense.P3BaseHealth.settle(target, source, dmg)) {
+                if (SETTLE_LOGGED.add(target.getClass())) {
+                    LOGGER.info("[破幻寻真] 基类生命通道结算 amount={}（绕过自定义生命覆写）", dmg);
+                }
+                return;
+            }
             ((LivingEntityActuallyHurtAccessor) target).yizmodqzk$actuallyHurt(source, dmg);
             if (SETTLE_LOGGED.add(target.getClass())) {
                 LOGGER.info("[破幻寻真] 伤害被防御吞掉 → actuallyHurt 结算 amount={}", dmg);
