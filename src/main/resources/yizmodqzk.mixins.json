@@ -39,7 +39,8 @@
     "ItemCfgMobTargetGateMixin",
     "ItemCfgHurtGateMixin",
     "ItemCfgTotemGateMixin",
-    "ItemCfgInventoryTickGateMixin"
+    "ItemCfgInventoryTickGateMixin",
+    "GoalSelectorSnapshotMixin"
   ],
   "client": [
     "LiquidBlockShapeMixin",
