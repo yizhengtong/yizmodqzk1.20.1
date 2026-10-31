@@ -23,30 +23,35 @@ public abstract class PohuanHurtMixin {
     @Inject(method = "hurt", at = @At("HEAD"), cancellable = true)
     private void yizmodqzk$pohuanHurtHead(DamageSource source, float amount,
                                          CallbackInfoReturnable<Boolean> cir) {
+        // 正在执行“基类 hurt 结算”：直接走原方法体，不再递归
+        if (PohuanXunzhen.isInBaseHurt()) return;
         LivingEntity self = (LivingEntity) (Object) this;
         if (source.getEntity() instanceof LivingEntity attacker) {
             boolean breached = PohuanXunzhen.onHurtHead(attacker, self);
             // hurt 内用虚拟方法/状态机限伤（DamageCap()/RangeLimit()/damageBucket）时，
-            // 直接绕过整个覆写，走基类 actuallyHurt 结算。
+            // 跳过子类覆写，改调基类 LivingEntity.hurt（保留伤害修正/暴击/穿甲）。
             if (breached && PohuanXunzhen.shouldSkipHurt(self)) {
                 if (yizmodqzk$SKIP_LOGGED.add(self.getClass().getName())) {
                     net.minecraft.client.yiz.tizMod.LOGGER.info(
-                        "[破幻寻真] 跳过自定义 hurt：{} amount={} → 基类 actuallyHurt",
+                        "[破幻寻真] 跳过自定义 hurt：{} amount={} → 基类 LivingEntity.hurt",
                         self.getClass().getName(), amount);
                 }
+                boolean result;
                 try {
-                    PohuanXunzhen.settleDirect(self, source, amount);
+                    result = PohuanXunzhen.runBaseHurt(self, source, amount);
                 } finally {
                     PohuanXunzhen.endBreach();
                 }
-                cir.setReturnValue(true);
+                cir.setReturnValue(result);
             }
         }
     }
 
-    @Inject(method = "hurt", at = @At("RETURN"))
+    @Inject(method = "hurt", at = @At("RETURN"), cancellable = true)
     private void yizmodqzk$pohuanHurtReturn(DamageSource source, float amount,
                                            CallbackInfoReturnable<Boolean> cir) {
+        // 基类 hurt 的 RETURN 由外层 force_base_hurt 调用方处理，避免提前清上下文
+        if (PohuanXunzhen.isInBaseHurt()) return;
         LivingEntity self = (LivingEntity) (Object) this;
         try {
             PohuanXunzhen.onHurtReturn(self, source, amount, cir.getReturnValue());

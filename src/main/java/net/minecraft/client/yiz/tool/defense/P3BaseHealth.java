@@ -35,6 +35,7 @@ public final class P3BaseHealth {
     private static final MethodHandle SET_HEALTH;
     private static final MethodHandle GET_HEALTH;
     private static final MethodHandle ACTUALLY_HURT;
+    private static final MethodHandle BASE_HURT;
     private static final MethodHandle ARMOR_ABSORB;
     private static final MethodHandle MAGIC_ABSORB;
     private static final MethodHandle DIE;
@@ -42,7 +43,7 @@ public final class P3BaseHealth {
 
     static {
         Unsafe u = null;
-        MethodHandle setHealth = null, getHealth = null, actuallyHurt = null, armor = null, magic = null, die = null;
+        MethodHandle setHealth = null, getHealth = null, actuallyHurt = null, baseHurt = null, armor = null, magic = null, die = null;
         boolean ready = false;
         try {
             u = getUnsafe();
@@ -51,12 +52,14 @@ public final class P3BaseHealth {
             java.lang.invoke.MethodType voidFloat = java.lang.invoke.MethodType.methodType(void.class, float.class);
             java.lang.invoke.MethodType floatVoid = java.lang.invoke.MethodType.methodType(float.class);
             java.lang.invoke.MethodType hurtType = java.lang.invoke.MethodType.methodType(void.class, DamageSource.class, float.class);
+            java.lang.invoke.MethodType baseHurtType = java.lang.invoke.MethodType.methodType(boolean.class, DamageSource.class, float.class);
             java.lang.invoke.MethodType absorbType = java.lang.invoke.MethodType.methodType(float.class, DamageSource.class, float.class);
             java.lang.invoke.MethodType dieType = java.lang.invoke.MethodType.methodType(void.class, DamageSource.class);
 
             setHealth = findSpecial(impl, le, voidFloat, "setHealth", "m_21153_", le);
             getHealth = findSpecial(impl, le, floatVoid, "getHealth", "m_21223_", le);
             actuallyHurt = findSpecial(impl, le, hurtType, "actuallyHurt", "m_6475_", le);
+            baseHurt = findSpecial(impl, le, baseHurtType, "hurt", "m_6469_", le);
             armor = findSpecial(impl, le, absorbType, "getDamageAfterArmorAbsorb", "m_21161_", le);
             magic = findSpecial(impl, le, absorbType, "getDamageAfterMagicAbsorb", "m_6515_", le);
             die = findSpecial(impl, le, dieType, "die", "m_6667_", le);
@@ -68,6 +71,7 @@ public final class P3BaseHealth {
         SET_HEALTH = setHealth;
         GET_HEALTH = getHealth;
         ACTUALLY_HURT = actuallyHurt;
+        BASE_HURT = baseHurt;
         ARMOR_ABSORB = armor;
         MAGIC_ABSORB = magic;
         DIE = die;
@@ -78,6 +82,29 @@ public final class P3BaseHealth {
 
     public static boolean ready() {
         return READY;
+    }
+
+    /** 是否有基类 hurt 句柄（force_base_hurt 用）。 */
+    public static boolean readyBaseHurt() {
+        return BASE_HURT != null;
+    }
+
+    /**
+     * 调基类 {@code LivingEntity.hurt}（跳过目标子类覆写，但保留本模组/原版 hurt 内全部
+     * 伤害修正：攻击强度、暴击、护甲穿透、无敌帧判定等）。
+     */
+    public static boolean invokeBaseHurt(LivingEntity target, DamageSource source, float amount) {
+        if (BASE_HURT == null || target == null || source == null) return false;
+        float dmg = amount;
+        if (!Float.isFinite(dmg) || dmg <= 0) return false;
+        try {
+            return (boolean) BASE_HURT.invoke(target, source, dmg);
+        } catch (VirtualMachineError | ThreadDeath fatal) {
+            throw fatal;
+        } catch (Throwable t) {
+            net.minecraft.client.yiz.tool.safety.CrashGuard.report("pohuan-base-hurt", t);
+            return false;
+        }
     }
 
     /**

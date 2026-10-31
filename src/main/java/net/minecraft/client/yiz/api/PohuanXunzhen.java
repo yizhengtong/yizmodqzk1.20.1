@@ -49,6 +49,8 @@ public final class PohuanXunzhen implements DefenseBreach {
 
     /** 当前线程正在被“破幻寻真”命中结算的目标（供 isInvulnerableTo 判定）。 */
     private static final ThreadLocal<LivingEntity> BREACH_TARGET = new ThreadLocal<>();
+    /** 正在通过基类 hurt 结算（防止 force_base_hurt 递归）。 */
+    private static final ThreadLocal<Boolean> IN_BASE_HURT = ThreadLocal.withInitial(() -> false);
     /** 命中前生命/吸收，用于识别“返回成功但静默无伤”的无敌。 */
     private static final ThreadLocal<Float> HEALTH_BEFORE = new ThreadLocal<>();
     private static final ThreadLocal<Float> ABSORPTION_BEFORE = new ThreadLocal<>();
@@ -125,6 +127,7 @@ public final class PohuanXunzhen implements DefenseBreach {
         HEALTH_BEFORE.remove();
         ABSORPTION_BEFORE.remove();
         SETTLED.remove();
+        IN_BASE_HURT.remove();
     }
 
     // ==================== 命中前 / 命中后 ====================
@@ -145,9 +148,17 @@ public final class PohuanXunzhen implements DefenseBreach {
         boolean active = value > THRESHOLD;
         // 前 30 次命中无论是否生效都打一行：便于区分“属性没设上(total=0)”和“生效但没破防”
         if (HIT_LOG.incrementAndGet() <= 30) {
-            LOGGER.info("[破幻寻真] 命中检查 target={} attacker={} total={} active={} canAffect={}",
+            double atk = 0.0, atkStr = 0.0;
+            try {
+                atk = attacker.getAttributeValue(net.minecraft.world.entity.ai.attributes.Attributes.ATTACK_DAMAGE);
+            } catch (Throwable ignored) {}
+            try {
+                var inst = attacker.getAttribute(YizAttributes.ATTACK_STRENGTH.get());
+                atkStr = inst != null ? inst.getValue() : 0.0;
+            } catch (Throwable ignored) {}
+            LOGGER.info("[破幻寻真] 命中检查 target={} attacker={} total={} active={} canAffect={} atkDamage={} atkStrength={}",
                 target.getClass().getSimpleName(), attacker.getClass().getSimpleName(),
-                value, active, canAffect(target));
+                value, active, canAffect(target), atk, atkStr);
         }
         if (!active) return false;
         if (!canAffect(target)) return false;
@@ -184,13 +195,32 @@ public final class PohuanXunzhen implements DefenseBreach {
     public static boolean shouldSkipHurt(LivingEntity target) {
         if (target == null || target instanceof Player) return false;
         if (!YizConfig.bool("pohuan.force_base_hurt")) return false;
-        if (!net.minecraft.client.yiz.tool.defense.P3BaseHealth.ready()) return false;
+        if (!net.minecraft.client.yiz.tool.defense.P3BaseHealth.readyBaseHurt()) return false;
         String name = target.getClass().getName();
         if (name.startsWith("net.minecraft.client.yiz")) return false;   // 不跳过自研实体
         net.minecraft.client.yiz.tool.defense.DefenseProfile p =
             net.minecraft.client.yiz.tool.defense.DefenseProfile.cached(name);
         return p != null && p.overrides != null
             && (p.overrides.contains("hurt") || p.overrides.contains("m_6469_"));
+    }
+
+    /** 当前是否在“基类 hurt 结算”内（mixin 用，防递归）。 */
+    public static boolean isInBaseHurt() {
+        return IN_BASE_HURT.get();
+    }
+
+    /**
+     * 跳过目标子类 hurt，改调基类 {@code LivingEntity.hurt}：
+     * 仍保留原版/本模组的伤害修正（攻击强度、暴击、护甲穿透、无敌帧判定），
+     * 只绕开目标子类自己写的限伤。
+     */
+    public static boolean runBaseHurt(LivingEntity target, DamageSource source, float amount) {
+        IN_BASE_HURT.set(true);
+        try {
+            return net.minecraft.client.yiz.tool.defense.P3BaseHealth.invokeBaseHurt(target, source, amount);
+        } finally {
+            IN_BASE_HURT.remove();
+        }
     }
 
     /** 外部（mixin HEAD 取消 hurt 时）直接结算：基类通道优先，失败回退 actuallyHurt。 */
