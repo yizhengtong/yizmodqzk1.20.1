@@ -42,7 +42,9 @@ public final class DefenseProfile {
     public static final class FieldCandidate {
         public String owner;
         public String name;
-        public String desc;   // I / J / F / D
+        public String desc;   // I / J / F / D / Z
+        /** 结构语义：null=按名字的 cap/cooldown 候选；bool=布尔门；time=绝对/游戏时间门；timer=每 tick 递减计时器。 */
+        public String kind;
 
         public FieldCandidate() {}
 
@@ -50,6 +52,11 @@ public final class DefenseProfile {
             this.owner = owner;
             this.name = name;
             this.desc = desc;
+        }
+
+        public FieldCandidate(String owner, String name, String desc, String kind) {
+            this(owner, name, desc);
+            this.kind = kind;
         }
     }
 
@@ -59,6 +66,8 @@ public final class DefenseProfile {
     public List<String> overrides = new ArrayList<>();
     public List<CapCandidate> caps = new ArrayList<>();
     public List<FieldCandidate> fields = new ArrayList<>();
+    /** 结构语义门（bool/time/timer），名字不可靠时也能量到。 */
+    public List<FieldCandidate> gates = new ArrayList<>();
 
     public DefenseProfile() {}
 

@@ -49,6 +49,10 @@ public final class PohuanXunzhen implements DefenseBreach {
 
     /** 当前线程正在被“破幻寻真”命中结算的目标（供 isInvulnerableTo 判定）。 */
     private static final ThreadLocal<LivingEntity> BREACH_TARGET = new ThreadLocal<>();
+    /** 命中前生命/吸收，用于识别“返回成功但静默无伤”的无敌。 */
+    private static final ThreadLocal<Float> HEALTH_BEFORE = new ThreadLocal<>();
+    private static final ThreadLocal<Float> ABSORPTION_BEFORE = new ThreadLocal<>();
+    private static final ThreadLocal<Boolean> SETTLED = ThreadLocal.withInitial(() -> false);
 
     /** 已扫描过的类（每类一次）。 */
     private static final Set<Class<?>> SCANNED = ConcurrentHashMap.newKeySet();
@@ -114,6 +118,9 @@ public final class PohuanXunzhen implements DefenseBreach {
             }
         } catch (Throwable ignored) {}
         BREACH_TARGET.remove();
+        HEALTH_BEFORE.remove();
+        ABSORPTION_BEFORE.remove();
+        SETTLED.remove();
     }
 
     // ==================== 命中前 / 命中后 ====================
@@ -130,6 +137,11 @@ public final class PohuanXunzhen implements DefenseBreach {
         if (!canAffect(target)) return false;
 
         beginBreach(target);
+        SETTLED.set(false);
+        try {
+            HEALTH_BEFORE.set(target.getHealth());
+            ABSORPTION_BEFORE.set(target.getAbsorptionAmount());
+        } catch (Throwable ignored) {}
         if (YizConfig.bool("pohuan.zero_iframes")) {
             try {
                 target.invulnerableTime = 0;
@@ -147,26 +159,49 @@ public final class PohuanXunzhen implements DefenseBreach {
     }
 
     /**
-     * {@code LivingEntity.hurt} RETURN：若目标逻辑拒绝了本次伤害，改走 actuallyHurt 结算。
+     * {@code LivingEntity.hurt} RETURN：处理两类“防御”。
      *
-     * @param success {@code hurt} 的返回值；true = 正常结算，不需要兜底
+     * <ul>
+     *   <li>返回 false（无敌/免疫/自定义拒绝）→ 改走 actuallyHurt；</li>
+     *   <li>返回 true 但生命与吸收都没变化（静默无敌，常见于完全不看 tick 的状态机）
+     *       → 同样改走 actuallyHurt。</li>
+     * </ul>
      */
     public static void onHurtReturn(LivingEntity target, DamageSource source, float amount, boolean success) {
-        if (success || target == null || source == null) return;
-        if (!YizConfig.bool("pohuan.settle_rejected")) return;
+        if (target == null || source == null) return;
         if (!isBreaching(target)) return;
         if (target.isRemoved() || !target.isAlive()) return;
-        settleRejected(target, source, amount);
+        if (SETTLED.get()) return;
+
+        if (!success) {
+            if (YizConfig.bool("pohuan.settle_rejected")) settleRejected(target, source, amount);
+            return;
+        }
+        if (!YizConfig.bool("pohuan.settle_no_damage")) return;
+
+        Float before = HEALTH_BEFORE.get();
+        Float absBefore = ABSORPTION_BEFORE.get();
+        if (before == null || !Float.isFinite(before)) return;
+        try {
+            float after = target.getHealth();
+            float absAfter = target.getAbsorptionAmount();
+            float abs0 = absBefore == null ? 0.0F : absBefore;
+            // 生命没掉、吸收也没掉 = 本次伤害被静默吞掉（不区分是哪种无敌/状态机）
+            if (Float.isFinite(after) && after >= before - 0.01F && absAfter >= abs0 - 0.01F) {
+                settleRejected(target, source, amount);
+            }
+        } catch (Throwable ignored) {}
     }
 
     /** 直接走 actuallyHurt 结算（已含护甲/魔咒减免，但跳过 hurt 的无敌/上限/自定义拒绝）。 */
     private static void settleRejected(LivingEntity target, DamageSource source, float amount) {
         float dmg = amount;
         if (!Float.isFinite(dmg) || dmg <= 0) return;
+        SETTLED.set(true);
         try {
             ((LivingEntityActuallyHurtAccessor) target).yizmodqzk$actuallyHurt(source, dmg);
             if (SETTLE_LOGGED.add(target.getClass())) {
-                LOGGER.info("[破幻寻真] {} 拒绝伤害 → actuallyHurt 结算 amount={}", target.getClass().getName(), dmg);
+                LOGGER.info("[破幻寻真] 伤害被防御吞掉 → actuallyHurt 结算 amount={}", dmg);
             }
         } catch (VirtualMachineError | ThreadDeath fatal) {
             throw fatal;
@@ -203,8 +238,16 @@ public final class PohuanXunzhen implements DefenseBreach {
                     if (n++ >= 8) break;
                     fields.append(f.name).append(',');
                 }
-                LOGGER.info("[破幻寻真] 防御画像 {}：覆写={} 上限常量=[{}] 字段=[{}]",
-                    cls.getName(), p.overrides, caps, fields);
+                StringBuilder gates = new StringBuilder();
+                n = 0;
+                if (p.gates != null) {
+                    for (var g : p.gates) {
+                        if (n++ >= 12) break;
+                        gates.append(g.name).append(':').append(g.kind).append(',');
+                    }
+                }
+                LOGGER.info("[破幻寻真] 防御画像 {}：覆写={} 上限常量=[{}] 字段=[{}] 结构门=[{}]",
+                    cls.getName(), p.overrides, caps, fields, gates);
             }
             if (YizConfig.bool("pohuan.bytecode_patch") && !p.caps.isEmpty()) {
                 net.minecraft.client.yiz.tool.defense.DefensePatcher.requestPatch(cls);

@@ -44,32 +44,48 @@ public final class DefenseFieldBreaker {
     public static void neutralize(LivingEntity target) {
         if (target == null) return;
         DefenseProfile p = DefenseProfile.cached(target.getClass().getName());
-        if (p == null || p.fields.isEmpty()) return;
+        if (p == null) return;
         List<Object[]> snap = SNAPSHOT.get();
         restore();   // 防上次异常未还原
-        boolean logged = false;
-        for (DefenseProfile.FieldCandidate c : p.fields) {
-            String ln = c.name.toLowerCase(Locale.ROOT);
-            if (SKIP.matcher(ln).matches()) continue;
-            boolean isCap = CAP.matcher(ln).matches();
-            boolean isZero = ZERO.matcher(ln).matches();
-            if (!isCap && !isZero) continue;
-            try {
-                Field f = resolve(target.getClass(), c.name, c.desc);
-                if (f == null || Modifier.isStatic(f.getModifiers())) continue;
-                Object old = f.get(target);
-                Object now = isCap ? maxFor(f.getType()) : zeroFor(f.getType());
-                if (now == null || now.equals(old)) continue;
-                f.set(target, now);
-                snap.add(new Object[]{f, old, target});
-                if (!logged && LOGGED.add(p.className + "#" + c.name)) {
-                    logged = true;
-                    LOGGER.info("[破幻寻真] 字段破除 {}#{}: {} → {}", p.className, c.name, old, now);
-                }
-            } catch (Throwable ignored) {
-                // 单个字段失败不影响其它字段/伤害结算
+
+        if (p.fields != null) {
+            for (DefenseProfile.FieldCandidate c : p.fields) {
+                if (c.name == null) continue;
+                String ln = c.name.toLowerCase(Locale.ROOT);
+                if (SKIP.matcher(ln).matches()) continue;
+                boolean isCap = CAP.matcher(ln).matches();
+                boolean isZero = ZERO.matcher(ln).matches();
+                if (!isCap && !isZero) continue;
+                apply(target, c, isCap ? maxFor(typeOf(c.desc)) : zeroFor(typeOf(c.desc)), p.className, snap);
             }
         }
+
+        // 结构语义门（名字不可靠也能命中）：boolean 门 → false；时间/计时器门 → 0
+        if (net.minecraft.client.yiz.core.YizConfig.bool("pohuan.structural_gates") && p.gates != null) {
+            for (DefenseProfile.FieldCandidate g : p.gates) {
+                if (g.name == null || g.kind == null) continue;
+                // 不改原版核心类（Entity/LivingEntity 等）的内部状态，避免破坏基础逻辑
+                if (g.owner != null && g.owner.startsWith("net/minecraft/world/entity/")) continue;
+                Object now = "bool".equals(g.kind) ? Boolean.FALSE : zeroFor(typeOf(g.desc));
+                if (now != null) apply(target, g, now, p.className, snap);
+            }
+        }
+    }
+
+    private static void apply(LivingEntity target, DefenseProfile.FieldCandidate c, Object now,
+                              String className, List<Object[]> snap) {
+        try {
+            Field f = resolve(target.getClass(), c.name, c.desc);
+            if (f == null || Modifier.isStatic(f.getModifiers())) return;
+            Object old = f.get(target);
+            if (now == null || now.equals(old)) return;
+            f.set(target, now);
+            snap.add(new Object[]{f, old, target});
+            if (LOGGED.add(className + "#" + c.name + "#" + c.kind)) {
+                LOGGER.info("[破幻寻真] 字段破除 {}#{}: {} → {}{}", className, c.name, old, now,
+                    c.kind == null ? "" : " (" + c.kind + ")");
+            }
+        } catch (Throwable ignored) {}
     }
 
     /** 还原本次命中前记录的原值。 */
@@ -110,7 +126,19 @@ public final class DefenseFieldBreaker {
             case "J" -> t == long.class;
             case "F" -> t == float.class;
             case "D" -> t == double.class;
+            case "Z" -> t == boolean.class;
             default -> false;
+        };
+    }
+
+    private static Class<?> typeOf(String desc) {
+        return switch (desc) {
+            case "I" -> int.class;
+            case "J" -> long.class;
+            case "F" -> float.class;
+            case "D" -> double.class;
+            case "Z" -> boolean.class;
+            default -> null;
         };
     }
 
