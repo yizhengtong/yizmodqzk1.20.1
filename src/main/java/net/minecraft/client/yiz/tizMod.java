@@ -134,6 +134,7 @@ public class tizMod {
             e.add(player, YizAttributes.LIFE_REGEN_PCT.get());
             e.add(player, YizAttributes.POSHI.get());
             e.add(player, YizAttributes.POXIAN.get());
+            e.add(player, YizAttributes.POHUAN_XUNZHEN.get());
             e.add(player, YizAttributes.PROJECTILE_REFLECTION.get());
             e.add(player, YizAttributes.NO_COLLISION.get());
             e.add(player, YizAttributes.ATTACK_RANGE.get());

@@ -77,6 +77,14 @@ public final class YizConfig {
     public static final ForgeConfigSpec.BooleanValue FINITE_GUARD;
     public static final ForgeConfigSpec.BooleanValue DISCARD_ON_ERROR;
 
+    // 破幻寻真（防御破除）
+    public static final ForgeConfigSpec.BooleanValue POHUAN_ENABLED;
+    public static final ForgeConfigSpec.BooleanValue POHUAN_AFFECT_PLAYERS;
+    public static final ForgeConfigSpec.BooleanValue POHUAN_ZERO_IFRAMES;
+    public static final ForgeConfigSpec.BooleanValue POHUAN_SETTLE_REJECTED;
+    public static final ForgeConfigSpec.BooleanValue POHUAN_BREAK_CREATIVE_INVULN;
+    public static final ForgeConfigSpec.BooleanValue POHUAN_SCAN_LOG;
+
     public static final ForgeConfigSpec SPEC;
 
     static {
@@ -137,6 +145,23 @@ public final class YizConfig {
             "有限值净化：拒绝 NaN/Infinity 的血量与属性写入（死亡仍按 0/已死处理）");
         DISCARD_ON_ERROR = define("safety", "discard_on_error", false, When.LIVE,
             "实体的每 tick 维护抛异常时是否丢弃实体（默认关：只记录日志，避免误删 Boss/玩家实体）");
+        B.pop();
+
+        B.comment("破幻寻真（防御破除）",
+                  "属性 yizmodqzk:pohuan_xunzhen 总值 > 1 生效；只改防御参数（无敌帧/无敌判定/上限），不写生命值。",
+                  "对创造/旁观玩家无效（只看游戏模式）；生存玩家即使被套创造式无敌也可破。").push("pohuan");
+        POHUAN_ENABLED = define("pohuan", "enabled", true, When.LIVE,
+            "总开关：关闭后本属性完全不生效");
+        POHUAN_AFFECT_PLAYERS = define("pohuan", "affect_players", true, When.LIVE,
+            "是否对玩家目标生效（创造/旁观模式始终无效）");
+        POHUAN_ZERO_IFRAMES = define("pohuan", "zero_iframes", true, When.LIVE,
+            "命中前清零无敌帧与受击硬直（invulnerableTime/hurtTime）");
+        POHUAN_SETTLE_REJECTED = define("pohuan", "settle_rejected", true, When.LIVE,
+            "hurt 被目标逻辑拒绝时，改走 actuallyHurt 结算（绕过无敌/免疫/自定义拒绝）");
+        POHUAN_BREAK_CREATIVE_INVULN = define("pohuan", "break_creative_invuln", true, When.LIVE,
+            "生存/冒险玩家被套创造式无敌（abilities.invulnerable）时强制可受伤");
+        POHUAN_SCAN_LOG = define("pohuan", "scan_log", true, When.LIVE,
+            "首次命中某实体类时打印防御扫描结果（覆写方法/上限字段），用于排查");
         B.pop();
 
         SPEC = B.build();

@@ -97,6 +97,8 @@ public record EditableAttribute(
         yiz("combo_value",         "连击倍率",     false, "%"),
         yiz("combo_count",         "连击次数",     false, "次"),
         yiz("undying",             "不死",         false, "次"),
+        // 破幻寻真：总值 >1 生效，全深度破除无敌帧/无敌判定/伤害上限（不改生命值）
+        yiz("pohuan_xunzhen",      "破幻寻真",     false, ""),
 
         // ── 迁移自 EffectTag 的原生属性 ────────────────
         yiz("move_speed",           "移动速度",     false, ""),
