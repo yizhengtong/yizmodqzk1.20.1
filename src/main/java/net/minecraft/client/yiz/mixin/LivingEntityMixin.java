@@ -597,13 +597,26 @@ public abstract class LivingEntityMixin implements HealthDataBridge, ControlData
 
     // ==================== 击退免疫 / 移除保护 / 水下呼吸 / 步高 / 护甲穿透 ====================
 
-    @Inject(method = "knockback", at = @At("HEAD"), cancellable = true)
-    private void yizmodqzk$onKnockback(double d0, double d1, double d2, CallbackInfo ci) {
+    /**
+     * 击退免疫按百分比生效，不再“>0 即完全免疫”：
+     * 0.25/0.5/0.75 分别保留 75%/50%/25% 击退，>=1 完全免疫。
+     * 这样极尽四件套每件 +0.25 是线性叠加的。
+     */
+    @ModifyVariable(method = "knockback", at = @At("HEAD"), argsOnly = true, ordinal = 0)
+    private double yizmodqzk$modifyKnockback(double strength) {
         LivingEntity self = (LivingEntity) (Object) this;
-        var inst = self.getAttribute(YizAttributes.KNOCKBACK_IMMUNITY.get());
-        if (inst != null && inst.getValue() > 0) {
-            ci.cancel();
+        if (KnockbackImmunityRegistry.isImmune(self)) {
+            return 0.0D;
         }
+        var inst = self.getAttribute(YizAttributes.KNOCKBACK_IMMUNITY.get());
+        if (inst == null) {
+            return strength;
+        }
+        double immunity = inst.getValue();
+        if (immunity <= 0.0D) {
+            return strength;
+        }
+        return strength * Math.max(0.0D, 1.0D - Math.min(1.0D, immunity));
     }
 
     @Inject(method = "remove", at = @At("HEAD"), cancellable = true)

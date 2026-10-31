@@ -6,6 +6,11 @@
   "refmap": "yizmodqzk.refmap.json",
   "mixins": [
     "LivingEntityMixin",
+    "ExplosionKnockbackMixin",
+    "EntityPushMixin",
+    "IronGolemKnockbackMixin",
+    "FishingHookKnockbackMixin",
+    "PistonMovingBlockEntityKnockbackMixin",
     "SynchedEntityDataDefineIdMixin",
     "LivingEntityBleedMixin",
     "LivingEntityActuallyHurtAccessor",
@@ -45,7 +50,8 @@
     "ItemRendererMirrorExclusionMixin",
     "HumanoidArmorLayerMirrorExclusionMixin",
     "LivingEntityRendererLaunchTiltMixin",
-    "PlayerRangeMixin"
+    "PlayerRangeMixin",
+    "ClientExplosionKnockbackMixin"
   ],
   "injectors": {
     "defaultRequire": 1
