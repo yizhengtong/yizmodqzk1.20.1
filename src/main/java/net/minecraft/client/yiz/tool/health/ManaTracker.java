@@ -73,12 +73,10 @@ public final class ManaTracker {
         return true;
     }
 
-    /** 读取 MAX_MANA 属性值作为上限（安全护栏：NaN/Infinity/负数回退默认 200）。 */
+    /** 读取 MAX_MANA 属性值作为上限。 */
     public static float getMax(LivingEntity entity) {
         var inst = entity.getAttribute(YizAttributes.MAX_MANA.get());
-        if (inst == null) return 200f;
-        float v = (float) inst.getValue();
-        return Float.isFinite(v) && v >= 0 ? v : 200f;
+        return inst != null ? (float) inst.getValue() : 200f;
     }
 
     /** 每 tick 回蓝（由 tizMod 调用）。 */

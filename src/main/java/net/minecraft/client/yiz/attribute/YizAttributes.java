@@ -370,12 +370,6 @@ public final class YizAttributes {
         ATTRIBUTES.register("poxian",
             () -> new RangedAttribute("attribute.yizmodqzk.poxian", 0.0, 0.0, 100.0).setSyncable(true));
 
-    /** 破幻寻真 — 总值 &gt; 1 生效，全深度破除防御（无敌帧/受击硬直/无敌判定/伤害上限）。
-     *  只改防御参数，不写生命值；对创造/旁观玩家无效（只看游戏模式）。 */
-    public static final RegistryObject<Attribute> POHUAN_XUNZHEN =
-        ATTRIBUTES.register("pohuan_xunzhen",
-            () -> new RangedAttribute("attribute.yizmodqzk.pohuan_xunzhen", 0.0, 0.0, 100.0).setSyncable(true));
-
     /** 弹射物反射半径 — 值域 ≥0。命中时转移投射物所有权并重定向。 */
     public static final RegistryObject<Attribute> PROJECTILE_REFLECTION =
         ATTRIBUTES.register("projectile_reflection",

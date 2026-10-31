@@ -39,10 +39,7 @@
     "ItemCfgMobTargetGateMixin",
     "ItemCfgHurtGateMixin",
     "ItemCfgTotemGateMixin",
-    "ItemCfgInventoryTickGateMixin",
-    "PohuanHurtMixin",
-    "PohuanInvulnerableMixin",
-    "PohuanPlayerMixin"
+    "ItemCfgInventoryTickGateMixin"
   ],
   "client": [
     "LiquidBlockShapeMixin",

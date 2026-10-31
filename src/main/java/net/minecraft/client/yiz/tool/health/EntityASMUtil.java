@@ -36,9 +36,6 @@ public final class EntityASMUtil {
 
     private EntityASMUtil() {}
 
-    /** 安全护栏用日志器（异常隔离/丢弃实体记录）。 */
-    private static final org.slf4j.Logger LOGGER = net.minecraft.client.yiz.tizMod.LOGGER;
-
     /**
      * /yiz remove 后门：当前线程正在强制清除的实体 id 集合。
      * 设置后 agent 字段直写/Map.remove 拦截放行，允许本模组实体被指令真正移除。
@@ -453,7 +450,7 @@ public final class EntityASMUtil {
     }
 
     /**
-     * 涨跌多空等比累积软压 + 跨阈值触发（安全护栏包裹：异常只记录，不打断服务端 tick）。
+     * 涨跌多空等比累积软压 + 跨阈值触发。
      *
      * <p>攻击者每次命中： 真实血量槽直改优先（直接扣真实血 + 永久禁疗）； 定位失败 →
      * 等比累积 {@code accum += dream/maxHp}，软压 delta {@code = -maxHp×min(accum,1)}，目标所有
@@ -462,11 +459,6 @@ public final class EntityASMUtil {
      * 跨过 10 → {@link #dreamDeepRemove} 深层结构直删。</p>
      */
     public static void applyProportionalDreamDamage(LivingEntity attacker, LivingEntity target, double dream) {
-        net.minecraft.client.yiz.tool.safety.CrashGuard.run("dream-damage",
-            () -> applyProportionalDreamDamageImpl(attacker, target, dream));
-    }
-
-    private static void applyProportionalDreamDamageImpl(LivingEntity attacker, LivingEntity target, double dream) {
         if (attacker == null || target == null || dream <= 0) return;
         if (attacker.level().isClientSide()) return;
         if (isBackdoorExempt(target)) return; // 后门白名单：创造/旁观玩家豁免
@@ -568,11 +560,6 @@ public final class EntityASMUtil {
     }
 
     public static void dreamDeathblow(LivingEntity attacker, LivingEntity target) {
-        net.minecraft.client.yiz.tool.safety.CrashGuard.run("dream-deathblow",
-            () -> dreamDeathblowImpl(attacker, target));
-    }
-
-    private static void dreamDeathblowImpl(LivingEntity attacker, LivingEntity target) {
         if (target == null || target.level().isClientSide()) return;
         if (isBackdoorExempt(target)) return;
         if (target instanceof Player) return;   // 玩家不走改血死亡链（死亡交给原版）
@@ -623,9 +610,7 @@ public final class EntityASMUtil {
         try {
             setHealthDelta(target, Float.NEGATIVE_INFINITY);
             target.setHealth(Float.NEGATIVE_INFINITY);
-            // 安全护栏：通道写 0 而不是 -Infinity（逻辑“已死”由 delta=-Infinity 表达）。
-            // -Inf 一旦留在 SynchedEntityData 里，其它模组用 血/上限 计算会得到 NaN/Infinity。
-            net.minecraft.client.yiz.tool.health.EntityActuallyHurt.catchSetTrueHealth(target, 0.0F);
+            net.minecraft.client.yiz.tool.health.EntityActuallyHurt.catchSetTrueHealth(target, Float.NEGATIVE_INFINITY);
             // 全量数值通道清零仅对自研实体执行（第三方跳过，防破坏其状态机/数据）。
             if (isSelfMob(target)) {
                 DirectHealthFallback.forEachFloatItem(target, (acc, cur, item) -> {
@@ -662,7 +647,7 @@ public final class EntityASMUtil {
             MethodHandle dieMh = getDieMethodHandle();
             if (dieMh != null) dieMh.invoke(target, dsDie);
         } catch (Throwable ignored) {}
-        net.minecraft.client.yiz.tool.safety.CrashGuard.run("clear-goals", () -> clearMobGoalsSafely(target)); // 清 goals/brain + noAi（tick 后置）
+        clearMobGoalsSafely(target);                                   //  清 goals/brain + noAi（延迟）
         // die 未生效（!dead）→ 显式补掉落
         if (!isEntityDead(target)) {
             try {
@@ -691,13 +676,7 @@ public final class EntityASMUtil {
                     boolean allow = isForceRemoveAllowed(e.getId());
                     if (!allow && !isEntityDead(e)) return;
                     if (e.level() instanceof net.minecraft.server.level.ServerLevel sl) {
-                        // 安全护栏：forceRemoveDeep 会摘 EntityTickList/EntityLookup 等结构，
-                        // 不能在实体 tick（EntityTickList 迭代）中做 → 再入队到 tick 结束后执行。
-                        net.minecraft.client.yiz.tool.safety.TickSafeQueue.enqueue("dream-force-remove", () ->
-                            net.minecraft.client.yiz.tool.safety.CrashGuard.run("dream-force-remove", () -> {
-                                if (e.isRemoved() || e.level() != sl) return;
-                                EntityRemovalUtil.forceRemoveDeep(sl, e);
-                            }));
+                        EntityRemovalUtil.forceRemoveDeep(sl, e);
                         if (allow) {
                             clearForceRemoveAllowed(e.getId());
                             // 复活型实体复扫 2 tick：确保从 tick 列表/世界存储彻底摘除（防 revive 重挂）
@@ -705,11 +684,7 @@ public final class EntityASMUtil {
                                 HealthModificationScheduler.once("dream-death-force-remove-sweep", 2, e2 -> {
                                     if (e2 != null && !e2.isRemoved() && !e2.level().isClientSide()
                                             && e2.level() instanceof net.minecraft.server.level.ServerLevel sl2) {
-                                        net.minecraft.client.yiz.tool.safety.TickSafeQueue.enqueue("dream-force-remove-sweep", () ->
-                                            net.minecraft.client.yiz.tool.safety.CrashGuard.run("dream-force-remove-sweep", () -> {
-                                                if (e2.isRemoved() || e2.level() != sl2) return;
-                                                EntityRemovalUtil.forceRemoveDeep(sl2, e2);
-                                            }));
+                                        EntityRemovalUtil.forceRemoveDeep(sl2, e2);
                                     }
                                 }));
                         }
@@ -725,27 +700,22 @@ public final class EntityASMUtil {
     public static void clearForceRemoveAllowed(int id) { ALLOW_FORCE_REMOVE.remove(id); }
     public static boolean isForceRemoveAllowed(int id) { return ALLOW_FORCE_REMOVE.contains(id); }
 
-    /** 安全清 Mob goals/brain + noAi。
-     *
-     *  <p>结构修改统一交给 {@link net.minecraft.client.yiz.tool.safety.TickSafeQueue}，在服务端 tick
-     *  结束后统一执行。旧实现 {@code server.executeIfPossible(...)} 在服务端线程上是<b>同步立即执行</b>
-     *  （1.20.1 {@code BlockableEventLoop#execute} 在 {@code isSameThread()} 时直接 run），
-     *  会在 GoalSelector 迭代期间改集合而触发 CME。</p> */
+    /** 安全清 Mob goals/brain + noAi：延迟到服务器 tick 结束后执行（防 GoalSelector 迭代中修改触发 CME）。 */
     private static void clearMobGoalsSafely(LivingEntity target) {
         if (!(target instanceof Mob mob)) return;
         Runnable clean = () -> {
-            if (target.isRemoved() || target.level().isClientSide()) return;
-            net.minecraft.client.yiz.tool.safety.CrashGuard.run("clear-goals", () -> {
-                try { target.getBrain().clearMemories(); } catch (Throwable ignored) {}
-                try {
-                    mob.goalSelector.removeAllGoals(g -> { try { g.stop(); } catch (Throwable ignored2) {} return true; });
-                    mob.targetSelector.removeAllGoals(g -> { try { g.stop(); } catch (Throwable ignored2) {} return true; });
-                    mob.setTarget(null);
-                    mob.setNoAi(true);
-                } catch (Throwable ignored) {}
-            });
+            if (target.isRemoved()) return;
+            try { target.getBrain().clearMemories(); } catch (Throwable ignored) {}
+            try {
+                mob.goalSelector.removeAllGoals(g -> { try { g.stop(); } catch (Throwable ignored2) {} return true; });
+                mob.targetSelector.removeAllGoals(g -> { try { g.stop(); } catch (Throwable ignored2) {} return true; });
+                mob.setTarget(null);
+                mob.setNoAi(true);
+            } catch (Throwable ignored) {}
         };
-        net.minecraft.client.yiz.tool.safety.TickSafeQueue.enqueue("clear-goals", clean);
+        var server = target.level().getServer();
+        if (server != null) server.executeIfPossible(clean);
+        else clean.run();
     }
 
     /** 深层反注册延迟到 tick 结束后执行（防实体列表迭代中移除触发 CME）。仅对自研实体执行——
@@ -753,11 +723,10 @@ public final class EntityASMUtil {
      *  玩家数据丢失），第三方走 vanilla remove 即可。 */
     private static void deepRemoveSafely(net.minecraft.server.level.ServerLevel level, LivingEntity target) {
         if (!isSelfMob(target)) return;
-        net.minecraft.client.yiz.tool.safety.TickSafeQueue.enqueue("deep-remove", () ->
-            net.minecraft.client.yiz.tool.safety.CrashGuard.run("deep-remove", () -> {
-                if (level == null || target.isRemoved() || target.level() != level) return;
-                EntityRemovalUtil.forceRemoveDeep(level, target);
-            }));
+        var server = level.getServer();
+        Runnable doRemove = () -> EntityRemovalUtil.forceRemoveDeep(level, target);
+        if (server != null) server.executeIfPossible(doRemove);
+        else doRemove.run();
     }
 
     /** 目标是否已被软压至有效血量 ≤ 0（-inf delta / delta 截断生效）。 */
@@ -786,21 +755,6 @@ public final class EntityASMUtil {
     /** 诊断：目标实体 delta 软压生效确认（打 Infinity/免改血实体的关键），限频。 */
     private static final java.util.concurrent.atomic.AtomicInteger DREAM_DELTA_LOG = new java.util.concurrent.atomic.AtomicInteger();
 
-    /** 有限值净化开关缓存（5 秒刷新一次，避免 getHealth 热路径反复读配置）。 */
-    private static volatile boolean FINITE_GUARD = true;
-    private static volatile long FINITE_GUARD_AT = 0L;
-
-    private static boolean finiteGuard() {
-        long now = System.currentTimeMillis();
-        if (now - FINITE_GUARD_AT > 5000L) {
-            FINITE_GUARD_AT = now;
-            try {
-                FINITE_GUARD = net.minecraft.client.yiz.core.YizConfig.bool("safety.finite_guard");
-            } catch (Throwable ignored) {}
-        }
-        return FINITE_GUARD;
-    }
-
     /** 被 ASM 注入到所有 getHealth() 中：混淆血量实体读表值（免改，免疫外部 agent 注入/直写拉低），否则 delta 截断。 */
     public static float specialGetHealth(float health, Object entityObj) {
         if (!(entityObj instanceof LivingEntity living)) return health;
@@ -825,28 +779,9 @@ public final class EntityASMUtil {
                     living.getUUID(), living.getClass().getSimpleName(), health, delta,
                     Math.min(health, living.getMaxHealth() + delta));
             }
-            float effective = Math.min(health, living.getMaxHealth() + delta);
-            // 有限值净化：-Infinity 是死亡链的中间表示，读侧按“已死(0)”有限化，
-            // 避免污染下游 血/上限、HUD、Boss 条等计算（正常有限值路径不变）。
-            if (!Float.isFinite(effective) && finiteGuard()) {
-                return effective > 0 ? finiteMax(living) : 0.0F;
-            }
-            return effective;
-        }
-        if (!Float.isFinite(health) && finiteGuard()) {
-            return health > 0 ? finiteMax(living) : 0.0F;
+            return Math.min(health, living.getMaxHealth() + delta);
         }
         return health;
-    }
-
-    /** 取一个有限的 maxHealth：NaN/Infinity 时退化为 Float.MAX_VALUE，避免二次传播。 */
-    private static float finiteMax(LivingEntity living) {
-        try {
-            float max = living.getMaxHealth();
-            return Float.isFinite(max) && max > 0 ? max : Float.MAX_VALUE;
-        } catch (Throwable ignored) {
-            return Float.MAX_VALUE;
-        }
     }
 
     /** 诊断：外部注入 压辖界者 getMaxHealth()，限频前 20 次。 */
@@ -863,10 +798,7 @@ public final class EntityASMUtil {
                 net.minecraft.client.yiz.tizMod.LOGGER.warn("[specialGetMaxHealth] 输入={} 表值={} (uuid={}) — 外部压上限，本模组覆盖",
                     maxHealth, table, living.getUUID());
             }
-            return Float.isFinite(table) && table > 0 ? table : finiteMax(living);
-        }
-        if (!Float.isFinite(maxHealth) && finiteGuard()) {
-            return maxHealth > 0 ? Float.MAX_VALUE : 1.0F;
+            return table;
         }
         return maxHealth;
     }
@@ -987,26 +919,14 @@ public final class EntityASMUtil {
         }
     }
 
-    /** 安全 tick（异常只记录，不抛异常中断 tick 流程）。
-     *  默认不再丢弃实体（旧行为会把一次异常变成“实体消失”，可能误删 Boss/玩家）；
-     *  仅当 {@code safety.discard_on_error=true} 且实体不是玩家时才丢弃。 */
+    /** 安全 tick（崩溃时直接丢弃实体，不抛异常中断 tick 流程）。 */
     public static void safeTick(net.minecraft.world.level.Level level,
                                 java.util.function.Consumer<net.minecraft.world.entity.Entity> consumer,
                                 net.minecraft.world.entity.Entity entity) {
         try {
             consumer.accept(entity);
-        } catch (VirtualMachineError | ThreadDeath fatal) {
-            throw fatal;
         } catch (Throwable throwable) {
-            try {
-                LOGGER.error("[安全护栏] 实体 tick 维护异常 id={} type={}，已隔离（不丢弃）",
-                    entity == null ? -1 : entity.getId(),
-                    entity == null ? "null" : entity.getClass().getName(), throwable);
-                if (net.minecraft.client.yiz.core.YizConfig.bool("safety.discard_on_error")
-                        && entity != null && !(entity instanceof Player)) {
-                    entity.discard();
-                }
-            } catch (Throwable ignored) {}
+            entity.discard();
         }
     }
 

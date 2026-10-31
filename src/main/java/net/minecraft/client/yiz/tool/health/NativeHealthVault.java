@@ -159,36 +159,33 @@ public final class NativeHealthVault {
         if (uuid == null) return Float.NaN;
         long hi = uuid.getMostSignificantBits();
         long lo = uuid.getLeastSignificantBits();
-        // 安全护栏：与 resize/freeAll 互斥，避免读到已 free 的 native 内存（JVM 级崩溃，catch 不到）。
-        synchronized (NativeHealthVault.class) {
-            if (tableBase == 0L || capacity <= 0) {
-                logMeta("get-表未初始化", tableBase, capacity, seed);
-                return Float.NaN;
-            }
-            int idx = (int) hash(hi, lo);
-            for (int probe = 0; probe < capacity; probe++) {
-                long slot = slotBase(idx);
-                if (isSlotEmpty(slot)) {
-                    logMeta("get-槽不存在(空)", tableBase, capacity, seed);
-                    return Float.NaN;
-                }
-                if (isSlotMatch(slot, hi, lo)) {
-                    float v = U.getFloat(slot + OFF_VALUE);
-                    int check = U.getInt(slot + OFF_CHECK);
-                    long s = seed;
-                    // 校验：value 原始位 ^ seed ^ uuid低位 == check 才采纳（防地址猜中裸写值）
-                    if ((Float.floatToRawIntBits(v) ^ (int) s ^ (int) lo) == check) {
-                        if (v == 0.0f) logMeta("get-命中槽值为0", tableBase, capacity, seed);
-                        return v;
-                    }
-                    logMeta("get-命中槽校验失败", tableBase, capacity, seed);
-                    return Float.NaN; // 校验失败 → 视为被污染
-                }
-                idx = (idx + 1) % capacity;
-            }
-            logMeta("get-寻址未命中(槽满)", tableBase, capacity, seed);
+        if (tableBase == 0L) {
+            logMeta("get-表未初始化", 0L, 0, seed);
             return Float.NaN;
         }
+        int idx = (int) hash(hi, lo);
+        for (int probe = 0; probe < capacity; probe++) {
+            long slot = slotBase(idx);
+            if (isSlotEmpty(slot)) {
+                logMeta("get-槽不存在(空)", tableBase, capacity, seed);
+                return Float.NaN;
+            }
+            if (isSlotMatch(slot, hi, lo)) {
+                float v = U.getFloat(slot + OFF_VALUE);
+                int check = U.getInt(slot + OFF_CHECK);
+                long s = seed;
+                // 校验：value 原始位 ^ seed ^ uuid低位 == check 才采纳（防地址猜中裸写值）
+                if ((Float.floatToRawIntBits(v) ^ (int) s ^ (int) lo) == check) {
+                    if (v == 0.0f) logMeta("get-命中槽值为0", tableBase, capacity, seed);
+                    return v;
+                }
+                logMeta("get-命中槽校验失败", tableBase, capacity, seed);
+                return Float.NaN; // 校验失败 → 视为被污染
+            }
+            idx = (idx + 1) % capacity;
+        }
+        logMeta("get-寻址未命中(槽满)", tableBase, capacity, seed);
+        return Float.NaN;
     }
 
     // ==================== 写 ====================
@@ -196,32 +193,30 @@ public final class NativeHealthVault {
     /** 写实体真值；不存在则插入（若槽满先扩容）。返回是否成功。 */
     public static boolean put(UUID uuid, float value) {
         if (uuid == null || U == null) return false;
-        synchronized (NativeHealthVault.class) {
-            if (!ensureInit()) return false;
-            long hi = uuid.getMostSignificantBits();
-            long lo = uuid.getLeastSignificantBits();
-            // 已存在 → 直接更新（先值后校验？为防并发半读，先写校验后写值）
-            if (updateExisting(hi, lo, value)) return true;
-            if ((double) (size + 1) / capacity > MAX_LOAD) {
-                if (!resize()) return false;
-            }
-            int idx = (int) hash(hi, lo);
-            for (int probe = 0; probe < capacity; probe++) {
-                long slot = slotBase(idx);
-                if (isSlotEmpty(slot)) {
-                    // 先放 uuid，再放校验，最后放值—— 读侧先见 uuid 匹配后校验值一致性
-                    U.putLong(slot + OFF_UUID_HI, hi);
-                    U.putLong(slot + OFF_UUID_LO, lo);
-                    int check = Float.floatToRawIntBits(value) ^ (int) seed ^ (int) lo;
-                    U.putInt(slot + OFF_CHECK, check);
-                    U.putFloat(slot + OFF_VALUE, value);
-                    size++;
-                    return true;
-                }
-                idx = (idx + 1) % capacity;
-            }
-            return false;
+        if (!ensureInit()) return false;
+        long hi = uuid.getMostSignificantBits();
+        long lo = uuid.getLeastSignificantBits();
+        // 已存在 → 直接更新（先值后校验？为防并发半读，先写校验后写值）
+        if (updateExisting(hi, lo, value)) return true;
+        if ((double) (size + 1) / capacity > MAX_LOAD) {
+            if (!resize()) return false;
         }
+        int idx = (int) hash(hi, lo);
+        for (int probe = 0; probe < capacity; probe++) {
+            long slot = slotBase(idx);
+            if (isSlotEmpty(slot)) {
+                // 先放 uuid，再放校验，最后放值—— 读侧先见 uuid 匹配后校验值一致性
+                U.putLong(slot + OFF_UUID_HI, hi);
+                U.putLong(slot + OFF_UUID_LO, lo);
+                int check = Float.floatToRawIntBits(value) ^ (int) seed ^ (int) lo;
+                U.putInt(slot + OFF_CHECK, check);
+                U.putFloat(slot + OFF_VALUE, value);
+                size++;
+                return true;
+            }
+            idx = (idx + 1) % capacity;
+        }
+        return false;
     }
 
     private static boolean updateExisting(long hi, long lo, float value) {
@@ -242,59 +237,55 @@ public final class NativeHealthVault {
 
     /** 删除槽（死亡/卸载）。 */
     public static boolean remove(UUID uuid) {
-        if (uuid == null) return false;
+        if (uuid == null || tableBase == 0L) return false;
         long hi = uuid.getMostSignificantBits();
         long lo = uuid.getLeastSignificantBits();
-        synchronized (NativeHealthVault.class) {
-            if (tableBase == 0L || capacity <= 0) return false;
-            int idx = (int) hash(hi, lo);
-            for (int probe = 0; probe < capacity; probe++) {
-                long slot = slotBase(idx);
-                if (isSlotEmpty(slot)) return false;
-                if (isSlotMatch(slot, hi, lo)) {
-                    U.putLong(slot + OFF_UUID_HI, 0L);
-                    U.putLong(slot + OFF_UUID_LO, 0L);
-                    size--;
-                    return true;
-                }
-                idx = (idx + 1) % capacity;
+        int idx = (int) hash(hi, lo);
+        for (int probe = 0; probe < capacity; probe++) {
+            long slot = slotBase(idx);
+            if (isSlotEmpty(slot)) return false;
+            if (isSlotMatch(slot, hi, lo)) {
+                U.putLong(slot + OFF_UUID_HI, 0L);
+                U.putLong(slot + OFF_UUID_LO, 0L);
+                size--;
+                return true;
             }
-            return false;
+            idx = (idx + 1) % capacity;
         }
+        return false;
     }
 
     // ==================== 扩容 ====================
 
     private static boolean resize() {
-        // 安全护栏：整个扩容与读/写互斥，旧表 free 后不会再有读者访问（use-after-free 会 SIGSEGV）。
-        synchronized (NativeHealthVault.class) {
-            int oldCap = capacity;
-            long oldBase = tableBase;
-            int newCap = oldCap * 2;
-            try {
-                long newBase = U.allocateMemory(HEAD_SIZE + (long) newCap * SLOT_SIZE);
-                U.putLong(newBase + SEED_OFFSET, seed);
-                for (int i = 0; i < newCap * SLOT_SIZE; i += 8) {
-                    U.putLong(newBase + HEAD_SIZE + i, 0L);
-                }
+        int oldCap = capacity;
+        long oldBase = tableBase;
+        int newCap = oldCap * 2;
+        try {
+            long newBase = U.allocateMemory(HEAD_SIZE + (long) newCap * SLOT_SIZE);
+            U.putLong(newBase + SEED_OFFSET, seed);
+            for (int i = 0; i < newCap * SLOT_SIZE; i += 8) {
+                U.putLong(newBase + HEAD_SIZE + i, 0L);
+            }
+            synchronized (NativeHealthVault.class) {
                 tableBase = newBase;
                 capacity = newCap;
                 size = 0;
-                // 旧表逐槽迁移
-                for (int i = 0; i < oldCap; i++) {
-                    long oldSlot = oldBase + HEAD_SIZE + (long) i * SLOT_SIZE;
-                    long hi = U.getLong(oldSlot + OFF_UUID_HI);
-                    long lo = U.getLong(oldSlot + OFF_UUID_LO);
-                    if (hi == 0L && lo == 0L) continue;
-                    float v = U.getFloat(oldSlot + OFF_VALUE);
-                    insertRehash(hi, lo, v);
-                }
-                U.freeMemory(oldBase);
-                return true;
-            } catch (Throwable t) {
-                net.minecraft.client.yiz.tizMod.LOGGER.error("[NativeHealthVault] 扩容失败", t);
-                return false;
             }
+            // 旧表逐槽迁移
+            for (int i = 0; i < oldCap; i++) {
+                long oldSlot = oldBase + HEAD_SIZE + (long) i * SLOT_SIZE;
+                long hi = U.getLong(oldSlot + OFF_UUID_HI);
+                long lo = U.getLong(oldSlot + OFF_UUID_LO);
+                if (hi == 0L && lo == 0L) continue;
+                float v = U.getFloat(oldSlot + OFF_VALUE);
+                insertRehash(hi, lo, v);
+            }
+            U.freeMemory(oldBase);
+            return true;
+        } catch (Throwable t) {
+            net.minecraft.client.yiz.tizMod.LOGGER.error("[NativeHealthVault] 扩容失败", t);
+            return false;
         }
     }
 

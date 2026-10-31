@@ -35,7 +35,6 @@ public final class ItemAttributeHandler {
     public static void setEntityAttribute(LivingEntity entity, Attribute attribute,
                                           String idKey, double value, AttributeModifier.Operation op) {
         if (attribute == null) return;
-        if (!Double.isFinite(value)) return;   // 安全护栏：NaN/Infinity 属性值会污染整条属性链
         var inst = entity.getAttribute(attribute);
         if (inst == null) return;
         UUID id = modifierUuid(idKey);
@@ -65,7 +64,6 @@ public final class ItemAttributeHandler {
      */
     public static void setVanillaModifier(ItemStack stack, Attribute attribute, String idKey, double value) {
         if (attribute == null) return;
-        if (!Double.isFinite(value)) return;   // 安全护栏：拒绝非有限属性值
         UUID id = modifierUuid(idKey);
         // value==0 也 add（1.20.1 无 removeAttributeModifier；add 0 值同 id modifier 覆盖旧的，
         // AttributeMap 按 id 去重生效 0 = 清除属性；sumVanillaModifier 同 id 取最新 0 → 显示 0）

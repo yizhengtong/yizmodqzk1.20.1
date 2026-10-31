@@ -134,7 +134,6 @@ public class tizMod {
             e.add(player, YizAttributes.LIFE_REGEN_PCT.get());
             e.add(player, YizAttributes.POSHI.get());
             e.add(player, YizAttributes.POXIAN.get());
-            e.add(player, YizAttributes.POHUAN_XUNZHEN.get());
             e.add(player, YizAttributes.PROJECTILE_REFLECTION.get());
             e.add(player, YizAttributes.NO_COLLISION.get());
             e.add(player, YizAttributes.ATTACK_RANGE.get());
@@ -212,7 +211,6 @@ public class tizMod {
         net.minecraft.client.yiz.tool.YizRemoveCommand.register();
         net.minecraft.client.yiz.tool.YizAgentCommand.register();
         net.minecraft.client.yiz.tool.YizSetHealthCommand.register();
-        net.minecraft.client.yiz.tool.YizPohuanCommand.register();
         net.minecraft.client.yiz.tool.YizHealthLocateCommand.register();
         net.minecraft.client.yiz.tool.YizKeyCommand.register();
         // 闪电特效测试指令（/yiz fx）
@@ -255,23 +253,6 @@ public class tizMod {
             net.minecraft.client.yiz.core.PlayerIdentityStore.load();
         } catch (Throwable ignored) {}
         net.minecraftforge.common.MinecraftForge.EVENT_BUS.register(this);
-        // 安全护栏：结构修改（清 goals/深层移除）在服务端 tick 结束后统一执行，
-        // 避免在 GoalSelector / EntityTickList 迭代期间改集合触发 CME。
-        net.minecraftforge.common.MinecraftForge.EVENT_BUS.addListener(
-            (net.minecraftforge.event.TickEvent.ServerTickEvent e) -> {
-                if (e.phase == net.minecraftforge.event.TickEvent.Phase.END) {
-                    try {
-                        net.minecraft.client.yiz.tool.safety.TickSafeQueue.flush();
-                    } catch (Throwable t) {
-                        net.minecraft.client.yiz.tool.safety.CrashGuard.report("tick-queue-flush", t);
-                    }
-                }
-            });
-        // 关服/停服时清空待执行结构操作，避免在拆卸阶段动世界结构。
-        net.minecraftforge.common.MinecraftForge.EVENT_BUS.addListener(
-            (net.minecraftforge.event.server.ServerStoppingEvent e) ->
-                net.minecraft.client.yiz.tool.safety.TickSafeQueue.clear());
-
         // 玩家加入时登记身份：离线模式改名/换号会自动继承物品配置，个体开关需服主批准
         net.minecraftforge.common.MinecraftForge.EVENT_BUS.addListener(
             (net.minecraftforge.event.entity.player.PlayerEvent.PlayerLoggedInEvent e) -> {
@@ -323,14 +304,6 @@ public class tizMod {
             net.minecraft.client.yiz.core.asm.AgentLoader.init();
         } catch (Throwable t) {
             LOGGER.warn("Agent 加载跳过（不影响血量扫描体系）: {}", t.getMessage());
-        }
-        // 破幻寻真 P2b：bytecode_patch 开启时提前安装常量改写 transformer（默认关）
-        try {
-            if (net.minecraft.client.yiz.core.YizConfig.bool("pohuan.bytecode_patch")) {
-                net.minecraft.client.yiz.tool.defense.DefensePatcher.install();
-            }
-        } catch (Throwable t) {
-            LOGGER.warn("破幻寻真字节码改写安装跳过: {}", t.getMessage());
         }
         // 藏血发现扫描预热：全类路径枚举一次（约 1~3 秒）挪到后台，别留给首次攻击
         try {

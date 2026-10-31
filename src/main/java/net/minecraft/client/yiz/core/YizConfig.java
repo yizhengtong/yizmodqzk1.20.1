@@ -71,27 +71,6 @@ public final class YizConfig {
     public static final ForgeConfigSpec.BooleanValue REMOVE_GATE_TAMPER;
     public static final ForgeConfigSpec.BooleanValue DEATH_MARKER;
 
-    // 安全保护（只拦截异常/非法值/危险时点，不改变正常数值与流程）
-    public static final ForgeConfigSpec.BooleanValue DEFER_STRUCTURAL_OPS;
-    public static final ForgeConfigSpec.BooleanValue CRASH_BARRIER;
-    public static final ForgeConfigSpec.BooleanValue FINITE_GUARD;
-    public static final ForgeConfigSpec.BooleanValue DISCARD_ON_ERROR;
-
-    // 破幻寻真（防御破除）
-    public static final ForgeConfigSpec.BooleanValue POHUAN_ENABLED;
-    public static final ForgeConfigSpec.BooleanValue POHUAN_AFFECT_PLAYERS;
-    public static final ForgeConfigSpec.BooleanValue POHUAN_ZERO_IFRAMES;
-    public static final ForgeConfigSpec.BooleanValue POHUAN_SETTLE_REJECTED;
-    public static final ForgeConfigSpec.BooleanValue POHUAN_BREAK_CREATIVE_INVULN;
-    public static final ForgeConfigSpec.BooleanValue POHUAN_SCAN_LOG;
-    public static final ForgeConfigSpec.BooleanValue POHUAN_FIELD_CAPS;
-    public static final ForgeConfigSpec.BooleanValue POHUAN_BYTECODE_PATCH;
-    public static final ForgeConfigSpec.BooleanValue POHUAN_STRUCTURAL_GATES;
-    public static final ForgeConfigSpec.BooleanValue POHUAN_SETTLE_NO_DAMAGE;
-    public static final ForgeConfigSpec.BooleanValue POHUAN_BASE_HEALTH;
-    public static final ForgeConfigSpec.BooleanValue POHUAN_FORCE_BASE_HURT;
-    public static final ForgeConfigSpec.BooleanValue POHUAN_TIMER_GATES;
-
     public static final ForgeConfigSpec SPEC;
 
     static {
@@ -139,50 +118,6 @@ public final class YizConfig {
             "允许行为探测并击穿「死亡/移除放行开关」");
         DEATH_MARKER = define("gate", "death_marker", true, When.LIVE,
             "允许写「判死标记」（设 true 后目标自认已死）");
-        B.pop();
-
-        B.comment("安全保护（防误崩）",
-                  "只拦截异常/非法值/危险时点，不改变正常数值与流程。",
-                  "关闭任一开关即回退到旧行为（用于对照排障）。").push("safety");
-        DEFER_STRUCTURAL_OPS = define("safety", "defer_structural_ops", true, When.LIVE,
-            "结构性操作（清 goals / 深层移除）延迟到服务端 tick 结束后执行，避免在 GoalSelector/EntityTickList 迭代中改集合触发 CME");
-        CRASH_BARRIER = define("safety", "crash_barrier", true, When.LIVE,
-            "入口异常隔离：改血/死亡链/探查包抛出的异常只记录并隔离，不打断服务端 tick");
-        FINITE_GUARD = define("safety", "finite_guard", true, When.LIVE,
-            "有限值净化：拒绝 NaN/Infinity 的血量与属性写入（死亡仍按 0/已死处理）");
-        DISCARD_ON_ERROR = define("safety", "discard_on_error", false, When.LIVE,
-            "实体的每 tick 维护抛异常时是否丢弃实体（默认关：只记录日志，避免误删 Boss/玩家实体）");
-        B.pop();
-
-        B.comment("破幻寻真（防御破除）",
-                  "属性 yizmodqzk:pohuan_xunzhen 总值 > 1 生效；只改防御参数（无敌帧/无敌判定/上限），不写生命值。",
-                  "对创造/旁观玩家无效（只看游戏模式）；生存玩家即使被套创造式无敌也可破。").push("pohuan");
-        POHUAN_ENABLED = define("pohuan", "enabled", true, When.LIVE,
-            "总开关：关闭后本属性完全不生效");
-        POHUAN_AFFECT_PLAYERS = define("pohuan", "affect_players", true, When.LIVE,
-            "是否对玩家目标生效（创造/旁观模式始终无效）");
-        POHUAN_ZERO_IFRAMES = define("pohuan", "zero_iframes", true, When.LIVE,
-            "命中前清零无敌帧与受击硬直（invulnerableTime/hurtTime）");
-        POHUAN_SETTLE_REJECTED = define("pohuan", "settle_rejected", true, When.LIVE,
-            "hurt 被目标逻辑拒绝时，改走 actuallyHurt 结算（绕过无敌/免疫/自定义拒绝）");
-        POHUAN_BREAK_CREATIVE_INVULN = define("pohuan", "break_creative_invuln", true, When.LIVE,
-            "生存/冒险玩家被套创造式无敌（abilities.invulnerable）时强制可受伤");
-        POHUAN_SCAN_LOG = define("pohuan", "scan_log", true, When.LIVE,
-            "首次命中某实体类时打印防御扫描结果（覆写方法/上限字段），用于排查");
-        POHUAN_FIELD_CAPS = define("pohuan", "field_caps", true, When.LIVE,
-            "P2a：命中前把目标类里疑似上限/冷却/无敌帧字段临时改写为 MAX/0，命中后还原");
-        POHUAN_BYTECODE_PATCH = define("pohuan", "bytecode_patch", true, When.LIVE,
-            "P2b：用 agent 把 hurt/actuallyHurt/setHealth 内被 Math.min/max 使用的疑似上限常量改写为 MAX（默认开；改写失败自动跳过）");
-        POHUAN_STRUCTURAL_GATES = define("pohuan", "structural_gates", true, When.LIVE,
-            "结构语义门：不依赖字段名，命中前把 hurt 里读到的 boolean 门/时间门/计时器临时改为 false 或 0（跳过原版核心类）");
-        POHUAN_SETTLE_NO_DAMAGE = define("pohuan", "settle_no_damage", true, When.LIVE,
-            "命中返回成功但生命/吸收都没变化（静默无敌）时，改走 actuallyHurt 结算");
-        POHUAN_BASE_HEALTH = define("pohuan", "base_health", true, When.LIVE,
-            "P3：目标覆写 setHealth/getHealth/actuallyHurt 时，用 IMPL_LOOKUP 直调基类生命通道结算，绕过覆写截断");
-        POHUAN_FORCE_BASE_HURT = define("pohuan", "force_base_hurt", true, When.LIVE,
-            "目标覆写了 hurt（含 DamageCap()/距离衰减/状态机限伤）时，直接跳过它走基类 actuallyHurt，彻底绕开 hurt 内上限");
-        POHUAN_TIMER_GATES = define("pohuan", "timer_gates", false, When.LIVE,
-            "结构门里的 timer/hitwritten 字段是否清零（默认关：这类字段语义不明确，清零可能触发回血/冷却反转）");
         B.pop();
 
         SPEC = B.build();
