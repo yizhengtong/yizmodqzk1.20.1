@@ -203,8 +203,9 @@ public final class PohuanXunzhen implements DefenseBreach {
             net.minecraft.client.yiz.tool.defense.DefenseProfile p =
                 net.minecraft.client.yiz.tool.defense.DefenseProfile.cached(target.getClass().getName());
             boolean customHealth = p != null && p.overrides != null
-                && (p.overrides.contains("setHealth") || p.overrides.contains("getHealth")
-                    || p.overrides.contains("actuallyHurt"));
+                && (p.overrides.contains("setHealth") || p.overrides.contains("m_21153_")
+                    || p.overrides.contains("getHealth") || p.overrides.contains("m_21223_")
+                    || p.overrides.contains("actuallyHurt") || p.overrides.contains("m_6475_"));
             if (customHealth
                     && YizConfig.bool("pohuan.base_health")
                     && net.minecraft.client.yiz.tool.defense.P3BaseHealth.settle(target, source, dmg)) {

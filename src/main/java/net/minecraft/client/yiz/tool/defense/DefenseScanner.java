@@ -39,11 +39,19 @@ import java.util.zip.CRC32;
  */
 public final class DefenseScanner {
 
-    private static final Set<String> TARGET_METHODS = Set.of("hurt", "actuallyHurt", "setHealth");
-    private static final Set<String> TICK_METHODS = Set.of("tick", "aiStep", "baseTick", "customServerAiStep");
+    // 同时认 MCP 名与 SRG 名：生产环境 class 字节里是 m_xxx_/f_xxx_
+    private static final Set<String> TARGET_METHODS = Set.of(
+        "hurt", "m_6469_", "actuallyHurt", "m_6475_", "setHealth", "m_21153_");
+    private static final Set<String> TICK_METHODS = Set.of(
+        "tick", "m_8119_", "aiStep", "m_8107_", "baseTick", "m_6075_",
+        "customServerAiStep", "m_8024_");
     private static final Set<String> TRACKED_METHODS = Set.of(
-        "hurt", "actuallyHurt", "setHealth", "getHealth", "isInvulnerableTo",
-        "die", "isDeadOrDying", "isAlive");
+        "hurt", "m_6469_", "actuallyHurt", "m_6475_", "setHealth", "m_21153_",
+        "getHealth", "m_21223_", "isInvulnerableTo", "m_6673_", "die", "m_6667_",
+        "isDeadOrDying", "m_21224_", "isAlive", "m_6084_");
+
+    /** tick 计时字段（生产 SRG）：Entity.tickCount。 */
+    private static final Set<String> TICK_COUNT_FIELDS = Set.of("tickCount", "f_90062_", "f_19802_");
 
     private static final java.util.regex.Pattern FIELD_HINT = java.util.regex.Pattern.compile(
         "(?i).*(invul|iframe|hurt|damage|cap|limit|max|cooldown|tick).*");
@@ -224,8 +232,9 @@ public final class DefenseScanner {
                         seen();
                         // 时间源：视为“接下来几条指令处于时间比较上下文”
                         if (("java/lang/System".equals(owner) && ("currentTimeMillis".equals(mName) || "nanoTime".equals(mName)))
-                                || ("net/minecraft/Util".equals(owner) && "getMillis".equals(mName))
-                                || ("net/minecraft/world/level/Level".equals(owner) && "getGameTime".equals(mName))) {
+                                || ("net/minecraft/Util".equals(owner) && ("getMillis".equals(mName) || "m_91283_".equals(mName)))
+                                || ("net/minecraft/world/level/Level".equals(owner)
+                                    && ("getGameTime".equals(mName) || "m_6793_".equals(mName)))) {
                             timeWindow = 4;
                         }
                         if (target && "java/lang/Math".equals(owner) && ("min".equals(mName) || "max".equals(mName))) {
@@ -246,8 +255,8 @@ public final class DefenseScanner {
                     public void visitFieldInsn(int opcode, String owner, String fName, String desc) {
                         seen();
                         boolean isRead = opcode == Opcodes.GETFIELD;
-                        // tickCount 作为时间源
-                        if (isRead && "tickCount".equals(fName)) {
+                        // tickCount 作为时间源（MCP/SRG 双名）
+                        if (isRead && TICK_COUNT_FIELDS.contains(fName)) {
                             timeWindow = 4;
                         }
                         if (target) {
