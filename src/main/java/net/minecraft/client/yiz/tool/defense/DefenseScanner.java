@@ -60,7 +60,7 @@ public final class DefenseScanner {
 
     private static final Set<String> SCANNED = ConcurrentHashMap.newKeySet();
     private static volatile long LAST_SAVE = 0L;
-    private static final Path FILE = FMLPaths.CONFIGDIR.get().resolve("yizmodqzk/defense_profiles.json");
+    private static final Path FILE = FMLPaths.CONFIGDIR.get().resolve("yizmodqzk/defense_profiles_v2.json");
     private static volatile boolean loaded = false;
 
     private static void ensureLoaded() {
@@ -90,11 +90,15 @@ public final class DefenseScanner {
                 DefenseProfile p = scanClass(c);
                 if (p == null) continue;
                 merged.classHash ^= p.classHash;
-                merged.overrides.addAll(p.overrides);
+                // 只把“模组类自己声明”的覆写计入：LivingEntity/Entity 的 vanilla 方法不算自定义，
+                // 否则所有实体都会被判定为“覆写了 hurt”，force_base_hurt 会误伤所有原版生物。
+                if (!c.getName().startsWith("net.minecraft.")) {
+                    merged.overrides.addAll(p.overrides);
+                }
                 mergeCaps(merged, p);
                 mergeFields(merged, p);
             }
-            DefenseProfile.put(merged);
+            DefenseProfile.putMerged(merged);
             long now = System.currentTimeMillis();
             if (now - LAST_SAVE > 5000L) {
                 LAST_SAVE = now;
@@ -140,7 +144,7 @@ public final class DefenseScanner {
 
     private static DefenseProfile scanClass(Class<?> cls) {
         String n = cls.getName();
-        DefenseProfile cached = DefenseProfile.cached(n);
+        DefenseProfile cached = DefenseProfile.cachedSingle(n);
         if (cached != null) return cached;
         try {
             byte[] bytes = readBytes(cls);

@@ -80,14 +80,29 @@ public final class DefenseProfile {
     // ==================== JSON 缓存 ====================
 
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+    /** 单类扫描结果（只含该类自己声明的方法/字段）。 */
     private static final Map<String, DefenseProfile> CACHE = new LinkedHashMap<>();
+    /** 合并后的画像（本类 + 模组父类），供运行时使用；不落盘，每次启动重建。 */
+    private static final Map<String, DefenseProfile> MERGED = new LinkedHashMap<>();
 
+    /** 优先返回合并画像；没有则返回单类画像。 */
     public static DefenseProfile cached(String className) {
+        DefenseProfile m = MERGED.get(className);
+        return m != null ? m : CACHE.get(className);
+    }
+
+    public static DefenseProfile cachedSingle(String className) {
         return CACHE.get(className);
     }
 
+    /** 存单类画像。 */
     public static void put(DefenseProfile p) {
         if (p != null && p.className != null) CACHE.put(p.className, p);
+    }
+
+    /** 存合并画像。 */
+    public static void putMerged(DefenseProfile p) {
+        if (p != null && p.className != null) MERGED.put(p.className, p);
     }
 
     public static Map<String, DefenseProfile> all() {
@@ -104,6 +119,7 @@ public final class DefenseProfile {
                 if (m != null) {
                     CACHE.clear();
                     CACHE.putAll(m);
+                    MERGED.clear();
                 }
             }
         } catch (Throwable ignored) {}
