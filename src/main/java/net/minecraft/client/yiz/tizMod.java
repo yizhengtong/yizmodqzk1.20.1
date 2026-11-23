@@ -297,6 +297,8 @@ public class tizMod {
         LOGGER.info("YizMod QZK 1.20.1 前置库初始化完成");
         // 感电视觉 S2C 网络通道（1.20.1 SimpleChannel）
         net.minecraft.client.yiz.network.NetworkHandler.register();
+        // 骨骼动画库（config/yizmodqzk/animations）
+        net.minecraft.client.yiz.anim.AnimLibrary.reload();
         // 锁定系统客户端事件注册（会心/渴攻目标框渲染 + 客户端属性聚合；服务端调用无害）
         net.minecraft.client.yiz.handler.LockOnClientEvents.init();
         // 动态加载 JavaAgent（同进程 self-attach，用于涨跌多空 getHealth 字节码改写配合扫描）

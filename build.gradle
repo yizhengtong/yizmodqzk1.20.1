@@ -287,6 +287,10 @@ publishing {
         }
     }
     repositories {
+        // 下游内容模组（yizxianmod）的 build.gradle 用 mavenLocal() 解析前置库：
+        // 必须同时发到这里，否则 `gradlew publish` 只更新 local-maven-repo-120，
+        // 下游仍在用 ~/.m2 里的旧 jar（表现为"新 API 找不到符号"）。
+        mavenLocal()
         maven {
             url "file://${project.projectDir}/../local-maven-repo-120"
         }

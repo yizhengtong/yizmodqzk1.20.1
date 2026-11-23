@@ -52,7 +52,11 @@
     "HumanoidArmorLayerMirrorExclusionMixin",
     "LivingEntityRendererLaunchTiltMixin",
     "PlayerRangeMixin",
-    "ClientExplosionKnockbackMixin"
+    "ClientExplosionKnockbackMixin",
+    "PlayerModelAnimMixin",
+    "ItemInHandRendererAnimMixin",
+    "ModelPartAccessor",
+    "ModelPartRenderCaptureMixin"
   ],
   "injectors": {
     "defaultRequire": 1

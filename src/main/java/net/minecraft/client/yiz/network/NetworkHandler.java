@@ -10,7 +10,9 @@ import net.minecraftforge.network.simple.SimpleChannel;
  */
 public final class NetworkHandler {
 
-    private static final String PROTOCOL_VERSION = "1";
+    // 2.0：新增玩家动画（C2SAnimAttackPayload / S2CAnimAttackPayload）。
+    // 旧客户端不认识新 message id，混连会在解码阶段抛异常；提升协议版本让 SimpleChannel 直接拒绝。
+    private static final String PROTOCOL_VERSION = "2";
 
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
         new ResourceLocation(tizMod.MODID, "main"),
@@ -66,6 +68,19 @@ public final class NetworkHandler {
             net.minecraft.client.yiz.itemcfg.network.C2SItemConfigTogglePayload::encode,
             net.minecraft.client.yiz.itemcfg.network.C2SItemConfigTogglePayload::decode,
             net.minecraft.client.yiz.itemcfg.network.C2SItemConfigTogglePayload::handle
+        );
+        // ── 玩家骨骼动画：攻击触发 / 服务端广播 ──
+        CHANNEL.registerMessage(packetId++,
+            net.minecraft.client.yiz.anim.network.C2SAnimAttackPayload.class,
+            net.minecraft.client.yiz.anim.network.C2SAnimAttackPayload::encode,
+            net.minecraft.client.yiz.anim.network.C2SAnimAttackPayload::decode,
+            net.minecraft.client.yiz.anim.network.C2SAnimAttackPayload::handle
+        );
+        CHANNEL.registerMessage(packetId++,
+            net.minecraft.client.yiz.anim.network.S2CAnimAttackPayload.class,
+            net.minecraft.client.yiz.anim.network.S2CAnimAttackPayload::encode,
+            net.minecraft.client.yiz.anim.network.S2CAnimAttackPayload::decode,
+            net.minecraft.client.yiz.anim.network.S2CAnimAttackPayload::handle
         );
     }
 }
