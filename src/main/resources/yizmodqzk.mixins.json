@@ -56,7 +56,8 @@
     "PlayerModelAnimMixin",
     "ItemInHandRendererAnimMixin",
     "ModelPartAccessor",
-    "ModelPartRenderCaptureMixin"
+    "ModelPartRenderCaptureMixin",
+    "PlayerRendererHandMixin"
   ],
   "injectors": {
     "defaultRequire": 1

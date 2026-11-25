@@ -9,22 +9,29 @@ import net.minecraft.client.gui.components.AbstractSliderButton;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.model.PlayerModel;
+import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.renderer.LightTexture;
 import net.minecraft.client.renderer.entity.EntityRenderDispatcher;
 import net.minecraft.client.renderer.entity.EntityRenderer;
 import net.minecraft.client.renderer.entity.player.PlayerRenderer;
 import net.minecraft.client.yiz.anim.AnimClientState;
 import net.minecraft.client.yiz.anim.AnimClip;
+import net.minecraft.client.yiz.anim.AnimConfig;
 import net.minecraft.client.yiz.anim.AnimLibrary;
 import net.minecraft.client.yiz.anim.BoneTransform;
 import net.minecraft.client.yiz.anim.client.AnimSkeletonCapture;
 import net.minecraft.network.chat.Component;
+import net.minecraftforge.registries.ForgeRegistries;
+import net.minecraft.network.chat.Component;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.item.ItemStack;
 import org.joml.Quaternionf;
 import org.joml.Vector2f;
 import org.joml.Vector3f;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -46,7 +53,10 @@ import java.util.List;
  */
 public class AnimEditorScreen extends Screen {
 
-    private static final List<String> BONES = AnimClip.BONES;
+    /** 本次编辑的物品（编辑器里玩家模型手持它）；空表示沿用玩家当前主手。 */
+    private final ItemStack editingItem;
+    /** 打开编辑器前的原主手物品，关闭时恢复。 */
+    private ItemStack previousItem;
 
     // 区域
     private int barH = 22;
@@ -116,7 +126,12 @@ public class AnimEditorScreen extends Screen {
     private boolean loggedCapture;
 
     public AnimEditorScreen() {
+        this(ItemStack.EMPTY);
+    }
+
+    public AnimEditorScreen(ItemStack editingItem) {
         super(Component.literal("Yiz 动画编辑器"));
+        this.editingItem = editingItem == null ? ItemStack.EMPTY : editingItem.copy();
         this.clip = firstOrNew();
     }
 
@@ -131,8 +146,53 @@ public class AnimEditorScreen extends Screen {
         return new AnimClip("new_1", 0.5F, 0.15F, false);
     }
 
+    /** 左列可编辑的第三人称骨骼。 */
+    private List<String> bones() {
+        return AnimClip.THIRD_PERSON_BONES;
+    }
+
+    /** 时间轴行：第三人称骨骼 + 物品点下方的第一人称关键帧行。 */
+    private static final List<String> TIMELINE_BONES = buildTimelineBones();
+
+    private static List<String> buildTimelineBones() {
+        List<String> bones = new ArrayList<>(AnimClip.THIRD_PERSON_BONES);
+        bones.add("fp_right_arm");
+        return List.copyOf(bones);
+    }
+
+    /** 导入完成后刷新时间轴/滑条/预览。 */
+    public void onPosesImported() {
+        this.syncFromClip();
+        this.updatePreview();
+        this.rebuildWidgets();
+    }
+
+    /** 点击物品点下方的姿态：把该姿态写到当前时间的第一人称骨骼上（绝对 display transform）。 */
+    private void addPoseKey(Path file) {
+        BoneTransform t = FpPoseImporter.load(file, false);
+        String bone = "fp_right_arm";
+        if (t == null) {
+            t = FpPoseImporter.load(file, true);
+            bone = "fp_left_arm";
+        }
+        if (t == null) {
+            this.notify("该文件没有 firstperson display：" + FpPoseImporter.displayName(file));
+            return;
+        }
+        this.clip.setKeyframe(bone, this.time, t);
+        this.clip.setFirstPerson(true);
+        this.updatePreview();
+        this.notify("已写入 " + labelOf(bone) + " @ " + String.format("%.2f", this.time) + "s："
+                + FpPoseImporter.displayName(file));
+    }
+
     @Override
     protected void init() {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player != null && this.previousItem == null && !this.editingItem.isEmpty()) {
+            this.previousItem = mc.player.getMainHandItem().copy();
+            mc.player.setItemInHand(InteractionHand.MAIN_HAND, this.editingItem.copy());
+        }
         this.workspaceX = this.navW;
         this.workspaceW = Math.max(200, this.width - this.navW - this.inspW);
         int bodyH = Math.max(120, this.height - this.barH);
@@ -144,19 +204,24 @@ public class AnimEditorScreen extends Screen {
         int bx = 4;
         int by = 2;
         this.addRenderableWidget(Button.builder(Component.literal("新建"), b -> this.newClip())
-                .bounds(bx, by, 40, 18).build());
+                .bounds(bx, by, 36, 18).build());
+        this.addRenderableWidget(Button.builder(Component.literal("创建衔接"), b -> this.newLinkedClip())
+                .bounds(bx + 40, by, 52, 18).build());
         this.addRenderableWidget(Button.builder(Component.literal("保存"), b -> this.saveClip())
-                .bounds(bx + 44, by, 40, 18).build());
+                .bounds(bx + 96, by, 36, 18).build());
         this.addRenderableWidget(Button.builder(Component.literal(this.playing ? "暂停" : "播放"), b -> {
             this.playing = !this.playing;
             b.setMessage(Component.literal(this.playing ? "暂停" : "播放"));
-        }).bounds(bx + 88, by, 40, 18).build());
+        }).bounds(bx + 136, by, 36, 18).build());
         this.addRenderableWidget(Button.builder(Component.literal("关键帧+"), b -> this.addKey())
-                .bounds(bx + 132, by, 54, 18).build());
+                .bounds(bx + 176, by, 46, 18).build());
         this.addRenderableWidget(Button.builder(Component.literal("关键帧-"), b -> this.removeKey())
-                .bounds(bx + 190, by, 54, 18).build());
+                .bounds(bx + 226, by, 46, 18).build());
         this.addRenderableWidget(Button.builder(Component.literal("关闭"), b -> this.onClose())
                 .bounds(this.width - 46, by, 42, 18).build());
+        this.addRenderableWidget(Button.builder(Component.literal("导入FP姿态"), b ->
+                        Minecraft.getInstance().setScreen(new FpPoseImportScreen(this, this.clip)))
+                .bounds(this.width - 134, by, 84, 18).build());
 
         // 视口顶部中央：移动 / 缩放 / 旋转（Blockbench 风格）
         int modeWidth = 3 * 44 + 8;
@@ -169,18 +234,42 @@ public class AnimEditorScreen extends Screen {
         this.addRenderableWidget(Button.builder(Component.literal("旋转"), b -> this.mode = 0)
                 .bounds(modeX + 88, modeY, 40, 18).build());
 
-        // 导航器：动画切换 + 管理 + 骨骼
+        // 导航器：动画切换 + 管理 + 骨骼（按当前视角只显示对应的一套）
         this.addRenderableWidget(Button.builder(Component.literal("▶ " + this.clip.name()), b -> this.nextClip())
                 .bounds(4, this.barH + 4, this.navW - 52, 18).build());
         this.addRenderableWidget(Button.builder(Component.literal("管理"), b ->
                         Minecraft.getInstance().setScreen(new AnimManagerScreen()))
                 .bounds(this.navW - 44, this.barH + 4, 40, 18).build());
-        for (int i = 0; i < BONES.size(); i++) {
-            String name = BONES.get(i);
+        List<String> bones = this.bones();
+        if (!bones.contains(this.bone)) {
+            this.bone = bones.get(0);
+        }
+        int row = 0;
+        int maxY = this.height - 14;
+        for (String name : bones) {
+            int y = this.barH + 26 + row * 20;
+            if (y + 18 > maxY) {
+                break;
+            }
             this.addRenderableWidget(Button.builder(Component.literal((name.equals(this.bone) ? "● " : "") + labelOf(name)), b -> {
                 this.bone = name;
                 this.rebuildWidgets();
-            }).bounds(4, this.barH + 26 + i * 20, this.navW - 8, 18).build());
+            }).bounds(4, y, this.navW - 8, 18).build());
+            row++;
+            if (name.equals("right_item")) {
+                // 物品点下方：导入的所有第一人称姿态（a1/a2...），点击写入当前时间点
+                for (Path file : FpPoseImporter.listFiles()) {
+                    int py = this.barH + 26 + row * 20;
+                    if (py + 18 > maxY) {
+                        break;
+                    }
+                    this.addRenderableWidget(Button.builder(
+                                    Component.literal("▸ " + FpPoseImporter.displayName(file)),
+                                    b -> this.addPoseKey(file))
+                            .bounds(4, py, this.navW - 8, 18).build());
+                    row++;
+                }
+            }
         }
 
         // 检查器：旋转/位移/缩放 + 时长
@@ -249,8 +338,9 @@ public class AnimEditorScreen extends Screen {
             case 2 -> "缩放";
             default -> "旋转";
         };
+        String itemName = this.editingItem.isEmpty() ? "" : this.editingItem.getHoverName().getString() + " | ";
         graphics.drawString(this.font,
-                "Yiz Anim | " + this.clip.name() + " | 时间 " + String.format("%.2f", this.time)
+                "Yiz Anim | " + itemName + this.clip.name() + " | 时间 " + String.format("%.2f", this.time)
                         + "s | 骨骼 " + labelOf(this.bone) + " | 模式 " + modeName
                         + " | 关键帧 " + this.clip.keyframes(this.bone).size(),
                 4, this.height - 10, 0xFFAAAAAA, false);
@@ -283,7 +373,7 @@ public class AnimEditorScreen extends Screen {
         mc.player.yBodyRotO = 0F;
         try {
             pose.pushPose();
-            pose.translate(cx + this.panX, cy + this.panY, 50.0D);
+            pose.translate(cx + this.panX, cy + this.panY, 500.0D);
             pose.scale(this.zoom, this.zoom, -this.zoom);
             pose.mulPose(this.cameraRotation());
             Lighting.setupForEntityInInventory();
@@ -313,17 +403,18 @@ public class AnimEditorScreen extends Screen {
     }
 
     private void renderTimeline(GuiGraphics graphics) {
+        List<String> bones = TIMELINE_BONES;
         int left = this.workspaceX + 64;
         int right = this.workspaceX + this.workspaceW - 8;
         int top = this.timelineY + 6;
-        int rowH = Math.max(12, Math.min(18, (this.timelineH - 24) / BONES.size()));
+        int rowH = Math.max(12, Math.min(18, (this.timelineH - 24) / bones.size()));
 
         // 时间刻度
         graphics.drawString(this.font, "0.0", left, top - 4, 0xFF777777, false);
         graphics.drawString(this.font, String.format("%.2f", this.clip.duration()), right - 22, top - 4, 0xFF777777, false);
 
-        for (int i = 0; i < BONES.size(); i++) {
-            String name = BONES.get(i);
+        for (int i = 0; i < bones.size(); i++) {
+            String name = bones.get(i);
             int rowY = top + 10 + i * rowH;
             graphics.drawString(this.font, labelOf(name), this.workspaceX + 4, rowY + 2,
                     name.equals(this.bone) ? 0xFFFFFF55 : 0xFF888888, false);
@@ -363,9 +454,10 @@ public class AnimEditorScreen extends Screen {
 
     private int rowAt(double mouseY) {
         int top = this.timelineY + 6;
-        int rowH = Math.max(12, Math.min(18, (this.timelineH - 24) / BONES.size()));
+        List<String> bones = TIMELINE_BONES;
+        int rowH = Math.max(12, Math.min(18, (this.timelineH - 24) / bones.size()));
         int index = (int) ((mouseY - (top + 10)) / rowH);
-        return index < 0 || index >= BONES.size() ? -1 : index;
+        return index < 0 || index >= bones.size() ? -1 : index;
     }
 
     private boolean inViewport(double mx, double my) {
@@ -431,7 +523,7 @@ public class AnimEditorScreen extends Screen {
         if (this.inTimeline(mouseX, mouseY) && button == 1) {
             int row = this.rowAt(mouseY);
             if (row >= 0) {
-                String rowBone = BONES.get(row);
+                String rowBone = TIMELINE_BONES.get(row);
                 AnimClip.Keyframe hit = this.nearestKeyframe(rowBone, mouseX);
                 if (hit != null) {
                     this.contextBone = rowBone;
@@ -761,7 +853,7 @@ public class AnimEditorScreen extends Screen {
         }
         this.loggedCapture = true;
         StringBuilder pivots = new StringBuilder();
-        for (String name : BONES) {
+        for (String name : this.bones()) {
             AnimSkeletonCapture.BoneFrame frame = this.frame(name);
             if (frame == null) {
                 pivots.append(name).append("=null ");
@@ -931,7 +1023,12 @@ public class AnimEditorScreen extends Screen {
     @Override
     public void onClose() {
         AnimClientState.clearPreview();
-        super.onClose();
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player != null && this.previousItem != null) {
+            mc.player.setItemInHand(InteractionHand.MAIN_HAND, this.previousItem);
+            this.previousItem = null;
+        }
+        mc.setScreen(new AnimItemSelectScreen());
     }
 
     @Override
@@ -1001,6 +1098,40 @@ public class AnimEditorScreen extends Screen {
         this.rebuildWidgets();
     }
 
+    /**
+     * 创建衔接动画：新动画的第 0 帧直接复制当前动画每根骨骼的<b>最后动作</b>，
+     * 这样不用手动把上一段的结尾复制到新动画的 0 帧，连续连段能直接接上。
+     */
+    private void newLinkedClip() {
+        AnimClip base = this.clip;
+        String name = this.uniqueClipName(base.name() + "_next");
+        AnimClip next = new AnimClip(name, base.duration(), base.minDuration(), base.loop());
+        next.setFirstPerson(base.firstPersonEnabled());
+        for (String bone : AnimClip.BONES) {
+            List<AnimClip.Keyframe> frames = base.keyframes(bone);
+            if (!frames.isEmpty()) {
+                AnimClip.Keyframe last = frames.get(frames.size() - 1);
+                next.setKeyframe(bone, 0F, last.transform());
+            }
+        }
+        this.clip = next;
+        this.time = 0F;
+        this.playing = false;
+        this.syncFromClip();
+        this.updatePreview();
+        this.rebuildWidgets();
+        this.notify("已创建衔接 " + name + "（第 0 帧 = 上一段结束动作）");
+    }
+
+    private String uniqueClipName(String base) {
+        String name = base;
+        int index = 2;
+        while (AnimLibrary.get(name) != null) {
+            name = base + "_" + index++;
+        }
+        return name;
+    }
+
     private void nextClip() {
         List<String> names = new ArrayList<>(AnimLibrary.names());
         if (names.isEmpty()) {
@@ -1021,10 +1152,34 @@ public class AnimEditorScreen extends Screen {
         this.clip.setMinDuration(this.minSlider.value());
         try {
             AnimLibrary.save(this.clip);
+            this.bindToEditingItem();
             this.notify("已保存 " + this.clip.name());
         } catch (Throwable t) {
             this.notify("保存失败: " + t.getMessage());
         }
+    }
+
+    /**
+     * 保存时把这段动画绑定到当前编辑的物品：第三人称一定绑；
+     * 动画里有第一人称关键帧（物品点下方写入的姿态）时再绑第一人称。
+     */
+    private void bindToEditingItem() {
+        if (this.editingItem.isEmpty()) {
+            return;
+        }
+        var key = ForgeRegistries.ITEMS.getKey(this.editingItem.getItem());
+        if (key == null) {
+            return;
+        }
+        boolean firstPerson = this.clip.firstPersonEnabled();
+        AnimConfig.bind(key.toString(), this.clip.name(), true, firstPerson);
+        if (!firstPerson) {
+            // 这次没有导入第一人称姿态：把该动画从物品的第一人称列表里移除，
+            // 保证「不导入 = 第一人称原版」
+            AnimConfig.removeFirstPerson(key.toString(), this.clip.name());
+        }
+        AnimConfig.save();
+        AnimLibrary.reload();
     }
 
     private void notify(String message) {
@@ -1044,6 +1199,10 @@ public class AnimEditorScreen extends Screen {
             case "left_leg" -> "左腿";
             case "right_item" -> "右手物品点";
             case "left_item" -> "左手物品点";
+            case "fp_right_arm" -> "第一人称右手";
+            case "fp_left_arm" -> "第一人称左手";
+            case "fp_right_item" -> "第一人称右手附加";
+            case "fp_left_item" -> "第一人称左手附加";
             default -> bone;
         };
     }

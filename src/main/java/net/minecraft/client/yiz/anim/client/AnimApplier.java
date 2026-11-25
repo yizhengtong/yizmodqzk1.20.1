@@ -32,7 +32,27 @@ public final class AnimApplier {
     /** 本帧被覆盖过的骨骼 → 覆盖前的原版字段 {x,y,z, xScale,yScale,zScale, xRot,yRot,zRot}。 */
     private static final Map<ModelPart, float[]> VANILLA = new IdentityHashMap<>();
 
+    /**
+     * 第一人称手臂渲染嵌套标记（{@code PlayerRenderer#renderHand}）。
+     * 该路径下只渲染一只手臂，第三人称骨骼动画不应参与（第一人称由 fp_* 骨骼接管），
+     * 否则第三人称的挥臂/走路姿态会串进第一人称手。
+     */
+    private static final ThreadLocal<Integer> HAND_DEPTH = ThreadLocal.withInitial(() -> 0);
+
     private AnimApplier() {}
+
+    public static void beginHandRender() {
+        HAND_DEPTH.set(HAND_DEPTH.get() + 1);
+    }
+
+    public static void endHandRender() {
+        int depth = HAND_DEPTH.get();
+        HAND_DEPTH.set(depth > 0 ? depth - 1 : 0);
+    }
+
+    public static boolean inHandRender() {
+        return HAND_DEPTH.get() > 0;
+    }
 
     /** 在 {@code PlayerModel#setupAnim} 的 HEAD 调用：把上一帧覆盖过的字段还原成原版值。 */
     public static void restore(HumanoidModel<?> model) {

@@ -37,7 +37,10 @@ public abstract class PlayerModelAnimMixin {
     private void yizmodqzk$applyAnim(LivingEntity entity, float limbSwing, float limbSwingAmount,
                                      float ageInTicks, float netHeadYaw, float headPitch,
                                      CallbackInfo ci) {
-        if (!(entity instanceof Player player) || !AnimClientState.anyPlaying()) {
+        if (!(entity instanceof Player player) || !AnimClientState.anyPlaying()
+                || AnimApplier.inHandRender()) {
+            // 第一人称手臂渲染（PlayerRenderer#renderHand）：只渲染一只手臂，
+            // 第三人称骨骼动画不参与，第一人称由 fp_* 骨骼在 ItemInHandRenderer 里接管。
             return;
         }
         PlayerModel model = (PlayerModel) (Object) this;

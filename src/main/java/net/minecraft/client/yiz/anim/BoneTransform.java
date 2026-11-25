@@ -29,7 +29,7 @@ public record BoneTransform(
             return b;
         }
         return new BoneTransform(
-                mix(a.rx, b.rx, t), mix(a.ry, b.ry, t), mix(a.rz, b.rz, t),
+                mixAngle(a.rx, b.rx, t), mixAngle(a.ry, b.ry, t), mixAngle(a.rz, b.rz, t),
                 mix(a.tx, b.tx, t), mix(a.ty, b.ty, t), mix(a.tz, b.tz, t),
                 mix(a.sx, b.sx, t), mix(a.sy, b.sy, t), mix(a.sz, b.sz, t));
     }
@@ -38,6 +38,21 @@ public record BoneTransform(
     public static BoneTransform smooth(BoneTransform a, BoneTransform b, float t) {
         float x = Math.max(0F, Math.min(1F, t));
         return lerp(a, b, x * x * (3F - 2F * x));
+    }
+
+    /**
+     * 角度插值走最短路径（避免 -180° 到 180° 绕一整圈），
+     * 和 1.21.1 版第一人称动画的 angleLerp 行为一致。
+     */
+    private static float mixAngle(float from, float to, float t) {
+        float diff = (to - from) % 360F;
+        if (diff > 180F) {
+            diff -= 360F;
+        }
+        if (diff < -180F) {
+            diff += 360F;
+        }
+        return from + diff * t;
     }
 
     private static float mix(float from, float to, float t) {

@@ -31,6 +31,13 @@ public final class AnimClientState {
     /** 等待当前动画播完的后续动画，按收到顺序排列。 */
     private static final Map<Integer, Deque<Pending>> PENDING = new ConcurrentHashMap<>();
 
+    /**
+     * 第一人称独立播放态：只由本地攻击触发、只喂给第一人称物品渲染，
+     * 和上面服务端下发的第三人称播放态完全隔离（互不影响）。
+     */
+    private static volatile AnimPlayer firstPersonActive;
+    private static final Deque<Pending> FIRST_PERSON_PENDING = new ArrayDeque<>();
+
     private static volatile AnimClip previewClip;
     private static volatile float previewTime;
     private static volatile net.minecraft.world.level.Level lastLevel;
@@ -44,18 +51,13 @@ public final class AnimClientState {
      * 收到服务端的一段动画：当前没有在播就直接开始，否则排到队尾等待。
      * 队列不会因为"下一击"被清空或打断，所以每一段都会完整播完。
      */
-    public static void start(int entityId, AnimClip clip, float playSeconds) {
+    public static synchronized void start(int entityId, AnimClip clip, float playSeconds) {
         if (clip == null) {
             return;
         }
-        if (get(entityId) == null) {
-            ACTIVE.put(entityId, new AnimPlayer(clip, playSeconds));
-            return;
-        }
-        Deque<Pending> queue = PENDING.computeIfAbsent(entityId, key -> new ArrayDeque<>());
-        if (queue.size() < MAX_PENDING) {
-            queue.addLast(new Pending(clip, playSeconds));
-        }
+        // 每次攻击都丢弃未播放的旧动画，从 0 开始播新的，避免连点后队列积压
+        PENDING.remove(entityId);
+        ACTIVE.put(entityId, new AnimPlayer(clip, playSeconds));
     }
 
     /**
@@ -106,6 +108,12 @@ public final class AnimClientState {
         return player == null ? null : player.clip();
     }
 
+    /** 当前动画是否给某根骨骼写了关键帧（第一人称骨骼据此决定是否接管原版动作）。 */
+    public static boolean hasKeyframes(int entityId, String bone) {
+        AnimClip clip = currentClip(entityId);
+        return clip != null && clip.hasKeyframes(bone);
+    }
+
     public static BoneTransform sample(int entityId, String bone) {
         AnimClip clip = previewClip;
         if (clip != null) {
@@ -117,6 +125,74 @@ public final class AnimClientState {
 
     public static boolean anyPlaying() {
         return previewClip != null || !ACTIVE.isEmpty() || !PENDING.isEmpty();
+    }
+
+    /**
+     * 本地第一人称攻击：开始/排队一段第一人称动画。
+     * 和第三人称队列规则一致——当前段播完再接下段，不打断。
+     */
+    public static synchronized void startFirstPerson(AnimClip clip, float playSeconds) {
+        if (clip == null || !clip.firstPersonEnabled()) {
+            // 没有导入过第一人称姿态的动画不参与第一人称，保持原版
+            return;
+        }
+        // 每次攻击都清空未播放的旧动画，从 0 开始播新的
+        FIRST_PERSON_PENDING.clear();
+        firstPersonActive = new AnimPlayer(clip, playSeconds);
+    }
+
+    /** 当前正在播的第一人称动画；播完会立刻接队首。 */
+    public static AnimPlayer getFirstPerson() {
+        AnimPlayer player = firstPersonActive;
+        if (player == null) {
+            return startNextFirstPerson();
+        }
+        if (!player.finished()) {
+            return player;
+        }
+        firstPersonActive = null;
+        return startNextFirstPerson();
+    }
+
+    private static AnimPlayer startNextFirstPerson() {
+        Pending next = FIRST_PERSON_PENDING.pollFirst();
+        if (next == null) {
+            return null;
+        }
+        AnimPlayer player = new AnimPlayer(next.clip(), next.playSeconds());
+        firstPersonActive = player;
+        return player;
+    }
+
+    /** 第一人称当前生效的动画（编辑器预览优先）。 */
+    public static AnimClip currentFirstPersonClip() {
+        AnimClip clip = previewClip;
+        if (clip != null) {
+            return clip;
+        }
+        AnimPlayer player = getFirstPerson();
+        return player == null ? null : player.clip();
+    }
+
+    /** 第一人称动画是否给某根骨骼写了关键帧（只有导入过姿态的动画才算）。 */
+    public static boolean hasFirstPersonKeyframes(String bone) {
+        AnimClip clip = currentFirstPersonClip();
+        return clip != null && clip.firstPersonEnabled() && clip.hasKeyframes(bone);
+    }
+
+    /** 第一人称采样：预览优先，然后本地播放态；没有则返回原版姿态。 */
+    public static BoneTransform sampleFirstPerson(String bone) {
+        AnimClip clip = previewClip;
+        if (clip != null) {
+            return clip.sample(bone, previewTime);
+        }
+        AnimPlayer player = getFirstPerson();
+        return player == null ? BoneTransform.ZERO : player.sample(bone);
+    }
+
+    /** 第一人称是否有动画在播（含预览）。 */
+    public static boolean anyFirstPersonPlaying() {
+        return previewClip != null || firstPersonActive != null || !FIRST_PERSON_PENDING.isEmpty();
     }
 
     public static void setPreview(AnimClip clip, float time) {
@@ -136,14 +212,13 @@ public final class AnimClientState {
     public static void tick() {
         Minecraft mc = Minecraft.getInstance();
         if (mc.level == null) {
-            ACTIVE.clear();
-            PENDING.clear();
-            lastLevel = null;
+            clear();
             return;
         }
         if (lastLevel != mc.level) {
             ACTIVE.clear();
             PENDING.clear();
+            clearFirstPerson();
             lastLevel = mc.level;
         }
         for (Map.Entry<Integer, AnimPlayer> entry : ACTIVE.entrySet()) {
@@ -159,11 +234,25 @@ public final class AnimClientState {
         }
         // 保险：队列不应该脱离当前动画单独存在
         PENDING.keySet().removeIf(entityId -> !ACTIVE.containsKey(entityId));
+
+        // 第一人称本地播放态：死亡/退出时清空，否则播完接下一段
+        if (mc.player == null || !mc.player.isAlive()) {
+            clearFirstPerson();
+        } else if (firstPersonActive != null && firstPersonActive.finished()) {
+            firstPersonActive = null;
+            startNextFirstPerson();
+        }
     }
 
     public static void clear() {
         ACTIVE.clear();
         PENDING.clear();
+        clearFirstPerson();
         lastLevel = null;
+    }
+
+    private static void clearFirstPerson() {
+        firstPersonActive = null;
+        FIRST_PERSON_PENDING.clear();
     }
 }

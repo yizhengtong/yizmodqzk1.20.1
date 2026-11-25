@@ -13,16 +13,34 @@ import java.util.Map;
 /**
  * 一段骨骼动画：时长、最小时长、每根骨骼的关键帧。
  *
- * <p>骨骼固定为 {@link #BONES} 八根；{@code right_item} / {@code left_item} 是左右手"物品点"，
- * 驱动对应手上物品相对手心的额外偏移/旋转，物品本身仍由原版挂在手上（不重绘、不隐藏）。</p>
+ * <p>骨骼分两套：{@link #THIRD_PERSON_BONES}（第三人称身体/四肢/左右手物品点）与
+ * {@link #FIRST_PERSON_BONES}（第一人称左右手/左右手物品点）。同一段动画可以同时带两套，
+ * 播放时按当前视角各取一套。</p>
+ *
+ * <p>物品点 {@code right_item}/{@code left_item}（第三人称）与 {@code fp_right_item}/{@code fp_left_item}
+ * （第一人称）驱动对应手上物品相对手心的额外偏移/旋转，物品本身仍由原版挂在手上（不重绘、不隐藏）。</p>
  *
  * <p>时间单位秒；关键帧时间升序；采样时相邻帧之间 smoothstep。</p>
  */
 public final class AnimClip {
 
-    public static final List<String> BONES = List.of(
+    /** 第三人称骨骼（第三视角模型）。 */
+    public static final List<String> THIRD_PERSON_BONES = List.of(
             "head", "body", "right_arm", "left_arm", "right_leg", "left_leg",
             "right_item", "left_item");
+
+    /** 第一人称骨骼（第一视角手臂/物品）。 */
+    public static final List<String> FIRST_PERSON_BONES = List.of(
+            "fp_right_arm", "fp_left_arm", "fp_right_item", "fp_left_item");
+
+    /** 全部骨骼（存储用）。 */
+    public static final List<String> BONES;
+
+    static {
+        List<String> all = new ArrayList<>(THIRD_PERSON_BONES);
+        all.addAll(FIRST_PERSON_BONES);
+        BONES = List.copyOf(all);
+    }
 
     public record Keyframe(float time, BoneTransform transform) {}
 
@@ -30,6 +48,12 @@ public final class AnimClip {
     private float duration;
     private float minDuration;
     private boolean loop;
+    /**
+     * 这段动画是否启用第一人称：默认 false（没导入过 Blockbench 姿态 → 第一人称保持原版）。
+     * 只有通过「导入FP姿态」或物品点下方的姿态按钮写入过 fp_* 关键帧才会置 true。
+     * 旧动画文件没有这个字段，一律按 false 处理，避免历史 fp 关键帧影响第一人称。
+     */
+    private boolean firstPerson;
     private final Map<String, List<Keyframe>> bones = new LinkedHashMap<>();
 
     public AnimClip(String name, float duration, float minDuration, boolean loop) {
@@ -135,6 +159,14 @@ public final class AnimClip {
         return frames != null && frames.removeIf(frame -> Math.abs(frame.time() - time) < 0.001F);
     }
 
+    /** 清空某根骨骼的全部关键帧（第一人称姿态导入时整体覆盖用）。 */
+    public void clearKeyframes(String bone) {
+        List<Keyframe> frames = bones.get(bone);
+        if (frames != null) {
+            frames.clear();
+        }
+    }
+
     public boolean hasKeyframeAt(String bone, float time) {
         List<Keyframe> frames = bones.get(bone);
         if (frames == null) {
@@ -150,6 +182,7 @@ public final class AnimClip {
 
     public AnimClip copy() {
         AnimClip copy = new AnimClip(name, duration, minDuration, loop);
+        copy.firstPerson = this.firstPerson;
         bones.forEach((bone, frames) -> {
             for (Keyframe frame : frames) {
                 copy.setKeyframe(bone, frame.time(), frame.transform());
@@ -158,12 +191,22 @@ public final class AnimClip {
         return copy;
     }
 
+    /** 这段动画是否启用第一人称（导入过姿态才为 true）。 */
+    public boolean firstPersonEnabled() {
+        return firstPerson;
+    }
+
+    public void setFirstPerson(boolean enabled) {
+        this.firstPerson = enabled;
+    }
+
     public JsonObject toJson() {
         JsonObject root = new JsonObject();
         root.addProperty("name", name);
         root.addProperty("duration", duration);
         root.addProperty("minDuration", minDuration);
         root.addProperty("loop", loop);
+        root.addProperty("first_person", firstPerson);
         JsonObject bonesJson = new JsonObject();
         bones.forEach((bone, frames) -> {
             if (frames.isEmpty()) {
@@ -197,6 +240,7 @@ public final class AnimClip {
         float minDuration = root.has("minDuration") ? root.get("minDuration").getAsFloat() : Math.min(0.1F, duration);
         boolean loop = root.has("loop") && root.get("loop").getAsBoolean();
         AnimClip clip = new AnimClip(name, duration, minDuration, loop);
+        clip.firstPerson = root.has("first_person") && root.get("first_person").getAsBoolean();
         if (!root.has("bones") || !root.get("bones").isJsonObject()) {
             return clip;
         }
